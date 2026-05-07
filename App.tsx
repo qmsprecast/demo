@@ -4503,7 +4503,14 @@ function App() {
       [question.id]: answer,
     }));
     if (answer === "pass") {
-      setAuditModeQuestionIndex((current) => Math.min(current + 1, activeAudit.questions.length - 1));
+      const canAutoAdvance =
+        !question.requiresPhotoEvidence &&
+        !question.autoActionRequired &&
+        !question.requiresManagerReview &&
+        (question.answerPrompts?.pass?.length ?? 0) === 0;
+      if (canAutoAdvance) {
+        setAuditModeQuestionIndex((current) => Math.min(current + 1, activeAudit.questions.length - 1));
+      }
       return;
     }
     setIssuePrompt({
@@ -4516,24 +4523,31 @@ function App() {
 
   const handleAuditModeSaveIssue = ({ noteValue, escalate }: { noteValue: string; escalate?: boolean }) => {
     if (!activeAudit || !issuePrompt) return;
-    if (!noteValue.trim() && !issuePrompt.actionPrompts.length) {
+    if (!noteValue.trim()) {
       pushToast("Note required", "Describe what was found before continuing.", "warning");
+      return;
+    }
+    if (issuePrompt.question.requiresPhotoEvidence && (evidence[issuePrompt.question.id]?.length ?? 0) === 0) {
+      pushToast("Photo required", "Capture photo evidence for this finding before continuing.", "warning");
       return;
     }
     setNotes((current) => ({
       ...current,
       [issuePrompt.question.id]: noteValue,
     }));
-    if (escalate) {
-      const record = createNonConformanceFromIssue({
+    const mustCreateAction =
+      Boolean(escalate) ||
+      issuePrompt.question.autoActionRequired ||
+      issuePrompt.question.riskLevel === "Critical" ||
+      issuePrompt.question.riskLevel === "High" ||
+      issuePrompt.answer === "fail";
+    if (mustCreateAction) {
+      createCorrectiveActionFromIssue({
         audit: activeAudit,
         question: issuePrompt.question,
         answer: issuePrompt.answer,
-        note: noteValue,
+        findingNote: noteValue,
       });
-      if (record) {
-        pushToast("NCR raised", `${record.reference} has been assigned to ${record.assignedLineManager}.`, "warning");
-      }
     }
     setIssuePrompt(null);
     setAuditModeQuestionIndex((current) => Math.min(current + 1, activeAudit.questions.length - 1));
@@ -9609,12 +9623,10 @@ function IssueFoundPrompt({
   onCancel: () => void;
 }) {
   const [noteValue, setNoteValue] = useState(existingNote);
-  const [resolved, setResolved] = useState<boolean | null>(issue.solved);
   const severity = issue.question.riskLevel || (issue.answer === "fail" ? "Critical" : "High");
 
   useEffect(() => {
     setNoteValue(existingNote);
-    setResolved(issue.solved);
   }, [existingNote, issue.question.id]);
 
   return (
@@ -9623,35 +9635,6 @@ function IssueFoundPrompt({
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-600">Issue found</p>
         <p className="mt-2 text-sm font-semibold text-slate-900">{issue.question.text}</p>
         <p className="mt-1 text-xs text-slate-500">Answer: {issue.answer.toUpperCase()} • Risk: {severity}</p>
-        {issue.actionPrompts.length > 0 && (
-          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700">Action prompts</p>
-            <ul className="mt-2 space-y-1 text-sm text-amber-900">
-              {issue.actionPrompts.map((prompt, index) => (
-                <li key={`${prompt}-${index}`}>- {prompt}</li>
-              ))}
-            </ul>
-            <p className="mt-3 text-sm font-semibold text-slate-900">Has this solved the issue?</p>
-            <div className="mt-2 flex gap-2">
-              <button type="button" onClick={() => setResolved(true)} className={`h-10 rounded-xl px-3 text-xs font-semibold text-white ${resolved === true ? "bg-emerald-700" : "bg-emerald-600"} ${slatePrimaryCtaInteract}`}>
-                Yes
-              </button>
-              <button type="button" onClick={() => setResolved(false)} className={`h-10 rounded-xl px-3 text-xs font-semibold text-white ${resolved === false ? "bg-rose-700" : "bg-rose-600"} ${slatePrimaryCtaInteract}`}>
-                No
-              </button>
-            </div>
-            {resolved === true && (
-              <button type="button" onClick={() => onSave({ noteValue, escalate: false })} className={`mt-2 h-10 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                Continue audit
-              </button>
-            )}
-            {resolved === false && (
-              <button type="button" onClick={() => onSave({ noteValue, escalate: true })} className={`mt-2 h-10 rounded-xl bg-rose-600 px-3 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                Escalation
-              </button>
-            )}
-          </div>
-        )}
         <textarea
           value={noteValue}
           onChange={(event) => setNoteValue(event.target.value)}
@@ -9662,11 +9645,6 @@ function IssueFoundPrompt({
           <button type="button" onClick={() => onSave({ noteValue, escalate: false })} className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
             Save issue and continue
           </button>
-          {issue.actionPrompts.length === 0 && (
-            <button type="button" onClick={() => onSave({ noteValue, escalate: true })} className={`h-11 rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-              Escalation
-            </button>
-          )}
           <button type="button" onClick={onCancel} className="h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700">
             Change answer
           </button>
