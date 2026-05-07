@@ -1,0 +1,83 @@
+type JsonResponse = Record<string, unknown> & { ok?: boolean; error?: string };
+
+async function parseResponse<T extends JsonResponse>(response: Response): Promise<T> {
+  const payload = (await response.json()) as T;
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || "Google Sheets request failed.");
+  }
+  return payload;
+}
+
+async function postJson<T extends JsonResponse>(url: string, body: Record<string, unknown>) {
+  return parseResponse<T>(
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export const googleSheetsService = {
+  validateWorkspace<T extends JsonResponse>(sheetId: string, body: Record<string, unknown>) {
+    return postJson<T>(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/validate`, body);
+  },
+  repairWorkspace<T extends JsonResponse>(sheetId: string, body: Record<string, unknown>) {
+    return postJson<T>(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/repair`, body);
+  },
+  saveSchedules<T extends JsonResponse>(sheetId: string, companyFolderId: string, schedules: unknown[]) {
+    return postJson<T>(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/schedules`, {
+      companyFolderId,
+      schedules,
+    });
+  },
+  saveActions<T extends JsonResponse>(sheetId: string, companyFolderId: string, actions: unknown[]) {
+    return postJson<T>(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/actions`, {
+      companyFolderId,
+      actions,
+    });
+  },
+  appendActionComments<T extends JsonResponse>(sheetId: string, companyFolderId: string, comments: unknown[]) {
+    return postJson<T>(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/action-comments`, {
+      companyFolderId,
+      comments,
+    });
+  },
+  appendAuditResults<T extends JsonResponse>(sheetId: string, companyFolderId: string, results: unknown[]) {
+    return postJson<T>(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/audit-results`, {
+      companyFolderId,
+      results,
+    });
+  },
+  appendAuditFindings<T extends JsonResponse>(sheetId: string, companyFolderId: string, findings: unknown[]) {
+    return postJson<T>(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/audit-findings`, {
+      companyFolderId,
+      findings,
+    });
+  },
+  appendEvidence<T extends JsonResponse>(sheetId: string, companyFolderId: string, evidence: unknown[]) {
+    return postJson<T>(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/evidence`, {
+      companyFolderId,
+      evidence,
+    });
+  },
+  appendSyncLog<T extends JsonResponse>(sheetId: string, companyFolderId: string, entries: unknown[]) {
+    return postJson<T>(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/sync-log`, {
+      companyFolderId,
+      entries,
+    });
+  },
+  syncAuditBundle<T extends JsonResponse>(
+    sheetId: string,
+    body: {
+      companyFolderId: string;
+      results: unknown[];
+      findings: unknown[];
+      evidence: unknown[];
+      actionComments?: unknown[];
+      syncLogs?: unknown[];
+    },
+  ) {
+    return postJson<T>(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/audit-bundle`, body);
+  },
+};

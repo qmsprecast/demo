@@ -8,17 +8,18 @@ type RiskLevel = "Low" | "Medium" | "High" | "Critical";
 type RiskCategory = "Health & Safety" | "Quality" | "Environmental" | "Operational" | "Other";
 type ActionStatus = "Open" | "In Progress" | "Awaiting Verification" | "Closed" | "Rejected";
 type ScheduleFrequency =
+  | "Daily"
   | "Weekly"
-  | "Bi-weekly"
+  | "Bi-Weekly"
   | "Monthly"
-  | "Bi-monthly"
+  | "Bi-Monthly"
   | "3 Monthly"
   | "6 Monthly"
   | "12 Monthly";
 type ScheduleScope = "Company schedule" | "Personal schedule";
 type OverdueAlertTiming = "At due time" | "30 minutes overdue" | "1 hour overdue" | "2 hours overdue";
 type CompletionCheckTiming = "30 minutes after send" | "1 hour after send" | "At due time" | "2 hours after due";
-type Screen = "dashboard" | "audits" | "actions" | "reports" | "sync" | "schedules" | "admin" | "account" | "complete";
+type Screen = "dashboard" | "audits" | "actions" | "nonConformance" | "reports" | "sync" | "schedules" | "admin" | "onboarding" | "account" | "complete";
 type ThemeMode = "light" | "dark";
 type ReportTemplateType = "Executive summary" | "Overdue audit pack" | "Corrective action pack" | "Evidence pack" | "Full report";
 type ScheduleDay = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
@@ -55,6 +56,7 @@ type AuditQuestion = {
   autoActionRequired?: boolean;
   requiresPhotoEvidence?: boolean;
   requiresManagerReview?: boolean;
+  answerPrompts?: Partial<Record<Answer, string[]>>;
 };
 
 type Audit = {
@@ -109,6 +111,7 @@ type ActionItem = {
   questionId: string;
   questionText: string;
   sourceAnswer: string;
+  nonConformanceId?: string;
   severity: RiskLevel;
   owner: string;
   assignedToUserId: string;
@@ -132,6 +135,9 @@ type ActionItem = {
   evidenceCount: number;
   noteIncluded: boolean;
   riskCategory: RiskCategory;
+  escalated?: boolean;
+  isStuck?: boolean;
+  evidenceRequired?: boolean;
   requiresManagerReview?: boolean;
 };
 
@@ -171,6 +177,16 @@ type OnboardingRecord = {
   companyFolderReference: string;
   raw: Record<string, string>;
 };
+
+type DashboardPreferences = {
+  trafficBoard: boolean;
+  liveSummary: boolean;
+  upcomingAudits: boolean;
+  openActions: boolean;
+  complianceSnapshot: boolean;
+};
+
+type DashboardSectionKey = keyof DashboardPreferences;
 
 type ScheduleItem = {
   id: string;
@@ -225,6 +241,15 @@ type ManagedSchedule = {
   lastCompletedAt?: string;
   nextDueAt?: string;
   healthState?: ScheduleHealthState;
+};
+
+type AuditScheduleMatrixInfo = {
+  scheduleName: string;
+  versionLabel: string;
+  frequency: ScheduleFrequency;
+  days: ScheduleDay[];
+  liveTime: string;
+  completionHours: number;
 };
 
 type GoogleBackendStatus = {
@@ -327,6 +352,42 @@ type DraftTemplateQuestion = {
   id: string;
   text: string;
   fieldType: AuditQuestion["fieldType"];
+  answerPrompts?: Partial<Record<Answer, string[]>>;
+};
+
+type NonConformanceEvidence = {
+  id: string;
+  name: string;
+  previewUrl: string;
+  addedAt: string;
+  note?: string;
+};
+
+type NonConformanceRecord = {
+  id: string;
+  reference: string;
+  auditId: string;
+  auditName: string;
+  auditQuestionId: string;
+  auditQuestion: string;
+  selectedAnswer: Answer;
+  auditorName: string;
+  auditorUserId: string;
+  site: string;
+  raisedAt: string;
+  status: "Raised" | "In Progress" | "Completed";
+  assignedLineManager: string;
+  assignedLineManagerUserId: string;
+  assignedLineManagerEmail: string;
+  investigationIsoClause: string;
+  investigationNotes: string;
+  rootCause: string;
+  correctiveAction: string;
+  investigationExtraNotes: string;
+  evidence: NonConformanceEvidence[];
+  completionDateTime?: string;
+  completedByName?: string;
+  completedByUserId?: string;
 };
 
 type OfflineSubmission = {
@@ -374,6 +435,8 @@ type AuditAccessMatrixRow = {
   accessibleCount: number;
   cells: AuditAccessMatrixCell[];
 };
+
+type AuditAccessOverrideMap = Record<string, AuditAccessLevel>;
 
 type ReportSectionKey =
   | "compliance"
@@ -435,6 +498,37 @@ type Toast = {
   tone: "neutral" | "success" | "warning";
 };
 
+type ManagerAlert = {
+  id: string;
+  auditId: string;
+  auditName: string;
+  submittedBy: string;
+  nonComplianceCount: number;
+  queuedForSync: boolean;
+  createdAt: string;
+  managerEmails: string[];
+  managerNames: string[];
+  readBy: string[];
+};
+
+type IssuePromptState = {
+  question: AuditQuestion;
+  answer: Exclude<Answer, "pass">;
+  actionPrompts: string[];
+  solved: boolean | null;
+};
+
+type AuditCompletionSummaryState = {
+  auditId: string;
+  auditName: string;
+  questionsAnswered: number;
+  issuesFound: number;
+  actionsCreated: number;
+  photosCaptured: number;
+  syncTone: "green" | "amber" | "red";
+  syncLabel: string;
+};
+
 const companyName = "QMS Precast";
 const CURRENT_SCHEMA_VERSION = "2.0.0";
 const REQUIRED_WORKSPACE_TABS = ["Onboarding", "Users", "Schedule", "Actions", "Notes", "Config"] as const;
@@ -446,10 +540,11 @@ const ACTION_DUE_DAYS_BY_SEVERITY: Record<RiskLevel, number> = {
 };
 
 const users: User[] = [
-  { username: "master", password: "demo", role: "Master", name: "QMS Platform" },
-  { username: "admin", password: "demo", role: "Admin", name: "Olivia Hart" },
+  { username: "master", password: "demo", role: "Master", name: "System Setup" },
+  { username: "admin", password: "demo", role: "Admin", name: "Andy Hall" },
   { username: "manager", password: "demo", role: "Manager", name: "James Cole" },
-  { username: "auditor", password: "demo", role: "Auditor", name: "Amira Khan" },
+  { username: "tom", password: "demo", role: "Auditor", name: "Tom Blake" },
+  { username: "sarah", password: "demo", role: "Auditor", name: "Sarah Evans" },
 ];
 
 const initialAudits: Audit[] = [];
@@ -460,13 +555,15 @@ const initialActions: ActionItem[] = [];
 const initialSyncQueue: SyncQueueItem[] = [];
 const initialSchedules: ScheduleItem[] = [];
 const initialTemplates: AuditTemplate[] = [];
+const initialNonConformances: NonConformanceRecord[] = [];
 const amberThresholdHours = 2;
 const scheduleDayOptions: ScheduleDay[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const scheduleFrequencyOptions: ScheduleFrequency[] = [
+  "Daily",
   "Weekly",
-  "Bi-weekly",
+  "Bi-Weekly",
   "Monthly",
-  "Bi-monthly",
+  "Bi-Monthly",
   "3 Monthly",
   "6 Monthly",
   "12 Monthly",
@@ -514,20 +611,26 @@ const statusStyles: Record<
 const navItems: { id: Exclude<Screen, "complete">; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "dashboard" },
   { id: "audits", label: "Audits", icon: "clipboard" },
-  { id: "actions", label: "Actions", icon: "checklist" },
+  { id: "actions", label: "Actions", icon: "warningTriangle" },
+  { id: "nonConformance", label: "Non-Conformance", icon: "checklist" },
   { id: "reports", label: "Report creator", icon: "chart" },
   { id: "sync", label: "Sync Centre", icon: "sync" },
   { id: "schedules", label: "Schedules", icon: "clock" },
-  { id: "admin", label: "Admin", icon: "shield" },
+  { id: "admin", label: "Control", icon: "shield" },
+  { id: "onboarding", label: "Onboarding", icon: "spark" },
   { id: "account", label: "Account settings", icon: "user" },
 ];
 
 const compactNavLabels: Partial<Record<Exclude<Screen, "complete">, string>> = {
   actions: "Actions",
+  nonConformance: "NCR",
   reports: "Reports",
   sync: "Sync",
   account: "Settings",
 };
+
+/** Transitions only — hover uses shell-wide 15% contrasting overlay (.qms-app-shell / .qms-login-shell). */
+const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
 
 const appMotionStyles = `
   @keyframes qmsFadeSlideUp {
@@ -543,6 +646,95 @@ const appMotionStyles = `
 
   .qms-screen-stage {
     animation: qmsFadeSlideUp 220ms ease-out;
+    padding-top: 0.75rem;
+    padding-left: 0.85rem;
+    padding-right: 0.85rem;
+    padding-bottom: 6.5rem;
+  }
+
+  /* Compact fit pass: reduce chunky spacing while keeping readability. */
+  .qms-screen-stage .space-y-4 > * + * {
+    margin-top: 0.75rem;
+  }
+
+  .qms-screen-stage .space-y-3 > * + * {
+    margin-top: 0.6rem;
+  }
+
+  .qms-screen-stage [class*="rounded-[1.75rem]"] {
+    border-radius: 1.2rem !important;
+  }
+
+  .qms-screen-stage section[class*="rounded-[1.75rem]"] {
+    padding: 0.9rem !important;
+  }
+
+  .qms-screen-stage section[class*="rounded-[1.6rem]"] {
+    padding: 0.8rem !important;
+  }
+
+  .qms-app-shell button:not(:disabled),
+  .qms-login-shell button:not(:disabled) {
+    transition:
+      background-color 200ms ease-in-out,
+      color 200ms ease-in-out,
+      border-color 200ms ease-in-out,
+      box-shadow 200ms ease-in-out,
+      opacity 200ms ease-in-out;
+  }
+
+  /* 15% opposite-colour tint (readable: inset shadow sits beneath button content) */
+  .qms-app-shell[data-qms-theme="light"] button:enabled:hover,
+  .qms-login-shell[data-qms-theme="light"] button:enabled:hover {
+    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.15);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] button:enabled:hover,
+  .qms-login-shell[data-qms-theme="dark"] button:enabled:hover {
+    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.15);
+  }
+
+  .qms-app-shell[data-qms-theme="light"] button:enabled:active,
+  .qms-login-shell[data-qms-theme="light"] button:enabled:active {
+    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.22);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] button:enabled:active,
+  .qms-login-shell[data-qms-theme="dark"] button:enabled:active {
+    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.22);
+  }
+
+  .qms-app-shell button:disabled,
+  .qms-login-shell button:disabled {
+    cursor: not-allowed;
+  }
+
+  /* File-upload chips (label + rounded link CTAs mirror button hover) */
+  .qms-app-shell label.inline-flex.cursor-pointer,
+  .qms-login-shell label.inline-flex.cursor-pointer,
+  .qms-app-shell a.inline-flex[class*="rounded"],
+  .qms-login-shell a.inline-flex[class*="rounded"] {
+    transition: box-shadow 200ms ease-in-out;
+  }
+
+  .qms-app-shell[data-qms-theme="light"] label.inline-flex.cursor-pointer:hover,
+  .qms-login-shell[data-qms-theme="light"] label.inline-flex.cursor-pointer:hover {
+    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.15);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] label.inline-flex.cursor-pointer:hover,
+  .qms-login-shell[data-qms-theme="dark"] label.inline-flex.cursor-pointer:hover {
+    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.15);
+  }
+
+  .qms-app-shell[data-qms-theme="light"] a.inline-flex[class*="rounded"]:hover,
+  .qms-login-shell[data-qms-theme="light"] a.inline-flex[class*="rounded"]:hover {
+    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.15);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] a.inline-flex[class*="rounded"]:hover,
+  .qms-login-shell[data-qms-theme="dark"] a.inline-flex[class*="rounded"]:hover {
+    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.15);
   }
 
   .qms-tablet-stage {
@@ -557,14 +749,15 @@ const appMotionStyles = `
     width: min(92vw, 41rem);
     aspect-ratio: 10 / 16;
     padding: 0.9rem;
+    overflow: hidden;
     border-radius: 2.8rem;
     background:
-      linear-gradient(145deg, rgba(255,255,255,0.95), rgba(226,232,240,0.82)),
-      linear-gradient(180deg, rgba(15,23,42,0.12), rgba(15,23,42,0.02));
+      linear-gradient(145deg, rgba(2,6,23,0.98), rgba(15,23,42,0.95)),
+      linear-gradient(180deg, rgba(0,0,0,0.4), rgba(0,0,0,0.2));
     box-shadow:
-      0 30px 90px rgba(15, 23, 42, 0.18),
-      inset 0 1px 0 rgba(255,255,255,0.92),
-      inset 0 -2px 0 rgba(148,163,184,0.18);
+      0 30px 90px rgba(2, 6, 23, 0.45),
+      inset 0 1px 0 rgba(148,163,184,0.14),
+      inset 0 -2px 0 rgba(0,0,0,0.45);
   }
 
   .qms-tablet-device::before {
@@ -732,8 +925,13 @@ const userStorageKey = "qms-precast-current-user";
 const offlineQueueStorageKey = "qms-precast-offline-submissions";
 const themeStorageKey = "qms-precast-theme";
 const previewOrientationStorageKey = "qms-precast-preview-orientation";
+const desktopSidebarCollapsedStorageKey = "qms-precast-desktop-sidebar-collapsed";
+const dashboardPreferencesStorageKey = "qms-precast-dashboard-preferences";
+const dashboardSectionOrderStorageKey = "qms-precast-dashboard-section-order";
 const folderLinksStorageKey = "qms-precast-folder-links";
 const workspaceStateStorageKey = "qms-precast-workspace-state";
+const userProfilePhotosStorageKey = "qms-precast-user-profile-photos";
+const userNicknamesStorageKey = "qms-precast-user-nicknames";
 const scheduleTimeZone = "Europe/London";
 
 function AppIcon({ name, className = "h-5 w-5" }: { name: string; className?: string }) {
@@ -775,6 +973,14 @@ function AppIcon({ name, className = "h-5 w-5" }: { name: string; className?: st
           <path d="m4 7 1.5 1.5L7.5 6" />
           <path d="m4 12 1.5 1.5L7.5 11" />
           <path d="m4 17 1.5 1.5L7.5 16" />
+        </svg>
+      );
+    case "warningTriangle":
+      return (
+        <svg {...shared}>
+          <path d="M12 4.75 20.25 19.25H3.75L12 4.75z" />
+          <path d="M12 9.5v4.5" />
+          <circle cx="12" cy="16.35" r="1" fill="currentColor" stroke="none" />
         </svg>
       );
     case "chart":
@@ -909,6 +1115,10 @@ function getWorkspaceInitials(name: string) {
     .join("");
 }
 
+function buildAuditAccessOverrideKey(email: string, auditId: string) {
+  return `${email}::${auditId}`;
+}
+
 const reportTemplates: {
   type: ReportTemplateType;
   title: string;
@@ -945,17 +1155,18 @@ const reportSectionOptions: {
   key: ReportSectionKey;
   title: string;
   description: string;
+  icon?: string;
 }[] = [
   { key: "compliance", title: "Compliance summary", description: "Live compliance and daily completion metrics." },
   { key: "auditCompletion", title: "Audit completion summary", description: "Completion rate, finished audits, and coverage." },
   { key: "overdueAudits", title: "Overdue audits", description: "Audits that are currently overdue." },
-  { key: "correctiveActions", title: "Corrective actions", description: "Open and overdue CAPA items." },
-  { key: "overdueActions", title: "Overdue actions", description: "Corrective actions past due date." },
+  { key: "correctiveActions", title: "Corrective actions", description: "Open and overdue CAPA items.", icon: "warningTriangle" },
+  { key: "overdueActions", title: "Overdue actions", description: "Corrective actions past due date.", icon: "warningTriangle" },
   { key: "criticalFindings", title: "Critical/high findings", description: "Highest-risk audit findings needing attention." },
   { key: "repeatFailures", title: "Repeat failures", description: "Questions or findings repeatedly failing over time." },
   { key: "evidence", title: "Evidence summary", description: "Captured evidence and proof counts." },
   { key: "auditHistory", title: "Audit history", description: "Recent completed audit records." },
-  { key: "verificationHistory", title: "Verification history", description: "Action verification and close-out activity." },
+  { key: "verificationHistory", title: "Verification history", description: "Action verification and close-out activity.", icon: "warningTriangle" },
   { key: "scheduleCompliance", title: "Schedule compliance", description: "Schedule health, missed audits, and due-soon items." },
   { key: "syncExceptions", title: "Offline sync exceptions", description: "Items failed or conflicted during sync." },
   { key: "templates", title: "Audit templates", description: "Active templates included in the workspace." },
@@ -1003,6 +1214,64 @@ function getDueLabel(dueHours: number) {
   return "Due later";
 }
 
+function rankAuditorAudit(audit: Audit, hasDraft: boolean) {
+  if (hasDraft) return 0;
+  if (audit.dueHours < 0) return 1;
+  if (getAuditTrafficStatus(audit.dueHours) === "amber") return 2;
+  if (audit.dueHours <= 24) return 3;
+  return 4;
+}
+
+function pickNextAuditorAudit(audits: Audit[], drafts: Record<string, AuditDraft>) {
+  return [...audits].sort((a, b) => {
+    const rankDiff = rankAuditorAudit(a, Boolean(drafts[a.id])) - rankAuditorAudit(b, Boolean(drafts[b.id]));
+    if (rankDiff !== 0) return rankDiff;
+    return a.dueHours - b.dueHours;
+  })[0] ?? null;
+}
+
+function isActionOverdue(action: ActionItem) {
+  return action.status !== "Closed" && action.dueHours < 0;
+}
+
+function isActionEscalated(action: ActionItem) {
+  if (action.escalated !== undefined) {
+    return action.escalated;
+  }
+  return isActionOverdue(action) && Math.abs(action.dueHours) > 24;
+}
+
+function isActionStuck(action: ActionItem) {
+  if (action.isStuck !== undefined) {
+    return action.isStuck;
+  }
+  return action.status === "Awaiting Verification" && action.dueHours < -24;
+}
+
+function isActionDueSoon(action: ActionItem) {
+  return action.status !== "Closed" && action.dueHours >= 0 && action.dueHours <= 24;
+}
+
+function getActionUrgency(action: ActionItem): "Escalated" | "Overdue" | "Stuck" | "Due soon" | "Normal" {
+  if (isActionEscalated(action)) return "Escalated";
+  if (isActionOverdue(action)) return "Overdue";
+  if (isActionStuck(action)) return "Stuck";
+  if (isActionDueSoon(action)) return "Due soon";
+  return "Normal";
+}
+
+function isOverdue(action: ActionItem) {
+  return isActionOverdue(action);
+}
+
+function isEscalated(action: ActionItem) {
+  return isActionEscalated(action);
+}
+
+function isStuck(action: ActionItem) {
+  return isActionStuck(action);
+}
+
 function buildDefaultQuestions(auditName: string): AuditQuestion[] {
   return [
     {
@@ -1042,6 +1311,431 @@ function buildDefaultQuestions(auditName: string): AuditQuestion[] {
       requiresManagerReview: true,
     },
   ];
+}
+
+/** Local-only precast HSE demo payloads for QA/review — never merges into Google-connected company sheets. */
+function buildDemoPrecastWorkspace(): {
+  audits: Audit[];
+  actions: ActionItem[];
+  drafts: Record<string, AuditDraft>;
+  syncQueue: SyncQueueItem[];
+  templates: AuditTemplate[];
+  companySheetSync: CompanySheetSyncStatus;
+} {
+  const demoAudits: Audit[] = [
+    {
+      id: "audit-demo-yard-safety",
+      name: "Daily Yard Safety Check",
+      category: "Daily safety",
+      siteArea: "Main Yard",
+      dueLabel: "Overdue",
+      dueHours: -2,
+      priority: "High",
+      owner: "Tom Blake",
+      templateVersion: "Built in app",
+      status: "red",
+      lastCompletedAt: "Today 06:30",
+      questions: buildDefaultQuestions("Daily Yard Safety Check"),
+    },
+    {
+      id: "audit-demo-fire-bay2",
+      name: "Bay 2 Fire Safety Inspection",
+      category: "Fire safety",
+      siteArea: "Bay 2",
+      dueLabel: "Due soon",
+      dueHours: 1,
+      priority: "High",
+      owner: "Sarah Evans",
+      templateVersion: "Built in app",
+      status: "amber",
+      lastCompletedAt: "Yesterday 15:10",
+      questions: buildDefaultQuestions("Bay 2 Fire Safety Inspection"),
+    },
+    {
+      id: "audit-demo-ppe-weekly",
+      name: "Weekly PPE Compliance Audit",
+      category: "PPE compliance",
+      siteArea: "Casting Hall",
+      dueLabel: "Due later",
+      dueHours: 48,
+      priority: "Medium",
+      owner: "Tom Blake",
+      templateVersion: "Built in app",
+      status: "green",
+      lastCompletedAt: "Monday 08:45",
+      questions: buildDefaultQuestions("Weekly PPE Compliance Audit"),
+    },
+    {
+      id: "audit-demo-lifting",
+      name: "Lifting Equipment Check",
+      category: "Plant safety",
+      siteArea: "Lifting Bay",
+      dueLabel: "Due soon",
+      dueHours: 2,
+      priority: "High",
+      owner: "Sarah Evans",
+      templateVersion: "Built in app",
+      status: "amber",
+      lastCompletedAt: "Yesterday 10:20",
+      questions: buildDefaultQuestions("Lifting Equipment Check"),
+    },
+    {
+      id: "audit-demo-housekeeping",
+      name: "Housekeeping Walkaround",
+      category: "Housekeeping",
+      siteArea: "Factory Floor",
+      dueLabel: "Due later",
+      dueHours: 36,
+      priority: "Medium",
+      owner: "Tom Blake",
+      templateVersion: "Built in app",
+      status: "green",
+      lastCompletedAt: "Today 07:10",
+      questions: buildDefaultQuestions("Housekeeping Walkaround"),
+    },
+  ];
+
+  const demoActions: ActionItem[] = [
+    {
+      id: "action-demo-extinguisher",
+      companyId: "demo-company",
+      auditId: "audit-demo-fire-bay2",
+      auditName: "Bay 2 Fire Safety Inspection",
+      questionId: "fire-extinguisher",
+      questionText: "Replace damaged fire extinguisher — Bay 2",
+      sourceAnswer: "fail",
+      severity: "High",
+      owner: "Tom Blake",
+      assignedToUserId: "tom",
+      assignedToName: "Tom Blake",
+      createdByUserId: "manager",
+      createdAt: "Today 08:10",
+      dueDate: "Today",
+      closedAt: "",
+      verifiedByUserId: "",
+      verificationNotes: "",
+      evidenceLinks: [],
+      localEvidenceRefs: [],
+      comments: "Casing dented, pressure gauge in red zone.",
+      recurrenceFlag: false,
+      rootCause: "Impact damage from FLT movement",
+      correctiveAction: "Replace extinguisher and complete monthly inspection tag",
+      preventiveAction: "Install protective hoop at forklift pinch points",
+      dueLabel: "Due today",
+      dueHours: 10,
+      status: "Open",
+      evidenceCount: 0,
+      noteIncluded: true,
+      riskCategory: "Health & Safety",
+    },
+    {
+      id: "action-demo-exit",
+      companyId: "demo-company",
+      auditId: "audit-demo-yard-safety",
+      auditName: "Daily Yard Safety Check",
+      questionId: "blocked-exit",
+      questionText: "Clear blocked emergency exit — Casting Hall",
+      sourceAnswer: "fail",
+      severity: "Critical",
+      owner: "Sarah Evans",
+      assignedToUserId: "sarah",
+      assignedToName: "Sarah Evans",
+      createdByUserId: "manager",
+      createdAt: "Yesterday 16:00",
+      dueDate: "Overdue",
+      closedAt: "",
+      verifiedByUserId: "",
+      verificationNotes: "",
+      evidenceLinks: [],
+      localEvidenceRefs: [],
+      comments: "Pallet stack narrowing exit width below required clearance.",
+      recurrenceFlag: true,
+      rootCause: "Poor material staging",
+      correctiveAction: "Clear egress and mark yellow no-storage box",
+      preventiveAction: "Supervisor aisle walk each shift change",
+      dueLabel: "Overdue",
+      dueHours: -30,
+      status: "Open",
+      evidenceCount: 0,
+      noteIncluded: true,
+      riskCategory: "Health & Safety",
+    },
+    {
+      id: "action-demo-guardrail",
+      companyId: "demo-company",
+      auditId: "audit-demo-lifting",
+      auditName: "Lifting Equipment Check",
+      questionId: "guardrail-evidence",
+      questionText: "Upload evidence for repaired guard rail",
+      sourceAnswer: "nc",
+      severity: "Medium",
+      owner: "Tom Blake",
+      assignedToUserId: "tom",
+      assignedToName: "Tom Blake",
+      createdByUserId: "manager",
+      createdAt: "Today 07:00",
+      dueDate: "Due tomorrow",
+      closedAt: "",
+      verifiedByUserId: "",
+      verificationNotes: "",
+      evidenceLinks: [],
+      localEvidenceRefs: [],
+      comments: "Welded repair signed off locally; awaiting photo upload and manager verification.",
+      recurrenceFlag: false,
+      rootCause: "Incomplete close-out packet",
+      correctiveAction: "Upload date-stamped guard rail photos",
+      preventiveAction: "Require evidence checklist before marking complete",
+      dueLabel: "Due soon",
+      dueHours: 18,
+      status: "Awaiting Verification",
+      evidenceCount: 0,
+      noteIncluded: true,
+      riskCategory: "Operational",
+    },
+    {
+      id: "action-demo-ppe-review",
+      companyId: "demo-company",
+      auditId: "audit-demo-ppe-weekly",
+      auditName: "Weekly PPE Compliance Audit",
+      questionId: "ppe-review",
+      questionText: "Review repeated PPE non-conformance",
+      sourceAnswer: "fail",
+      severity: "High",
+      owner: "James Cole",
+      assignedToUserId: "manager",
+      assignedToName: "James Cole",
+      createdByUserId: "admin",
+      createdAt: "Today 09:20",
+      dueDate: "Due tomorrow",
+      closedAt: "",
+      verifiedByUserId: "",
+      verificationNotes: "",
+      evidenceLinks: [],
+      localEvidenceRefs: [],
+      comments: "Repeat observations in bays 1 and 3 near steel-fixing pours.",
+      recurrenceFlag: true,
+      rootCause: "Variable supervisor enforcement near pour windows",
+      correctiveAction: "Manager-led toolbox talk plus signed commitment",
+      preventiveAction: "Random PPE checks at pouring deck access",
+      dueLabel: "Due soon",
+      dueHours: 18,
+      status: "In Progress",
+      evidenceCount: 1,
+      noteIncluded: true,
+      riskCategory: "Health & Safety",
+    },
+    ...Array.from({ length: 4 }).map((_, index) => ({
+      id: `action-demo-ppe-repeat-${index + 1}`,
+      companyId: "demo-company",
+      auditId: "audit-demo-ppe-weekly",
+      auditName: "Weekly PPE Compliance Audit",
+      questionId: `ppe-repeat-${index + 1}`,
+      questionText: "PPE not worn correctly",
+      sourceAnswer: "fail",
+      severity: "High" as RiskLevel,
+      owner: index % 2 === 0 ? "Tom Blake" : "Sarah Evans",
+      assignedToUserId: index % 2 === 0 ? "tom" : "sarah",
+      assignedToName: index % 2 === 0 ? "Tom Blake" : "Sarah Evans",
+      createdByUserId: "manager",
+      createdAt: "This week",
+      dueDate: "Due this week",
+      closedAt: "",
+      verifiedByUserId: "",
+      verificationNotes: "",
+      evidenceLinks: [],
+      localEvidenceRefs: [],
+      comments: "Hi-vis or safety glasses incomplete during yard pour.",
+      recurrenceFlag: true,
+      rootCause: "Comfort / habit skipping PPE near familiar tasks",
+      correctiveAction: "On-the-spot coaching and documented warning",
+      preventiveAction: "PPE ambassadors on each casting line",
+      dueLabel: "Due later",
+      dueHours: 20 + index,
+      status: "Open" as ActionStatus,
+      evidenceCount: 0,
+      noteIncluded: true,
+      riskCategory: "Health & Safety" as RiskCategory,
+    })),
+    {
+      id: "action-demo-fire-obstructed-1",
+      companyId: "demo-company",
+      auditId: "audit-demo-fire-bay2",
+      auditName: "Bay 2 Fire Safety Inspection",
+      questionId: "fire-obstructed-1",
+      questionText: "Fire exits obstructed",
+      sourceAnswer: "fail",
+      severity: "Critical",
+      owner: "Sarah Evans",
+      assignedToUserId: "sarah",
+      assignedToName: "Sarah Evans",
+      createdByUserId: "manager",
+      createdAt: "This week",
+      dueDate: "Overdue",
+      closedAt: "",
+      verifiedByUserId: "",
+      verificationNotes: "",
+      evidenceLinks: [],
+      localEvidenceRefs: [],
+      comments: "Stacked shuttering pallets narrow exit effective width.",
+      recurrenceFlag: true,
+      rootCause: "Poor layout control",
+      correctiveAction: "Clear marking and barrier until resolved",
+      preventiveAction: "End-of-shift housekeeping audit",
+      dueLabel: "Overdue",
+      dueHours: -10,
+      status: "Open",
+      evidenceCount: 0,
+      noteIncluded: true,
+      riskCategory: "Health & Safety",
+    },
+    {
+      id: "action-demo-fire-obstructed-2",
+      companyId: "demo-company",
+      auditId: "audit-demo-yard-safety",
+      auditName: "Daily Yard Safety Check",
+      questionId: "fire-obstructed-2",
+      questionText: "Fire exits obstructed",
+      sourceAnswer: "fail",
+      severity: "High",
+      owner: "Tom Blake",
+      assignedToUserId: "tom",
+      assignedToName: "Tom Blake",
+      createdByUserId: "manager",
+      createdAt: "This week",
+      dueDate: "Due today",
+      closedAt: "",
+      verifiedByUserId: "",
+      verificationNotes: "",
+      evidenceLinks: [],
+      localEvidenceRefs: [],
+      comments: "Temporary materials creeping into egress during bay strip-out.",
+      recurrenceFlag: true,
+      rootCause: "Temporary works storage creep",
+      correctiveAction: "Remove obstruction and widen marked lane",
+      preventiveAction: "Daily supervisor route photo",
+      dueLabel: "Due today",
+      dueHours: 5,
+      status: "In Progress",
+      evidenceCount: 1,
+      noteIncluded: true,
+      riskCategory: "Operational",
+    },
+    ...Array.from({ length: 3 }).map((_, index) => ({
+      id: `action-demo-housekeeping-repeat-${index + 1}`,
+      companyId: "demo-company",
+      auditId: "audit-demo-housekeeping",
+      auditName: "Housekeeping Walkaround",
+      questionId: `housekeeping-repeat-${index + 1}`,
+      questionText: "Missing housekeeping sign-off",
+      sourceAnswer: "nc",
+      severity: "Medium" as RiskLevel,
+      owner: index % 2 === 0 ? "Tom Blake" : "Sarah Evans",
+      assignedToUserId: index % 2 === 0 ? "tom" : "sarah",
+      assignedToName: index % 2 === 0 ? "Tom Blake" : "Sarah Evans",
+      createdByUserId: "manager",
+      createdAt: "This week",
+      dueDate: "Due this week",
+      closedAt: "",
+      verifiedByUserId: "",
+      verificationNotes: "",
+      evidenceLinks: [],
+      localEvidenceRefs: [],
+      comments: "Shift close-out checklist incomplete on casting record.",
+      recurrenceFlag: true,
+      rootCause: "Handover overlap between crews",
+      correctiveAction: "Backfill supervisory sign-off with time stamp",
+      preventiveAction: "Digital lock on shift close before FLT entry",
+      dueLabel: "Due later",
+      dueHours: 30 + index,
+      status: "Open" as ActionStatus,
+      evidenceCount: 0,
+      noteIncluded: true,
+      riskCategory: "Operational" as RiskCategory,
+    })),
+  ];
+
+  const demoDrafts: Record<string, AuditDraft> = {
+    "audit-demo-yard-safety": {
+      responses: {
+        "Daily Yard Safety Check-q1": "pass",
+        "Daily Yard Safety Check-q2": "fail",
+      },
+      notes: {
+        "Daily Yard Safety Check-q2": "Forklift route crossing without clear barrier — barrier tape displaced overnight.",
+      },
+      evidence: {},
+      updatedAt: "Today 10:12 (45% complete)",
+    },
+  };
+
+  const demoSyncQueue: SyncQueueItem[] = [
+    {
+      id: "sync-demo-1",
+      itemType: "auditSubmission",
+      localId: "audit-demo-yard-local-copy",
+      status: "Pending Sync",
+      createdAt: "Today 10:15",
+      updatedAt: "Today 10:15",
+      retryCount: 0,
+      lastError: "",
+      payload: { auditName: "Daily Yard Safety Check (field draft)" },
+    },
+    {
+      id: "sync-demo-2",
+      itemType: "actionUpdate",
+      localId: "action-demo-ppe-review",
+      status: "Pending Sync",
+      createdAt: "Today 10:18",
+      updatedAt: "Today 10:18",
+      retryCount: 0,
+      lastError: "",
+      payload: {},
+    },
+    {
+      id: "sync-demo-3",
+      itemType: "evidenceUpload",
+      localId: "action-demo-guardrail-evidence-pack",
+      status: "Failed",
+      createdAt: "Today 10:20",
+      updatedAt: "Today 10:21",
+      retryCount: 1,
+      lastError: "Evidence upload failed: network timeout",
+      payload: {},
+    },
+  ];
+
+  const demoTemplates: AuditTemplate[] = demoAudits.map((audit, index) => ({
+    id: `template-demo-${index + 1}`,
+    name: audit.name,
+    active: true,
+    questions: audit.questions,
+    source: "Built in app",
+  }));
+
+  const companySheetSync: CompanySheetSyncStatus = {
+    sheetId: "demo-master-sheet",
+    sheetName: "QMS Precast Master Sheet",
+    tabs: ["Onboarding", "Users", "Schedule", "Actions", "Notes", "Config"],
+    usersCount: 5,
+    schedulesCount: 4,
+    onboardingCount: 3,
+    actionsCount: demoActions.length,
+    notesCount: 6,
+    findingsCount: 9,
+    evidenceCount: 4,
+    reportsCount: 2,
+    configCount: 1,
+    lastSyncedAt: "12 minutes ago",
+  };
+
+  return {
+    audits: demoAudits,
+    actions: demoActions,
+    drafts: demoDrafts,
+    syncQueue: demoSyncQueue,
+    templates: demoTemplates,
+    companySheetSync,
+  };
 }
 
 function riskScore(level: RiskLevel = "Low") {
@@ -1102,6 +1796,14 @@ function canAccessAdmin(role: Role) {
   return role === "Master" || role === "Admin";
 }
 
+function canAccessSchedules(role: Role) {
+  return role === "Master" || role === "Admin" || role === "Manager";
+}
+
+function canAccessOnboarding(role: Role) {
+  return role === "Master";
+}
+
 function canAccessReports(role: Role) {
   return role !== "Auditor";
 }
@@ -1110,10 +1812,22 @@ function canAccessActions(role: Role) {
   return role === "Master" || role === "Admin" || role === "Manager" || role === "Auditor";
 }
 
+function canAccessCompletedNcrReports(role: Role) {
+  return role === "Master" || role === "Admin" || role === "Manager";
+}
+
+function canAccessAuditsCentre(role: Role) {
+  return role !== "Auditor";
+}
+
+function canEditLegalName(role: Role) {
+  return role === "Master" || role === "Admin";
+}
+
 function getRolePermissions(role: Role) {
   return {
     canManageUsers: role === "Master" || role === "Admin",
-    canManageSchedules: role === "Master" || role === "Admin",
+    canManageSchedules: role === "Master" || role === "Admin" || role === "Manager",
     canManageTemplates: role === "Master" || role === "Admin",
     canAssignActions: role === "Master" || role === "Admin" || role === "Manager",
     canVerifyActions: role === "Master" || role === "Admin" || role === "Manager",
@@ -1125,6 +1839,16 @@ function getRolePermissions(role: Role) {
 
 function getRoleDisplayName(role: Role) {
   return role === "Master" ? "God Mode" : role;
+}
+
+function normalizeScheduleFrequency(value: string): ScheduleFrequency {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "daily") return "Daily";
+  if (normalized === "bi-weekly" || normalized === "biweekly" || normalized === "bi weekly") return "Bi-Weekly";
+  if (normalized === "monthly" || normalized === "bi-monthly" || normalized === "3 monthly" || normalized === "6 monthly" || normalized === "12 monthly") {
+    return "Monthly";
+  }
+  return "Weekly";
 }
 
 function getCreatableRoles(role: Role) {
@@ -1206,7 +1930,7 @@ function parseCompanySheetSchedules(records: Record<string, string>[], companyFo
             ? ("Personal schedule" as ScheduleScope)
             : ("Company schedule" as ScheduleScope),
         personalAssignee: extractByKeys(record, ["personal assignee", "assignee"]),
-        frequency: (extractByKeys(record, ["frequency"]) as ScheduleFrequency) || "Weekly",
+        frequency: normalizeScheduleFrequency(extractByKeys(record, ["frequency"])),
         sendTime: extractByKeys(record, ["send time", "time"]) || "08:00",
         recipients: parsePeopleList(extractByKeys(record, ["recipient"])),
         overdueAlertRecipients: parsePeopleList(extractByKeys(record, ["overdue", "alert"])),
@@ -1245,7 +1969,7 @@ function parseManagedSchedules(records: Record<string, string>[], companyFolderI
         .split(",")
         .map((item) => item.trim())
         .filter(Boolean) as ScheduleDay[],
-      frequency: (extractByKeys(record, ["frequency"]) as ScheduleFrequency) || "Weekly",
+      frequency: normalizeScheduleFrequency(extractByKeys(record, ["frequency"])),
       liveTime: extractByKeys(record, ["live time", "send time", "time"]) || "08:00",
       completionHours: Number(extractByKeys(record, ["completion hours", "due hours", "hours"])) || 24,
     };
@@ -1312,6 +2036,7 @@ function parseCompanySheetActions(records: Record<string, string>[], companyFold
         questionId: extractByKeys(record, ["source question id", "question id"]),
         questionText,
         sourceAnswer: extractByKeys(record, ["source answer", "answer"]),
+        nonConformanceId: extractByKeys(record, ["non conformance id", "non-conformance id", "nc id"]),
         severity,
         owner: extractByKeys(record, ["assigned to name", "owner"]) || "Unassigned",
         assignedToUserId: extractByKeys(record, ["assigned to user id", "assigned user id"]),
@@ -1335,6 +2060,7 @@ function parseCompanySheetActions(records: Record<string, string>[], companyFold
         evidenceCount: Number(extractByKeys(record, ["evidence count"])) || parsePeopleList(extractByKeys(record, ["local evidence refs", "local evidence"])).length,
         noteIncluded: Boolean(extractByKeys(record, ["comments", "notes"])),
         riskCategory: (extractByKeys(record, ["risk category", "category"]) as RiskCategory) || "Other",
+        evidenceRequired: safeLower(extractByKeys(record, ["requires photo evidence", "evidence required"])) === "true",
         requiresManagerReview: safeLower(extractByKeys(record, ["requires manager review"])) === "true",
       } satisfies ActionItem;
     })
@@ -1345,6 +2071,47 @@ function addDaysIso(days: number) {
   const next = new Date();
   next.setDate(next.getDate() + days);
   return next.toISOString().slice(0, 10);
+}
+
+function parseNonConformanceSequence(nonConformanceId?: string) {
+  if (!nonConformanceId) return null;
+  const match = nonConformanceId.match(/^NC-(\d+)$/i);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function getNextNonConformanceSequence(items: ActionItem[]) {
+  const maxValue = items.reduce((max, item) => {
+    const parsed = parseNonConformanceSequence(item.nonConformanceId);
+    if (parsed === null) return max;
+    return Math.max(max, parsed);
+  }, 0);
+  return maxValue + 1;
+}
+
+function formatNonConformanceId(sequence: number) {
+  return `NC-${String(sequence).padStart(5, "0")}`;
+}
+
+function parseNcrSequence(reference: string) {
+  const match = reference.match(/^NCR-(\d+)$/i);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function getNextNcrSequence(items: NonConformanceRecord[]) {
+  const maxValue = items.reduce((max, item) => {
+    const parsed = parseNcrSequence(item.reference);
+    if (parsed === null) return max;
+    return Math.max(max, parsed);
+  }, 0);
+  return maxValue + 1;
+}
+
+function formatNcrReference(sequence: number) {
+  return `NCR-${String(sequence).padStart(4, "0")}`;
 }
 
 function computeScheduleHealthState(schedule: ManagedSchedule): ScheduleHealthState {
@@ -1472,6 +2239,7 @@ function readStoredWorkspaceState() {
       audits?: Audit[];
       history?: HistoryEntry[];
       actions?: ActionItem[];
+      nonConformances?: NonConformanceRecord[];
       schedules?: ScheduleItem[];
       templates?: AuditTemplate[];
       drafts?: Record<string, AuditDraft>;
@@ -1483,10 +2251,80 @@ function readStoredWorkspaceState() {
       companySheetSync?: CompanySheetSyncStatus | null;
       reportInbox?: ReportItem[];
       syncQueue?: SyncQueueItem[];
+      auditAccessOverrides?: AuditAccessOverrideMap;
+      managerAlerts?: ManagerAlert[];
     };
   } catch {
     return null;
   }
+}
+
+function readStoredUserProfilePhotos() {
+  try {
+    const raw = window.localStorage.getItem(userProfilePhotosStorageKey);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function readStoredUserNicknames() {
+  try {
+    const raw = window.localStorage.getItem(userNicknamesStorageKey);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+/** First-ever visit (no persisted workspace blob) loads isolated local demo payloads; clears when real workspace data replaces localStorage. */
+function getWorkspaceBootstrap() {
+  const rawKey = window.localStorage.getItem(workspaceStateStorageKey);
+  const stored = readStoredWorkspaceState();
+  if (rawKey === null) {
+    const demo = buildDemoPrecastWorkspace();
+    return {
+      audits: demo.audits,
+      history: initialHistory,
+      actions: demo.actions,
+      schedules: initialSchedules,
+      templates: demo.templates,
+      nonConformances: initialNonConformances,
+      drafts: demo.drafts,
+      managedSchedules: [] as ManagedSchedule[],
+      folders: [] as CompanyFolder[],
+      selectedFolderId: "",
+      syncState: "Synced",
+      invitedUsers: [] as UserInvite[],
+      companySheetSync: demo.companySheetSync,
+      reportInbox: [] as ReportItem[],
+      syncQueue: demo.syncQueue,
+      auditAccessOverrides: {} as AuditAccessOverrideMap,
+      managerAlerts: [] as ManagerAlert[],
+    };
+  }
+
+  return {
+    audits: stored?.audits ?? initialAudits,
+    history: stored?.history ?? initialHistory,
+    actions: stored?.actions ?? initialActions,
+    nonConformances: stored?.nonConformances ?? initialNonConformances,
+    schedules: stored?.schedules ?? initialSchedules,
+    templates: stored?.templates ?? initialTemplates,
+    drafts: stored?.drafts ?? {},
+    managedSchedules: stored?.managedSchedules ?? [],
+    folders: stored?.folders ?? [],
+    selectedFolderId: stored?.selectedFolderId ?? "",
+    syncState: stored?.syncState ?? "Not synced",
+    invitedUsers: stored?.invitedUsers ?? [],
+    companySheetSync: stored?.companySheetSync ?? null,
+    reportInbox: stored?.reportInbox ?? [],
+    syncQueue: stored?.syncQueue ?? initialSyncQueue,
+    auditAccessOverrides: stored?.auditAccessOverrides ?? {},
+    managerAlerts: stored?.managerAlerts ?? [],
+  };
 }
 
 function readStoredPreviewOrientation(): PreviewOrientation {
@@ -1498,26 +2336,159 @@ function readStoredPreviewOrientation(): PreviewOrientation {
   }
 }
 
+function defaultDashboardPreferences(): DashboardPreferences {
+  return {
+    trafficBoard: true,
+    liveSummary: true,
+    upcomingAudits: true,
+    openActions: true,
+    complianceSnapshot: true,
+  };
+}
+
+function defaultDashboardSectionOrder(): DashboardSectionKey[] {
+  return ["trafficBoard", "liveSummary", "upcomingAudits", "openActions", "complianceSnapshot"];
+}
+
+function readStoredDashboardPreferences(): DashboardPreferences {
+  const defaults = defaultDashboardPreferences();
+  try {
+    const raw = window.localStorage.getItem(dashboardPreferencesStorageKey);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<DashboardPreferences>;
+    return {
+      trafficBoard: parsed.trafficBoard ?? defaults.trafficBoard,
+      liveSummary: parsed.liveSummary ?? defaults.liveSummary,
+      upcomingAudits: parsed.upcomingAudits ?? defaults.upcomingAudits,
+      openActions: parsed.openActions ?? defaults.openActions,
+      complianceSnapshot: parsed.complianceSnapshot ?? defaults.complianceSnapshot,
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function readStoredDashboardSectionOrder(): DashboardSectionKey[] {
+  const defaults = defaultDashboardSectionOrder();
+  try {
+    const raw = window.localStorage.getItem(dashboardSectionOrderStorageKey);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as DashboardSectionKey[];
+    const valid = parsed.filter((item): item is DashboardSectionKey => defaults.includes(item));
+    const missing = defaults.filter((item) => !valid.includes(item));
+    return [...valid, ...missing];
+  } catch {
+    return defaults;
+  }
+}
+
+function useDashboardSectionLayout(storageKey: string, defaultOrder: string[]) {
+  const [showLayoutOptions, setShowLayoutOptions] = useState(false);
+  const [sectionOrder, setSectionOrder] = useState<string[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return defaultOrder;
+      const parsed = JSON.parse(raw) as { order?: string[] };
+      const safeOrder = (parsed.order || []).filter((item) => defaultOrder.includes(item));
+      const missing = defaultOrder.filter((item) => !safeOrder.includes(item));
+      return [...safeOrder, ...missing];
+    } catch {
+      return defaultOrder;
+    }
+  });
+  const [sectionVisibility, setSectionVisibility] = useState<Record<string, boolean>>(() => {
+    const defaults = Object.fromEntries(defaultOrder.map((key) => [key, true])) as Record<string, boolean>;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return defaults;
+      const parsed = JSON.parse(raw) as { visibility?: Record<string, boolean> };
+      const visibility = { ...defaults };
+      Object.entries(parsed.visibility || {}).forEach(([key, value]) => {
+        if (key in visibility) visibility[key] = Boolean(value);
+      });
+      return visibility;
+    } catch {
+      return defaults;
+    }
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        order: sectionOrder,
+        visibility: sectionVisibility,
+      }),
+    );
+  }, [storageKey, sectionOrder, sectionVisibility]);
+
+  const visibleSectionOrder = sectionOrder.filter((key) => sectionVisibility[key]);
+
+  const toggleSection = (section: string) => {
+    setSectionVisibility((current) => ({
+      ...current,
+      [section]: !current[section],
+    }));
+  };
+
+  const moveSection = (section: string, direction: "up" | "down") => {
+    setSectionOrder((current) => {
+      const index = current.indexOf(section);
+      if (index < 0) return current;
+      const target = direction === "up" ? index - 1 : index + 1;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+
+  return {
+    showLayoutOptions,
+    setShowLayoutOptions,
+    sectionOrder,
+    sectionVisibility,
+    visibleSectionOrder,
+    toggleSection,
+    moveSection,
+  };
+}
+
 function App() {
   const actionsPersistReadyRef = useRef(false);
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
-    const storedTheme = window.localStorage.getItem(themeStorageKey);
-    if (storedTheme === "light" || storedTheme === "dark") {
-      return storedTheme;
-    }
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  });
+  const [themeMode, setThemeMode] = useState<ThemeMode>("light");
   const [previewOrientation, setPreviewOrientation] = useState<PreviewOrientation>(() => readStoredPreviewOrientation());
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(desktopSidebarCollapsedStorageKey) === "true";
+    } catch {
+      return false;
+    }
+  });
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const storedWorkspaceState = readStoredWorkspaceState();
+  const workspaceBootstrapRef = useRef<ReturnType<typeof getWorkspaceBootstrap> | null>(null);
+  if (!workspaceBootstrapRef.current) {
+    workspaceBootstrapRef.current = getWorkspaceBootstrap();
+  }
+  const storedWorkspaceState = workspaceBootstrapRef.current;
   const [screen, setScreen] = useState<Screen>("dashboard");
+  const [dashboardPreferences, setDashboardPreferences] = useState<DashboardPreferences>(() =>
+    readStoredDashboardPreferences(),
+  );
+  const [dashboardSectionOrder, setDashboardSectionOrder] = useState<DashboardSectionKey[]>(() =>
+    readStoredDashboardSectionOrder(),
+  );
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [accountNameInput, setAccountNameInput] = useState("");
+  const [accountNicknameInput, setAccountNicknameInput] = useState("");
   const [accountPhotoUrl, setAccountPhotoUrl] = useState("");
+  const [userProfilePhotos, setUserProfilePhotos] = useState<Record<string, string>>(() => readStoredUserProfilePhotos());
+  const [userNicknames, setUserNicknames] = useState<Record<string, string>>(() => readStoredUserNicknames());
   const [audits, setAudits] = useState<Audit[]>(storedWorkspaceState?.audits || initialAudits);
   const [history, setHistory] = useState<HistoryEntry[]>(storedWorkspaceState?.history || initialHistory);
   const [actions, setActions] = useState<ActionItem[]>(storedWorkspaceState?.actions || initialActions);
+  const [nonConformances, setNonConformances] = useState<NonConformanceRecord[]>(storedWorkspaceState?.nonConformances || initialNonConformances);
   const [schedules, setSchedules] = useState<ScheduleItem[]>(storedWorkspaceState?.schedules || initialSchedules);
   const [templates, setTemplates] = useState<AuditTemplate[]>(storedWorkspaceState?.templates || initialTemplates);
   const [drafts, setDrafts] = useState<Record<string, AuditDraft>>(storedWorkspaceState?.drafts || {});
@@ -1525,6 +2496,10 @@ function App() {
   const [responses, setResponses] = useState<Record<string, Answer>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [evidence, setEvidence] = useState<Record<string, EvidenceItem[]>>({});
+  const [evidenceDebugLabel, setEvidenceDebugLabel] = useState("");
+  const [auditModeQuestionIndex, setAuditModeQuestionIndex] = useState(0);
+  const [issuePrompt, setIssuePrompt] = useState<IssuePromptState | null>(null);
+  const [auditCompletionSummary, setAuditCompletionSummary] = useState<AuditCompletionSummaryState | null>(null);
   const [signatureDataUrl, setSignatureDataUrl] = useState("");
   const [signatureSignedAt, setSignatureSignedAt] = useState("");
   const [offlineMode, setOfflineMode] = useState(!window.navigator.onLine);
@@ -1597,8 +2572,13 @@ function App() {
     reportTemplateDefaults["Executive summary"],
   );
   const [reportInbox, setReportInbox] = useState<ReportItem[]>(storedWorkspaceState?.reportInbox || []);
+  const [auditAccessOverrides, setAuditAccessOverrides] = useState<AuditAccessOverrideMap>(
+    storedWorkspaceState?.auditAccessOverrides || {},
+  );
+  const [managerAlerts, setManagerAlerts] = useState<ManagerAlert[]>(storedWorkspaceState?.managerAlerts || []);
   const [actionFilter, setActionFilter] = useState<"Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity">("Open");
   const [actionSeverityFilter, setActionSeverityFilter] = useState<RiskLevel | "All">("All");
+  const [actionNcFilter, setActionNcFilter] = useState<string>("All");
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const activeAudit = useMemo(
@@ -1610,6 +2590,11 @@ function App() {
     () => folders.find((folder) => folder.id === selectedFolderId) ?? null,
     [folders, selectedFolderId],
   );
+
+  const getStoredProfilePhoto = (user: User | null) => {
+    if (!user) return "";
+    return userProfilePhotos[user.username] || userProfilePhotos[user.name.toLowerCase()] || "";
+  };
 
   const workspaceName = selectedFolder?.name || companyName;
 
@@ -1682,6 +2667,30 @@ function App() {
     if (actions.length === 0) return 0;
     return Math.round((actions.filter((item) => item.status === "Closed").length / actions.length) * 100);
   }, [actions]);
+  const pendingSyncCount = useMemo(
+    () => syncQueue.filter((item) => item.status === "Pending Sync" || item.status === "Syncing").length,
+    [syncQueue],
+  );
+  const failedSyncCount = useMemo(
+    () => syncQueue.filter((item) => item.status === "Failed" || item.status === "Conflict").length,
+    [syncQueue],
+  );
+  const unsyncedSubmittedAuditIds = useMemo(
+    () =>
+      new Set(
+        syncQueue
+          .filter(
+            (item) =>
+              item.itemType === "auditSubmission" &&
+              (item.status === "Pending Sync" ||
+                item.status === "Syncing" ||
+                item.status === "Failed" ||
+                item.status === "Conflict"),
+          )
+          .map((item) => item.localId),
+      ),
+    [syncQueue],
+  );
   const averageActionClosureDays = useMemo(() => {
     const closed = actions.filter((item) => item.closedAt && item.createdAt);
     if (closed.length === 0) return 0;
@@ -1723,17 +2732,23 @@ function App() {
     };
   }, [audits]);
   const visibleActions = useMemo(() => {
-    if (!currentUser) return actions;
+    const withEscalation = (items: ActionItem[]) =>
+      items.map((action) => ({
+        ...action,
+        escalated: isEscalated(action),
+        isStuck: isStuck(action),
+      }));
+    if (!currentUser) return withEscalation(actions);
     const permissions = getRolePermissions(currentUser.role);
-    if (permissions.canAssignActions) return actions;
-    return actions.filter((action) => action.assignedToName === currentUser.name || action.assignedToUserId === currentUser.username);
+    if (permissions.canAssignActions) return withEscalation(actions);
+    return withEscalation(actions.filter((action) => action.assignedToName === currentUser.name || action.assignedToUserId === currentUser.username));
   }, [actions, currentUser]);
   const filteredActions = useMemo(() => {
     let next = [...visibleActions];
     if (actionFilter === "Open") {
       next = next.filter((item) => item.status === "Open" || item.status === "In Progress");
     } else if (actionFilter === "Overdue") {
-      next = next.filter((item) => item.dueHours < 0 && item.status !== "Closed");
+      next = next.filter((item) => isOverdue(item));
     } else if (actionFilter === "Awaiting Verification") {
       next = next.filter((item) => item.status === "Awaiting Verification");
     } else if (actionFilter === "Closed") {
@@ -1742,8 +2757,18 @@ function App() {
     if (actionSeverityFilter !== "All") {
       next = next.filter((item) => item.severity === actionSeverityFilter);
     }
+    if (actionNcFilter !== "All") {
+      next = next.filter((item) => item.nonConformanceId === actionNcFilter);
+    }
     return next;
-  }, [visibleActions, actionFilter, actionSeverityFilter]);
+  }, [visibleActions, actionFilter, actionSeverityFilter, actionNcFilter]);
+  const availableNonConformanceIds = useMemo(
+    () =>
+      Array.from(new Set(visibleActions.map((item) => item.nonConformanceId).filter((value): value is string => Boolean(value)))).sort(
+        (left, right) => left.localeCompare(right, undefined, { numeric: true }),
+      ),
+    [visibleActions],
+  );
 
   const assignedAudits = useMemo(() => {
     if (!currentUser) {
@@ -1754,6 +2779,13 @@ function App() {
     }
     return audits.filter((audit) => audit.owner === currentUser.name && !isAuditCompleted(audit));
   }, [audits, currentUser]);
+  const demoModeActive = useMemo(
+    () =>
+      audits.some((audit) => audit.id.startsWith("audit-demo-")) ||
+      actions.some((action) => action.id.startsWith("action-demo-")) ||
+      syncQueue.some((item) => item.id.startsWith("sync-demo-")),
+    [audits, actions, syncQueue],
+  );
 
   const roleLabel = useMemo(() => {
     if (!currentUser) {
@@ -1770,32 +2802,60 @@ function App() {
     }
     return "Complete assigned audits and capture site outcomes";
   }, [currentUser]);
+  const currentUserAppName = useMemo(() => {
+    if (!currentUser) {
+      return "";
+    }
+    return userNicknames[currentUser.username]?.trim() || currentUser.name;
+  }, [currentUser, userNicknames]);
 
-  const visibleNavItems = useMemo(
-    () =>
-      navItems.filter((item) => {
-        if (!currentUser) {
-          return false;
-        }
-        if (item.id === "admin") {
-          return canAccessAdmin(currentUser.role);
-        }
-        if (item.id === "schedules") {
-          return canAccessAdmin(currentUser.role);
-        }
-        if (item.id === "reports") {
-          return canAccessReports(currentUser.role);
-        }
-        if (item.id === "actions") {
-          return canAccessActions(currentUser.role);
-        }
-        if (item.id === "sync") {
-          return true;
-        }
+  const visibleNavItems = useMemo(() => {
+    if (!currentUser) {
+      return [];
+    }
+    const filtered = navItems.filter((item) => {
+      if (item.id === "admin") {
+        return canAccessAdmin(currentUser.role);
+      }
+      if (item.id === "onboarding") {
+        return canAccessOnboarding(currentUser.role);
+      }
+      if (item.id === "schedules") {
+        return canAccessSchedules(currentUser.role);
+      }
+      if (item.id === "reports") {
+        return canAccessReports(currentUser.role);
+      }
+      if (item.id === "actions") {
+        return canAccessActions(currentUser.role);
+      }
+      if (item.id === "nonConformance") {
+        return canAccessActions(currentUser.role);
+      }
+      if (item.id === "audits") {
+        return canAccessAuditsCentre(currentUser.role);
+      }
+      if (item.id === "sync") {
         return true;
-      }),
-    [currentUser],
-  );
+      }
+      return true;
+    });
+
+    // Safety net: always surface onboarding when role has onboarding access.
+    if (canAccessOnboarding(currentUser.role) && !filtered.some((item) => item.id === "onboarding")) {
+      const onboardingItem = navItems.find((item) => item.id === "onboarding");
+      if (onboardingItem) {
+        const accountIndex = filtered.findIndex((item) => item.id === "account");
+        if (accountIndex >= 0) {
+          filtered.splice(accountIndex, 0, onboardingItem);
+        } else {
+          filtered.push(onboardingItem);
+        }
+      }
+    }
+
+    return filtered;
+  }, [currentUser]);
 
   const creatableRoles = useMemo(
     () => (currentUser ? getCreatableRoles(currentUser.role) : []),
@@ -1809,10 +2869,12 @@ function App() {
         username: user.username,
         email:
           user.username === "admin"
-            ? "olivia@qmsprecest.co.uk"
+            ? "andy@qmsprecast.co.uk"
             : user.username === "manager"
-              ? "james@qmsprecest.co.uk"
-              : "amira@qmsprecest.co.uk",
+              ? "james@qmsprecast.co.uk"
+              : user.username === "tom"
+                ? "tom@qmsprecast.co.uk"
+                : "sarah@qmsprecast.co.uk",
         name: user.name,
         role: user.role,
       }));
@@ -1840,6 +2902,19 @@ function App() {
     const invited = invitedUsers.filter((invite) => invite.role === "Auditor").map((invite) => invite.email);
     return [...seeded, ...invited].filter((item, index, list) => list.indexOf(item) === index);
   }, [invitedUsers]);
+  const currentManagerAlerts = useMemo(() => {
+    if (!currentUser || currentUser.role !== "Manager") {
+      return [];
+    }
+    const usernameEmail = `${currentUser.username}@qmsprecast.co.uk`.toLowerCase();
+    const normalizedName = currentUser.name.toLowerCase();
+    return managerAlerts.filter(
+      (alert) =>
+        (alert.managerNames.some((name) => name.toLowerCase() === normalizedName) ||
+          alert.managerEmails.some((email) => email.toLowerCase() === usernameEmail)) &&
+        !alert.readBy.includes(currentUser.username),
+    );
+  }, [currentUser, managerAlerts]);
 
   const visibleSchedules = useMemo(() => {
     if (!selectedFolderId) {
@@ -1852,6 +2927,32 @@ function App() {
     }
     return companySchedules.filter((schedule) => schedule.lifecycle === scheduleListFilter);
   }, [managedSchedules, scheduleListFilter, selectedFolderId]);
+
+  const auditScheduleMatrix = useMemo<Record<string, AuditScheduleMatrixInfo>>(() => {
+    const byAuditId: Record<string, AuditScheduleMatrixInfo> = {};
+    const sortedLive = managedSchedules
+      .filter((schedule) => schedule.lifecycle === "Live" && (!selectedFolderId || schedule.companyFolderId === selectedFolderId))
+      .slice()
+      .sort((a, b) => Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || ""));
+
+    for (const schedule of sortedLive) {
+      for (const audit of schedule.audits) {
+        if (byAuditId[audit.auditId]) {
+          continue;
+        }
+        byAuditId[audit.auditId] = {
+          scheduleName: schedule.scheduleName,
+          versionLabel: schedule.versionLabel,
+          frequency: audit.frequency,
+          days: audit.days,
+          liveTime: audit.liveTime,
+          completionHours: audit.completionHours,
+        };
+      }
+    }
+
+    return byAuditId;
+  }, [managedSchedules, selectedFolderId]);
 
   const auditAccessMatrix = useMemo<AuditAccessMatrixRow[]>(() => {
     const liveSchedules = managedSchedules.filter(
@@ -1895,6 +2996,12 @@ function App() {
               : "Direct audit assignment";
         }
 
+        const override = auditAccessOverrides[buildAuditAccessOverrideKey(user.email, auditOption.id)];
+        if (override) {
+          access = override;
+          detail = `Manual override: ${override}`;
+        }
+
         return {
           auditId: auditOption.id,
           auditName: auditOption.name,
@@ -1912,7 +3019,101 @@ function App() {
         cells,
       };
     });
-  }, [companyReportUsers, availableScheduleAudits, managedSchedules, selectedFolderId, audits]);
+  }, [companyReportUsers, availableScheduleAudits, managedSchedules, selectedFolderId, audits, auditAccessOverrides]);
+
+  const handleToggleAuditAccess = (email: string, auditId: string, currentAccess: AuditAccessLevel) => {
+    const cycleOrder: AuditAccessLevel[] = ["No access", "Complete", "Oversight", "Full access"];
+    const currentIndex = cycleOrder.indexOf(currentAccess);
+    const nextAccess = cycleOrder[(currentIndex + 1) % cycleOrder.length];
+    setAuditAccessOverrides((current) => ({
+      ...current,
+      [buildAuditAccessOverrideKey(email, auditId)]: nextAccess,
+    }));
+  };
+
+  const getSelectedManagersForAudit = (auditId: string) => {
+    return auditAccessMatrix
+      .filter((row) => row.role === "Manager")
+      .filter((row) => row.cells.some((cell) => cell.auditId === auditId && cell.access !== "No access"))
+      .map((row) => ({ name: row.name, email: row.email }));
+  };
+
+  const notifySelectedManagersForNonCompliance = (
+    audit: Audit,
+    submittedBy: string,
+    nonComplianceCount: number,
+    queuedForSync: boolean,
+  ) => {
+    if (nonComplianceCount <= 0) {
+      return;
+    }
+
+    const selectedManagers = getSelectedManagersForAudit(audit.id);
+    if (selectedManagers.length === 0) {
+      return;
+    }
+
+    const managerEmails = selectedManagers.map((item) => item.email).filter(Boolean);
+    const managerNames = selectedManagers.map((item) => item.name).filter(Boolean);
+    const managerLabel = managerNames.length > 0 ? managerNames.join(", ") : managerEmails.join(", ");
+
+    setManagerAlerts((current) => [
+      {
+        id: `manager-alert-${audit.id}-${Date.now()}`,
+        auditId: audit.id,
+        auditName: audit.name,
+        submittedBy,
+        nonComplianceCount,
+        queuedForSync,
+        createdAt: formatStamp(),
+        managerEmails,
+        managerNames,
+        readBy: [],
+      },
+      ...current,
+    ]);
+
+    pushToast(
+      "Manager informed",
+      queuedForSync
+        ? `Non-compliance found. ${managerLabel} will be alerted when sync completes.`
+        : `Non-compliance found. ${managerLabel} have been alerted.`,
+      "warning",
+    );
+    triggerNotification(
+      "Manager informed",
+      `${audit.name} has ${nonComplianceCount} non-compliance item${nonComplianceCount === 1 ? "" : "s"}.`,
+    );
+
+    if (managerEmails.length > 0) {
+      void fetch("/api/manager/non-compliance-alert", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          emails: managerEmails,
+          auditName: audit.name,
+          submittedBy,
+          nonComplianceCount,
+          queuedForSync,
+        }),
+      }).catch(() => undefined);
+    }
+  };
+
+  const markManagerAlertRead = (alertId: string) => {
+    if (!currentUser || currentUser.role !== "Manager") {
+      return;
+    }
+    setManagerAlerts((current) =>
+      current.map((alert) =>
+        alert.id === alertId && !alert.readBy.includes(currentUser.username)
+          ? { ...alert, readBy: [...alert.readBy, currentUser.username] }
+          : alert,
+      ),
+    );
+  };
 
   const canSubmitAudit = useMemo(() => {
     if (!activeAudit) {
@@ -1951,6 +3152,7 @@ function App() {
       if (matchedUser) {
         setCurrentUser(matchedUser);
         setAccountNameInput(matchedUser.name);
+        setAccountPhotoUrl(getStoredProfilePhoto(matchedUser));
       } else {
         window.localStorage.removeItem(userStorageKey);
       }
@@ -1975,6 +3177,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(offlineQueueStorageKey, JSON.stringify(offlineQueue));
   }, [offlineQueue]);
+
+  useEffect(() => {
+    window.localStorage.setItem(userProfilePhotosStorageKey, JSON.stringify(userProfilePhotos));
+  }, [userProfilePhotos]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -2006,6 +3212,7 @@ function App() {
         audits,
         history,
         actions,
+        nonConformances,
         schedules,
         templates,
         drafts,
@@ -2017,12 +3224,15 @@ function App() {
         companySheetSync,
         reportInbox,
         syncQueue,
+        auditAccessOverrides,
+        managerAlerts,
       }),
     );
   }, [
     audits,
     history,
     actions,
+    nonConformances,
     schedules,
     templates,
     drafts,
@@ -2034,6 +3244,8 @@ function App() {
     companySheetSync,
     reportInbox,
     syncQueue,
+    auditAccessOverrides,
+    managerAlerts,
   ]);
 
   useEffect(() => {
@@ -2060,6 +3272,30 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(previewOrientationStorageKey, previewOrientation);
   }, [previewOrientation]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(desktopSidebarCollapsedStorageKey, String(desktopSidebarCollapsed));
+    } catch {
+      // Ignore storage write failures.
+    }
+  }, [desktopSidebarCollapsed]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(dashboardPreferencesStorageKey, JSON.stringify(dashboardPreferences));
+    } catch {
+      // Ignore storage write failures.
+    }
+  }, [dashboardPreferences]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(dashboardSectionOrderStorageKey, JSON.stringify(dashboardSectionOrder));
+    } catch {
+      // Ignore storage write failures.
+    }
+  }, [dashboardSectionOrder]);
 
   useEffect(() => {
     if (offlineMode || offlineQueue.length === 0) {
@@ -2577,6 +3813,7 @@ function App() {
     }
     setCurrentUser(match);
     setAccountNameInput(match.name);
+    setAccountPhotoUrl(getStoredProfilePhoto(match));
     window.localStorage.setItem(userStorageKey, JSON.stringify(match));
     setScreen("dashboard");
     setUsername("");
@@ -2584,7 +3821,7 @@ function App() {
     pushToast("Welcome back", `Signed in as ${getRoleDisplayName(match.role)}.`, "success");
   };
 
-  const handleInviteUser = () => {
+  const handleInviteUser = async () => {
     if (!currentUser) {
       return;
     }
@@ -2600,14 +3837,52 @@ function App() {
       return;
     }
 
+    const isGodModeFirstUserInvite =
+      currentUser.role === "Master" &&
+      (companySheetSync?.usersCount ?? 0) === 0 &&
+      invitedUsers.length === 0;
+    const inviteRole = isGodModeFirstUserInvite ? "Admin" : inviteRoleInput;
+
     const trimmedEmail = inviteEmailInput.trim().toLowerCase();
     if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
       pushToast("Email required", "Enter a valid email address to send the onboarding link.", "warning");
       return;
     }
 
-    if (invitedUsers.some((invite) => invite.email === trimmedEmail && invite.role === inviteRoleInput)) {
+    if (invitedUsers.some((invite) => invite.email === trimmedEmail && invite.role === inviteRole)) {
       pushToast("Invite already sent", "That user and role already has an active onboarding invite.", "warning");
+      return;
+    }
+
+    if (!onboardingSource?.formId) {
+      pushToast("Onboarding form unavailable", "Configure or reconnect Google so the onboarding form can be sent.", "warning");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/onboarding/invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: trimmedEmail,
+          role: inviteRole,
+          invitedBy: currentUser.name,
+          onboardingFormId: onboardingSource.formId,
+        }),
+      });
+      const payload = (await response.json()) as { ok?: boolean; error?: string };
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "Unable to send onboarding invite email.");
+      }
+    } catch (error) {
+      pushToast(
+        "Invite send failed",
+        error instanceof Error ? error.message : "Unable to send onboarding invite email.",
+        "warning",
+      );
       return;
     }
 
@@ -2615,19 +3890,16 @@ function App() {
       {
         id: `invite-${Date.now()}`,
         email: trimmedEmail,
-        role: inviteRoleInput,
+        role: inviteRole,
         invitedBy: currentUser.name,
         sentAt: formatStamp(),
         status: "Invite sent",
-        mailtoUrl: `mailto:${encodeURIComponent(trimmedEmail)}?subject=${encodeURIComponent(`QMS Precast ${inviteRoleInput} onboarding`)}&body=${encodeURIComponent(
-          `You have been invited to QMS Precast as a ${inviteRoleInput}. Complete your onboarding using the approved company onboarding process.`,
-        )}`,
       },
       ...current,
     ]);
     setInviteEmailInput("");
-    pushToast("Onboarding link sent", `${inviteRoleInput} invite sent to ${trimmedEmail}.`, "success");
-    triggerNotification("User onboarding invite", `${trimmedEmail} has been invited as ${inviteRoleInput}.`);
+    pushToast("Onboarding link sent", `${inviteRole} invite sent to ${trimmedEmail}.`, "success");
+    triggerNotification("User onboarding invite", `${trimmedEmail} has been invited as ${inviteRole}.`);
   };
 
   const persistActions = async (companyFolderId: string, nextActions: ActionItem[]) => {
@@ -2664,7 +3936,26 @@ function App() {
     setResponses({});
     setNotes({});
     setEvidence({});
+    setAuditModeQuestionIndex(0);
+    setIssuePrompt(null);
+    setAuditCompletionSummary(null);
     pushToast("Signed out", "Your session has been closed.", "neutral");
+  };
+
+  const handleAccountPhotoChange = (file: File) => {
+    if (!currentUser) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const nextPhoto = typeof reader.result === "string" ? reader.result : "";
+      if (!nextPhoto) return;
+      setAccountPhotoUrl(nextPhoto);
+      setUserProfilePhotos((current) => ({
+        ...current,
+        [currentUser.username]: nextPhoto,
+        [currentUser.name.toLowerCase()]: nextPhoto,
+      }));
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSaveAccountSettings = () => {
@@ -2695,9 +3986,12 @@ function App() {
     setResponses(draft?.responses ?? {});
     setNotes(draft?.notes ?? {});
     setEvidence(draft?.evidence ?? {});
+    setAuditModeQuestionIndex(0);
+    setIssuePrompt(null);
+    setAuditCompletionSummary(null);
     setScreen("complete");
     if (draft) {
-      pushToast("Draft loaded", "Saved progress has been restored.", "neutral");
+      pushToast("Audit in progress loaded", "Saved progress has been restored.", "neutral");
     }
   };
 
@@ -2725,6 +4019,7 @@ function App() {
     submittedBy: User,
     completedAt: string,
   ) => {
+    let nonConformanceSequence = getNextNonConformanceSequence(actions);
     const actionItems = audit.questions
       .map((question) => ({
         question,
@@ -2744,6 +4039,8 @@ function App() {
         questionId: item.question.id,
         questionText: item.question.text,
         sourceAnswer: item.answer,
+        nonConformanceId:
+          item.answer === "fail" || item.answer === "nc" ? formatNonConformanceId(nonConformanceSequence++) : undefined,
         severity:
           item.question.riskLevel ||
           (item.answer === "fail" ? "Critical" : item.answer === "nc" ? "High" : "Medium"),
@@ -2783,11 +4080,21 @@ function App() {
         evidenceCount: evidenceMap[item.question.id]?.length ?? 0,
         noteIncluded: Boolean(noteMap[item.question.id]?.trim()),
         riskCategory: item.question.riskCategory || "Other",
+        evidenceRequired: item.question.requiresPhotoEvidence,
         requiresManagerReview: item.question.requiresManagerReview,
       } satisfies ActionItem));
 
     if (actionItems.length > 0) {
-      setActions((current) => [...actionItems, ...current]);
+      const existingKeys = new Set(
+        actions
+          .filter((item) => item.auditId === audit.id && item.status !== "Closed")
+          .map((item) => `${item.auditId}::${item.questionId}`),
+      );
+      const uniqueActionItems = actionItems.filter((item) => !existingKeys.has(`${item.auditId}::${item.questionId}`));
+      if (uniqueActionItems.length === 0) {
+        return [];
+      }
+      setActions((current) => [...uniqueActionItems, ...current]);
       queueSyncItem({
         itemType: "actionUpdate",
         localId: `actions-${audit.id}-${Date.now()}`,
@@ -2795,11 +4102,141 @@ function App() {
         createdAt: completedAt,
         retryCount: 0,
         lastError: "",
-        payload: { companyFolderId: selectedFolderId, actions: actionItems },
+        payload: { companyFolderId: selectedFolderId, actions: uniqueActionItems },
+      });
+      return uniqueActionItems;
+    }
+
+    return [];
+  };
+
+  const createCorrectiveActionFromIssue = ({
+    audit,
+    question,
+    answer,
+    findingNote,
+  }: {
+    audit: Audit;
+    question: AuditQuestion;
+    answer: Exclude<Answer, "pass">;
+    findingNote: string;
+  }) => {
+    if (!currentUser) return 0;
+    const severity =
+      question.riskLevel ||
+      (answer === "fail" ? "Critical" : answer === "nc" ? "High" : "Medium");
+    const existingAction = actions.find((item) => item.auditId === audit.id && item.questionId === question.id && item.status !== "Closed");
+    if (existingAction) return 0;
+    const stamp = formatStamp();
+    const actionItem: ActionItem = {
+      id: `${audit.id}-issue-${question.id}-${Date.now()}`,
+      companyId: selectedFolderId || selectedFolder?.id || "local-company",
+      auditId: audit.id,
+      auditName: audit.name,
+      questionId: question.id,
+      questionText: `Resolve failed check: ${question.text}`,
+      sourceAnswer: answer,
+      nonConformanceId: answer === "fail" || answer === "nc" ? formatNonConformanceId(getNextNonConformanceSequence(actions)) : undefined,
+      severity,
+      owner: audit.owner,
+      assignedToUserId: audit.owner.toLowerCase().replace(/\s+/g, "-"),
+      assignedToName: audit.owner,
+      createdByUserId: currentUser.username,
+      createdAt: stamp,
+      dueDate: addDaysIso(ACTION_DUE_DAYS_BY_SEVERITY[severity]),
+      closedAt: "",
+      verifiedByUserId: "",
+      verificationNotes: "",
+      evidenceLinks: [],
+      localEvidenceRefs: (evidence[question.id] || []).map((item) => item.id),
+      comments: findingNote,
+      recurrenceFlag: false,
+      rootCause: "",
+      correctiveAction: "",
+      preventiveAction: "",
+      dueLabel: getDueLabel(ACTION_DUE_DAYS_BY_SEVERITY[severity] * 24),
+      dueHours: ACTION_DUE_DAYS_BY_SEVERITY[severity] * 24,
+      status: "Open",
+      evidenceCount: evidence[question.id]?.length ?? 0,
+      noteIncluded: Boolean(findingNote.trim()),
+      riskCategory: question.riskCategory || "Other",
+      evidenceRequired: question.requiresPhotoEvidence,
+      requiresManagerReview: question.requiresManagerReview,
+    };
+    setActions((current) => [actionItem, ...current]);
+    queueSyncItem({
+      itemType: "actionUpdate",
+      localId: actionItem.id,
+      status: "Pending Sync",
+      createdAt: stamp,
+      retryCount: 0,
+      lastError: "",
+      payload: { companyFolderId: selectedFolderId, actions: [actionItem] },
+    });
+    return 1;
+  };
+
+  const createNonConformanceFromIssue = ({
+    audit,
+    question,
+    answer,
+    note,
+  }: {
+    audit: Audit;
+    question: AuditQuestion;
+    answer: Exclude<Answer, "pass">;
+    note: string;
+  }) => {
+    if (!currentUser) return null;
+    const selectedManagers = getSelectedManagersForAudit(audit.id);
+    const assignedManager = selectedManagers[0] || { name: audit.owner || "Unassigned manager", email: "" };
+    const managerUser = users.find((user) => user.name === assignedManager.name && user.role === "Manager");
+    const raisedAt = formatStamp();
+    const nextReference = formatNcrReference(getNextNcrSequence(nonConformances));
+    const createdRecord: NonConformanceRecord = {
+      id: `ncr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      reference: nextReference,
+      auditId: audit.id,
+      auditName: audit.name,
+      auditQuestionId: question.id,
+      auditQuestion: question.text,
+      selectedAnswer: answer,
+      auditorName: currentUser.name,
+      auditorUserId: currentUser.username,
+      site: audit.siteArea,
+      raisedAt,
+      status: "Raised",
+      assignedLineManager: assignedManager.name,
+      assignedLineManagerUserId: managerUser?.username || assignedManager.name.toLowerCase().replace(/\s+/g, "-"),
+      assignedLineManagerEmail: assignedManager.email || "",
+      investigationIsoClause: "",
+      investigationNotes: note,
+      rootCause: "",
+      correctiveAction: "",
+      investigationExtraNotes: "",
+      evidence: [],
+    };
+    setNonConformances((current) => [createdRecord, ...current]);
+
+    if (createdRecord?.assignedLineManagerEmail) {
+      const investigationLink = `${window.location.origin}?ncr=${encodeURIComponent(createdRecord.reference)}`;
+      void fetch("/api/ncr/escalation-alert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: createdRecord.assignedLineManagerEmail,
+          ncrReference: createdRecord.reference,
+          auditorName: createdRecord.auditorName,
+          site: createdRecord.site,
+          raisedAt: createdRecord.raisedAt,
+          auditQuestion: createdRecord.auditQuestion,
+          selectedAnswer: createdRecord.selectedAnswer,
+          investigationLink,
+        }),
       });
     }
 
-    return actionItems;
+    return createdRecord;
   };
 
   const applyAuditSubmission = ({
@@ -2885,6 +4322,10 @@ function App() {
       return;
     }
 
+    const nonComplianceCount = activeAudit.questions.filter(
+      (question) => responses[question.id] === "fail" || responses[question.id] === "nc",
+    ).length;
+
     if (offlineMode) {
       setOfflineQueue((current) => [
         {
@@ -2922,6 +4363,7 @@ function App() {
       setScreen("dashboard");
       pushToast("Queued offline", `${activeAudit.name} has been saved and will sync when the tablet reconnects.`, "warning");
       triggerNotification("QMS Precast", `${activeAudit.name} has been queued offline for sync.`);
+      notifySelectedManagersForNonCompliance(activeAudit, currentUser.name, nonComplianceCount, true);
       return;
     }
 
@@ -2963,6 +4405,146 @@ function App() {
       outcomeStatus === "green" ? "success" : "warning",
     );
     triggerNotification("Audit submitted", `${activeAudit.name} has been submitted by ${currentUser.name}.`);
+    notifySelectedManagersForNonCompliance(activeAudit, currentUser.name, nonComplianceCount, false);
+  };
+
+  const completeAuditModeFlow = () => {
+    if (!activeAudit || !currentUser) return;
+    const stamp = formatStamp();
+    const issuesFound = activeAudit.questions.filter((question) => responses[question.id] === "fail" || responses[question.id] === "nc").length;
+    const photosCaptured = Object.values(evidence).reduce((count, items) => count + items.length, 0);
+    let actionsCreated = 0;
+
+    if (offlineMode) {
+      setOfflineQueue((current) => [
+        {
+          id: `offline-${activeAudit.id}-${Date.now()}`,
+          audit: activeAudit,
+          responses,
+          notes,
+          evidence,
+          signatureDataUrl: "audit-mode-signature-not-required",
+          queuedAt: stamp,
+          submittedBy: currentUser.name,
+        },
+        ...current,
+      ]);
+      queueSyncItem({
+        itemType: "auditSubmission",
+        localId: activeAudit.id,
+        status: "Pending Sync",
+        createdAt: stamp,
+        retryCount: 0,
+        lastError: "",
+        payload: { auditId: activeAudit.id, auditName: activeAudit.name, companyFolderId: selectedFolderId },
+      });
+      setDrafts((current) => {
+        const nextDrafts = { ...current };
+        delete nextDrafts[activeAudit.id];
+        return nextDrafts;
+      });
+      setAuditCompletionSummary({
+        auditId: activeAudit.id,
+        auditName: activeAudit.name,
+        questionsAnswered: Object.keys(responses).length,
+        issuesFound,
+        actionsCreated,
+        photosCaptured,
+        syncTone: "amber",
+        syncLabel: "Audit complete / not synced",
+      });
+      notifySelectedManagersForNonCompliance(activeAudit, currentUser.name, issuesFound, true);
+      setActiveAuditId(null);
+      return;
+    }
+
+    const applied = applyAuditSubmission({
+      audit: activeAudit,
+      responseMap: responses,
+      noteMap: notes,
+      evidenceMap: evidence,
+      submittedBy: currentUser.name,
+      submittedByUser: currentUser,
+      completedAt: stamp,
+    });
+    actionsCreated = applied.createdActions.length;
+    queueSyncItem({
+      itemType: "auditSubmission",
+      localId: activeAudit.id,
+      status: "Pending Sync",
+      createdAt: stamp,
+      retryCount: 0,
+      lastError: "",
+      payload: { auditId: activeAudit.id, auditName: activeAudit.name, companyFolderId: selectedFolderId },
+    });
+    setDrafts((current) => {
+      const nextDrafts = { ...current };
+      delete nextDrafts[activeAudit.id];
+      return nextDrafts;
+    });
+    setAuditCompletionSummary({
+      auditId: activeAudit.id,
+      auditName: activeAudit.name,
+      questionsAnswered: Object.keys(responses).length,
+      issuesFound,
+      actionsCreated,
+      photosCaptured,
+      syncTone: "green",
+      syncLabel: "Synced",
+    });
+    notifySelectedManagersForNonCompliance(activeAudit, currentUser.name, issuesFound, false);
+    setActiveAuditId(null);
+  };
+
+  const handleAuditModeAnswer = (question: AuditQuestion, answer: Answer) => {
+    if (!activeAudit) return;
+    setResponses((current) => ({
+      ...current,
+      [question.id]: answer,
+    }));
+    if (answer === "pass") {
+      setAuditModeQuestionIndex((current) => Math.min(current + 1, activeAudit.questions.length - 1));
+      return;
+    }
+    setIssuePrompt({
+      question,
+      answer,
+      actionPrompts: question.answerPrompts?.[answer] || [],
+      solved: null,
+    });
+  };
+
+  const handleAuditModeSaveIssue = ({ noteValue, escalate }: { noteValue: string; escalate?: boolean }) => {
+    if (!activeAudit || !issuePrompt) return;
+    if (!noteValue.trim() && !issuePrompt.actionPrompts.length) {
+      pushToast("Note required", "Describe what was found before continuing.", "warning");
+      return;
+    }
+    setNotes((current) => ({
+      ...current,
+      [issuePrompt.question.id]: noteValue,
+    }));
+    if (escalate) {
+      const record = createNonConformanceFromIssue({
+        audit: activeAudit,
+        question: issuePrompt.question,
+        answer: issuePrompt.answer,
+        note: noteValue,
+      });
+      if (record) {
+        pushToast("NCR raised", `${record.reference} has been assigned to ${record.assignedLineManager}.`, "warning");
+      }
+    }
+    setIssuePrompt(null);
+    setAuditModeQuestionIndex((current) => Math.min(current + 1, activeAudit.questions.length - 1));
+  };
+
+  const handleAuditModeSaveAndExit = () => {
+    saveDraft();
+    setActiveAuditId(null);
+    setIssuePrompt(null);
+    setAuditModeQuestionIndex(0);
+    setScreen("dashboard");
   };
 
   const updateActionStatus = (actionId: string, nextStatus?: ActionStatus) => {
@@ -3011,6 +4593,35 @@ function App() {
           : action,
       ),
     );
+  };
+
+  const attachEvidenceToAction = (actionId: string, files: FileList) => {
+    const fileCount = files.length;
+    if (fileCount === 0) return;
+    const stamp = formatStamp();
+    const newRefs = Array.from(files).map((file) => `action-evidence-${actionId}-${Date.now()}-${file.name}`);
+    setActions((current) =>
+      current.map((action) =>
+        action.id === actionId
+          ? {
+              ...action,
+              evidenceCount: (action.evidenceCount || 0) + fileCount,
+              localEvidenceRefs: [...(action.localEvidenceRefs || []), ...newRefs],
+              status: action.status === "Open" ? ("In Progress" as ActionStatus) : action.status,
+            }
+          : action,
+      ),
+    );
+    queueSyncItem({
+      itemType: "evidenceUpload",
+      localId: `action-evidence-${actionId}-${Date.now()}`,
+      status: "Pending Sync",
+      createdAt: stamp,
+      retryCount: 0,
+      lastError: "",
+      payload: { actionId, fileCount },
+    });
+    pushToast("Evidence attached", `${fileCount} file${fileCount === 1 ? "" : "s"} added.`, "success");
   };
 
   const handleGoogleConnect = () => {
@@ -3356,6 +4967,109 @@ function App() {
     );
   };
 
+  const handleLoadDemoData = () => {
+    const demo = buildDemoPrecastWorkspace();
+    setAudits(demo.audits);
+    setActions(demo.actions);
+    setDrafts(demo.drafts);
+    setSyncQueue(demo.syncQueue);
+    setTemplates(demo.templates);
+    setCompanySheetSync(demo.companySheetSync);
+    setSyncState("Synced");
+    setScreen("dashboard");
+    pushToast("Demo data loaded", "Realistic precast demo data is now active for review.", "success");
+  };
+
+  const handleClearDemoData = () => {
+    setAudits((current) => current.filter((audit) => !audit.id.startsWith("audit-demo-")));
+    setActions((current) => current.filter((action) => !action.id.startsWith("action-demo-") && action.companyId !== "demo-company"));
+    setDrafts((current) => {
+      const nextDrafts: Record<string, AuditDraft> = {};
+      Object.entries(current).forEach(([auditId, draft]) => {
+        if (!auditId.startsWith("audit-demo-")) {
+          nextDrafts[auditId] = draft;
+        }
+      });
+      return nextDrafts;
+    });
+    setSyncQueue((current) => current.filter((item) => !item.id.startsWith("sync-demo-") && !item.localId.includes("demo")));
+    setTemplates((current) => current.filter((template) => !template.id.startsWith("template-demo-")));
+    setCompanySheetSync((current) => (current?.sheetId === "demo-master-sheet" ? null : current));
+    setScreen("dashboard");
+    pushToast("Demo data cleared", "Demo-only records were removed from this tablet.", "neutral");
+  };
+
+  const handleOneClickGoogleOnboarding = async () => {
+    if (!googleConnected) {
+      handleGoogleConnect();
+      return;
+    }
+
+    if (!folderIdInput || !masterSheetInput) {
+      pushToast(
+        "Missing links",
+        "Paste the company folder and master sheet links first, then run one-click onboarding.",
+        "warning",
+      );
+      return;
+    }
+
+    await handleAddFolder();
+    handleVerifyOnboarding();
+    handleVerifyAudits();
+    handleVerifyResponseSheet();
+    await handleSyncForms();
+  };
+
+  const handleApplyDashboardPreset = (preset: "minimal" | "operations" | "executive") => {
+    if (preset === "minimal") {
+      setDashboardPreferences({
+        trafficBoard: true,
+        liveSummary: true,
+        upcomingAudits: false,
+        openActions: true,
+        complianceSnapshot: false,
+      });
+      setDashboardSectionOrder(["trafficBoard", "liveSummary", "openActions", "upcomingAudits", "complianceSnapshot"]);
+      return;
+    }
+    if (preset === "operations") {
+      setDashboardPreferences({
+        trafficBoard: true,
+        liveSummary: true,
+        upcomingAudits: true,
+        openActions: true,
+        complianceSnapshot: true,
+      });
+      setDashboardSectionOrder(defaultDashboardSectionOrder());
+      return;
+    }
+    setDashboardPreferences({
+      trafficBoard: false,
+      liveSummary: true,
+      upcomingAudits: true,
+      openActions: true,
+      complianceSnapshot: true,
+    });
+    setDashboardSectionOrder(["liveSummary", "complianceSnapshot", "openActions", "upcomingAudits", "trafficBoard"]);
+  };
+
+  const handleToggleDashboardSection = (section: DashboardSectionKey) => {
+    setDashboardPreferences((current) => ({ ...current, [section]: !current[section] }));
+  };
+
+  const handleMoveDashboardSection = (section: DashboardSectionKey, direction: "up" | "down") => {
+    setDashboardSectionOrder((current) => {
+      const index = current.indexOf(section);
+      if (index < 0) return current;
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= current.length) return current;
+      const next = [...current];
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      return next;
+    });
+  };
+
   const handleAddTemplate = () => {
     const trimmedName = templateNameInput.trim();
 
@@ -3370,6 +5084,7 @@ function App() {
             id: `${trimmedName}-custom-${index + 1}`,
             text: question.text,
             fieldType: question.fieldType,
+            answerPrompts: question.answerPrompts,
           }))
         : buildDefaultQuestions(trimmedName);
 
@@ -3421,9 +5136,50 @@ function App() {
         id: `draft-question-${Date.now()}`,
         text: trimmedQuestion,
         fieldType: templateQuestionTypeInput,
+        answerPrompts: {},
       },
     ]);
     setTemplateQuestionInput("");
+  };
+
+  const handleAddAnswerPromptToDraftQuestion = (questionId: string, answer: Answer) => {
+    if (!currentUser || !canAccessAdmin(currentUser.role)) {
+      pushToast("Access restricted", "Only Admin and God Mode can configure answer prompts.", "warning");
+      return;
+    }
+    const promptText = window.prompt("Add action prompt for this answer");
+    if (!promptText?.trim()) {
+      return;
+    }
+    setTemplateDraftQuestions((current) =>
+      current.map((question) => {
+        if (question.id !== questionId) return question;
+        const existing = question.answerPrompts?.[answer] || [];
+        return {
+          ...question,
+          answerPrompts: {
+            ...(question.answerPrompts || {}),
+            [answer]: [...existing, promptText.trim()],
+          },
+        };
+      }),
+    );
+  };
+
+  const handleRemoveAnswerPromptFromDraftQuestion = (questionId: string, answer: Answer, promptIndex: number) => {
+    setTemplateDraftQuestions((current) =>
+      current.map((question) => {
+        if (question.id !== questionId) return question;
+        const existing = question.answerPrompts?.[answer] || [];
+        return {
+          ...question,
+          answerPrompts: {
+            ...(question.answerPrompts || {}),
+            [answer]: existing.filter((_, index) => index !== promptIndex),
+          },
+        };
+      }),
+    );
   };
 
   const handleRemoveTemplateQuestion = (questionId: string) => {
@@ -4065,13 +5821,22 @@ function App() {
     if (currentUser && !canAccessAdmin(currentUser.role) && screen === "admin") {
       setScreen("dashboard");
     }
-    if (currentUser && !canAccessAdmin(currentUser.role) && screen === "schedules") {
+    if (currentUser && !canAccessOnboarding(currentUser.role) && screen === "onboarding") {
+      setScreen("dashboard");
+    }
+    if (currentUser && !canAccessSchedules(currentUser.role) && screen === "schedules") {
       setScreen("dashboard");
     }
     if (currentUser && !canAccessReports(currentUser.role) && screen === "reports") {
       setScreen("dashboard");
     }
     if (currentUser && !canAccessActions(currentUser.role) && screen === "actions") {
+      setScreen("dashboard");
+    }
+    if (currentUser && !canAccessActions(currentUser.role) && screen === "nonConformance") {
+      setScreen("dashboard");
+    }
+    if (currentUser && !canAccessAuditsCentre(currentUser.role) && screen === "audits") {
       setScreen("dashboard");
     }
   }, [currentUser, screen]);
@@ -4091,6 +5856,7 @@ function App() {
         <div className="qms-tablet-stage">
           <div className="qms-tablet-device">
             <div
+              data-qms-theme={themeMode}
               className={[
                 "qms-login-shell qms-login-card flex flex-col justify-center rounded-[2.2rem] border p-6 backdrop-blur",
                 themeMode === "dark"
@@ -4104,13 +5870,13 @@ function App() {
               </div>
               <button
                 onClick={() => setThemeMode(themeMode === "dark" ? "light" : "dark")}
-                className={["rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] transition", themeMode === "dark" ? "bg-slate-900 text-slate-300" : "bg-slate-100 text-slate-600"].join(" ")}
+                className={["rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em]", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition hover:bg-slate-200"].join(" ")}
               >
                 {themeMode === "dark" ? "Light mode" : "Dark mode"}
               </button>
               <button
                 onClick={() => setPreviewOrientation(previewOrientation === "landscape" ? "portrait" : "landscape")}
-                className={["rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] transition", themeMode === "dark" ? "bg-slate-900 text-slate-300" : "bg-slate-100 text-slate-600"].join(" ")}
+                className={["rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em]", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition hover:bg-slate-200"].join(" ")}
               >
                 {previewOrientation === "landscape" ? "Portrait preview" : "Landscape preview"}
               </button>
@@ -4198,7 +5964,7 @@ function App() {
 
                 <button
                   onClick={handleLogin}
-                  className="mt-6 h-14 w-full rounded-2xl bg-slate-900 text-base font-semibold text-white shadow-[0_16px_30px_rgba(15,23,42,0.24)] transition active:scale-[0.99]"
+                  className={`mt-6 h-14 w-full rounded-2xl bg-slate-900 text-base font-semibold text-white shadow-[0_16px_30px_rgba(15,23,42,0.24)] active:scale-[0.99] ${slatePrimaryCtaInteract}`}
                 >
                   Sign in
                 </button>
@@ -4225,7 +5991,7 @@ function App() {
                             setUsername(user.username);
                             setPassword(user.password);
                           }}
-                          className={["rounded-xl px-3 py-2 text-xs font-semibold transition", themeMode === "dark" ? "bg-slate-900 text-slate-200 hover:bg-slate-800" : "bg-slate-100 text-slate-700 hover:bg-slate-200"].join(" ")}
+                          className={["rounded-xl px-3 py-2 text-xs font-semibold", themeMode === "dark" ? `bg-slate-900 text-slate-200 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-700 transition hover:bg-slate-200"].join(" ")}
                         >
                           Use
                         </button>
@@ -4250,13 +6016,14 @@ function App() {
         "h-[100dvh] overflow-hidden px-2 py-2 sm:px-3 sm:py-3",
         themeMode === "dark"
           ? "bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.15),_transparent_32%),linear-gradient(180deg,_#020617_0%,_#0f172a_45%,_#111827_100%)] text-slate-100"
-          : "bg-[radial-gradient(circle_at_top,_rgba(2,132,199,0.10),_transparent_32%),linear-gradient(180deg,_#edf4f7_0%,_#f9fbfc_45%,_#eef3f5_100%)] text-slate-900",
+          : "bg-[radial-gradient(circle_at_top,_rgba(2,132,199,0.12),_transparent_34%),linear-gradient(180deg,_#e4ebf1_0%,_#f1f5f8_45%,_#e3eaf0_100%)] text-slate-900",
         ].join(" ")}
     >
       <style>{appMotionStyles}</style>
       <div className="qms-tablet-stage">
         <div className="qms-tablet-device">
           <div
+            data-qms-theme={themeMode}
             className={[
               "qms-app-shell mx-auto flex h-full w-full flex-col overflow-hidden rounded-[2.25rem] border backdrop-blur",
               themeMode === "dark"
@@ -4264,68 +6031,159 @@ function App() {
                 : "border-white/80 bg-white/90 shadow-[0_28px_90px_rgba(15,23,42,0.16)]",
             ].join(" ")}
           >
-        <header className={["qms-app-header border-b px-4 pb-4 pt-3", themeMode === "dark" ? "border-slate-800 bg-slate-950/80" : "border-slate-200/80 bg-white/90"].join(" ")}>
-          <div className="mb-3 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.24em]">
-            <div className={["rounded-full px-3 py-1", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "bg-slate-100 text-slate-500"].join(" ")}>
+        <header className={["qms-app-header border-b px-3 pb-1 pt-1", themeMode === "dark" ? "border-slate-800 bg-slate-950/80" : "border-slate-200/80 bg-white/90"].join(" ")}>
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[9px] font-semibold uppercase tracking-[0.16em]">
+            <div className={["rounded-full px-2.5 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "bg-slate-100 text-slate-500"].join(" ")}>
               Tablet workspace
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setScreen("dashboard")}
+                className={["rounded-full px-1.5 py-0 text-[8px]", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition-colors duration-200 hover:bg-slate-200"].join(" ")}
+              >
+                Layout options
+              </button>
               <button
                 onClick={() => setPreviewOrientation(previewOrientation === "landscape" ? "portrait" : "landscape")}
-                className={["rounded-full px-3 py-1", themeMode === "dark" ? "bg-slate-900 text-slate-300" : "bg-slate-100 text-slate-600"].join(" ")}
+                className={["rounded-full px-2 py-0.5", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition-colors duration-200 hover:bg-slate-200"].join(" ")}
               >
                 {previewOrientation === "landscape" ? "Portrait preview" : "Landscape preview"}
               </button>
-              <div className={["rounded-full px-3 py-1", offlineMode ? "bg-amber-500/15 text-amber-600" : "bg-emerald-500/12 text-emerald-700"].join(" ")}>
+              <div className={["rounded-full px-2 py-0.5", offlineMode ? "bg-amber-500/15 text-amber-600" : "bg-emerald-500/12 text-emerald-700"].join(" ")}>
                 {offlineMode ? "Offline" : "Online"}
               </div>
-              <div className={["rounded-full px-3 py-1", themeMode === "dark" ? "bg-slate-900 text-slate-300" : "bg-slate-100 text-slate-600"].join(" ")}>
+              <div className={["rounded-full px-2 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-300" : "bg-slate-100 text-slate-600"].join(" ")}>
                 {deviceTimeLabel}
               </div>
             </div>
           </div>
           <div className="qms-app-header-main">
-            <div className="flex items-start gap-3">
-              <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-sm font-semibold tracking-[0.12em] text-white">
-                {getWorkspaceInitials(workspaceName)}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleLogout}
+                className={`h-6 shrink-0 rounded-md bg-slate-900 px-2 text-[9px] font-semibold text-white shadow-sm ${slatePrimaryCtaInteract}`}
+              >
+                Logout
+              </button>
+              <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-900 text-[9px] font-semibold tracking-[0.08em] text-white">
+                {accountPhotoUrl ? (
+                  <img src={accountPhotoUrl} alt={currentUser.name} className="h-full w-full object-cover" />
+                ) : (
+                  getWorkspaceInitials(currentUser.name)
+                )}
                 {selectedFolder && (
-                  <span className="absolute -bottom-1 -right-1 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.16em] text-white">
+                    <span className="absolute -bottom-1 -right-1 rounded-full bg-emerald-500 px-1 py-0 text-[8px] font-bold uppercase tracking-[0.08em] text-white">
                     Live
                   </span>
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <p className={["truncate text-lg font-semibold tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{workspaceName}</p>
-                <p className={["truncate text-xs uppercase tracking-[0.24em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
+                <p className={["truncate text-[11px] font-semibold leading-4 tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{workspaceName}</p>
+                <p className={["truncate text-[8px] leading-3 tracking-[0.08em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
                   {selectedFolder ? "Live company workspace" : "Health &amp; Safety Audit System"}
                 </p>
               </div>
-              <button
-                onClick={handleLogout}
-                className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white shadow-sm"
-              >
-                Logout
-              </button>
             </div>
 
-            <div className={["qms-app-session-bar mt-3 flex items-center justify-between rounded-2xl px-3 py-3", themeMode === "dark" ? "bg-slate-900" : "bg-slate-50"].join(" ")}>
-              <div className="min-w-0">
-                <p className={["truncate text-sm font-semibold", themeMode === "dark" ? "text-slate-100" : "text-slate-900"].join(" ")}>{currentUser.name}</p>
-                <p className={["text-xs", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>{getRoleDisplayName(currentUser.role)}</p>
-                <p className={["mt-1 text-xs", themeMode === "dark" ? "text-slate-500" : "text-slate-400"].join(" ")}>{roleLabel}</p>
+            <div className={["qms-app-session-bar mt-0.5 hidden items-center justify-between gap-2 rounded-lg px-2 py-0.5 lg:flex", themeMode === "dark" ? "bg-slate-900" : "bg-slate-50"].join(" ")}>
+              <div className="flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-[10px] leading-4">
+                <p className={["shrink-0 font-semibold", themeMode === "dark" ? "text-slate-100" : "text-slate-900"].join(" ")}>{currentUser.name}</p>
+                <span className={themeMode === "dark" ? "text-slate-500" : "text-slate-400"}>•</span>
+                <p className={["shrink-0", themeMode === "dark" ? "text-slate-300" : "text-slate-600"].join(" ")}>
+                  {getRoleDisplayName(currentUser.role)}
+                </p>
+                <span className={themeMode === "dark" ? "text-slate-500" : "text-slate-400"}>•</span>
+                <p className={["truncate", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
+                  {roleLabel}
+                </p>
               </div>
-              <div className="text-right">
-                <div className="rounded-full bg-emerald-500/12 px-3 py-1 text-xs font-semibold text-emerald-700">
+              <div className="flex shrink-0 items-center gap-1.5">
+                {demoModeActive && (
+                  <div className="rounded-full bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
+                    Demo
+                  </div>
+                )}
+                <div className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
                   {selectedFolder ? "Live workspace" : "Live session"}
                 </div>
-                {selectedFolder && <p className="mt-1 text-[11px] text-slate-400">Google Drive linked</p>}
               </div>
             </div>
           </div>
         </header>
 
-        <main className="flex-1 overflow-hidden">
-          <div className={["qms-screen-stage h-full overflow-y-auto px-4 pb-32 pt-4", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800" : ""].join(" ")}>
+        <main className="flex min-h-0 flex-1 overflow-hidden">
+          <aside className={["hidden shrink-0 flex-col border-r px-3 py-4 lg:flex", desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-200 shadow-[inset_-1px_0_0_rgba(15,23,42,0.35)]" : "border-slate-300 bg-slate-100 text-slate-700 shadow-[inset_-1px_0_0_rgba(148,163,184,0.28)]"].join(" ")}>
+            <nav className="flex-1 space-y-2 overflow-y-auto pr-1">
+              {visibleNavItems.map((item) => {
+                const selected = screen === item.id || (screen === "complete" && item.id === "audits");
+                return (
+                  <button
+                    key={`desktop-${item.id}`}
+                    onClick={() => setScreen(item.id)}
+                    className={[
+                      "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition-colors duration-200 ease-in-out",
+                      selected
+                        ? themeMode === "dark"
+                          ? "bg-slate-800 text-white hover:bg-slate-700"
+                          : `bg-slate-900 text-white ${slatePrimaryCtaInteract}`
+                        : themeMode === "dark"
+                          ? "text-slate-300 hover:bg-slate-900/25"
+                          : "text-slate-600 hover:bg-slate-900/25 hover:text-slate-900",
+                      desktopSidebarCollapsed ? "justify-center" : "",
+                    ].join(" ")}
+                    title={item.label}
+                  >
+                    <AppIcon name={item.icon} className="h-4 w-4 shrink-0" />
+                    {!desktopSidebarCollapsed && <span className="truncate">{item.label}</span>}
+                  </button>
+                );
+              })}
+            </nav>
+            <div className="mt-auto pt-2">
+              <button
+                onClick={() => setDesktopSidebarCollapsed((current) => !current)}
+                className={["flex w-full items-center justify-center rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition", desktopSidebarCollapsed ? "border-sky-500/40 bg-sky-500/20 text-sky-100 hover:bg-sky-500/30" : "border-slate-500/40 bg-slate-700/70 text-white hover:bg-slate-600/80"].join(" ")}
+                aria-label={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
+                title={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
+              >
+                <span>{desktopSidebarCollapsed ? ">>" : "<<"}</span>
+              </button>
+            </div>
+          </aside>
+          <div className={["qms-screen-stage h-full flex-1 overflow-y-auto px-4 pb-32 pt-4", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800" : "bg-slate-200/55"].join(" ")}>
+            {currentUser.role === "Manager" && currentManagerAlerts.length > 0 && (
+              <section className="mb-4 rounded-[1.5rem] border border-rose-200 bg-rose-50 px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-rose-900">Manager alerts</p>
+                  <button
+                    type="button"
+                    onClick={() => currentManagerAlerts.forEach((alert) => markManagerAlertRead(alert.id))}
+                    className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700"
+                  >
+                    Mark all as read
+                  </button>
+                </div>
+                <div className="mt-2 space-y-1.5">
+                  {currentManagerAlerts.slice(0, 3).map((alert) => (
+                    <div key={alert.id} className="flex items-start justify-between gap-3 rounded-lg bg-white/70 px-3 py-2">
+                      <p className="text-sm text-rose-800">
+                        {alert.auditName}: {alert.nonComplianceCount} non-compliance item
+                        {alert.nonComplianceCount === 1 ? "" : "s"} submitted by {alert.submittedBy}
+                        {alert.queuedForSync ? " (queued offline)." : "."}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => markManagerAlertRead(alert.id)}
+                        className="shrink-0 rounded-lg border border-rose-200 bg-white px-2.5 py-1 text-xs font-semibold text-rose-700"
+                      >
+                        Mark read
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
             {(offlineMode || offlineQueue.length > 0) && (
               <section className="mb-4 rounded-[1.5rem] border border-amber-200 bg-amber-50 px-4 py-4">
                 <p className="text-sm font-semibold text-amber-900">
@@ -4354,6 +6212,8 @@ function App() {
                 evidenceCount={evidenceCount}
                 completedToday={completedToday}
                 offlineQueueCount={offlineQueue.length}
+                pendingSyncCount={pendingSyncCount}
+                failedSyncCount={failedSyncCount}
                 assignedAudits={assignedAudits}
                 history={history}
                 drafts={drafts}
@@ -4364,18 +6224,38 @@ function App() {
                 recurringFailedQuestions={recurringFailedQuestions}
                 topOverdueSchedules={topOverdueSchedules}
                 riskSummary={riskSummary}
+                themeMode={themeMode}
+                dashboardPreferences={dashboardPreferences}
+                dashboardSectionOrder={dashboardSectionOrder}
                 onOpenAudit={startAudit}
                 onAdvanceAction={updateActionStatus}
+                onApplyDashboardPreset={handleApplyDashboardPreset}
+                onToggleDashboardSection={handleToggleDashboardSection}
+                onMoveDashboardSection={handleMoveDashboardSection}
+                reportUsersCount={companyReportUsers.length}
+                activeSchedulesCount={managedSchedules.filter((item) => item.lifecycle !== "Archived").length}
+                templatesCount={templates.filter((template) => template.active).length}
+                workspaceValidation={workspaceValidation}
+                selectedFolder={selectedFolder}
+                onValidateWorkspace={() => void validateWorkspace()}
+                onRepairWorkspace={repairWorkspace}
+                onLoadDemoData={handleLoadDemoData}
+                onClearDemoData={handleClearDemoData}
               />
             )}
 
-            {screen === "audits" && (
+            {screen === "audits" && canAccessAuditsCentre(currentUser.role) && (
               <AuditsScreen
                 currentUser={currentUser}
                 audits={audits}
                 groupedAudits={groupedAudits}
                 drafts={drafts}
+                unsyncedAuditIds={unsyncedSubmittedAuditIds}
+                userProfilePhotos={userProfilePhotos}
                 onOpenAudit={startAudit}
+                auditAccessMatrix={auditAccessMatrix}
+                auditScheduleMatrix={auditScheduleMatrix}
+                onToggleAuditAccess={handleToggleAuditAccess}
               />
             )}
 
@@ -4385,11 +6265,106 @@ function App() {
                 actions={filteredActions}
                 actionFilter={actionFilter}
                 actionSeverityFilter={actionSeverityFilter}
+                actionNcFilter={actionNcFilter}
+                availableNonConformanceIds={availableNonConformanceIds}
                 availableAuditors={availableScheduleAuditors}
                 onFilterChange={setActionFilter}
                 onSeverityFilterChange={setActionSeverityFilter}
+                onNcFilterChange={setActionNcFilter}
                 onAdvanceAction={updateActionStatus}
                 onAssignAction={assignAction}
+                onAddEvidence={attachEvidenceToAction}
+              />
+            )}
+
+            {screen === "nonConformance" && canAccessActions(currentUser.role) && (
+              <NonConformanceScreen
+                currentUser={currentUser}
+                nonConformances={nonConformances}
+                canViewCompletedReports={canAccessCompletedNcrReports(currentUser.role)}
+                onSaveProgress={(ncrId, payload) => {
+                  setNonConformances((current) =>
+                    current.map((item) => (item.id === ncrId ? { ...item, ...payload, status: "In Progress" } : item)),
+                  );
+                  pushToast("Progress saved", "Investigation updates were saved.", "success");
+                }}
+                onComplete={(ncrId, payload) => {
+                  if (!currentUser) return false;
+                  let completed = false;
+                  setNonConformances((current) =>
+                    current.map((item) => {
+                      if (item.id !== ncrId) return item;
+                      completed = true;
+                      return {
+                        ...item,
+                        ...payload,
+                        status: "Completed",
+                        completionDateTime: formatStamp(),
+                        completedByName: currentUser.name,
+                        completedByUserId: currentUser.username,
+                      };
+                    }),
+                  );
+                  if (completed) {
+                    pushToast("NCR complete", "Non-conformance report marked as completed.", "success");
+                  }
+                  return completed;
+                }}
+                onAddEvidence={(ncrId, files) => {
+                  const nextItems = Array.from(files).map((file) => ({
+                    id: `${ncrId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    name: file.name,
+                    previewUrl: URL.createObjectURL(file),
+                    addedAt: formatStamp(),
+                  }));
+                  setNonConformances((current) =>
+                    current.map((item) => (item.id === ncrId ? { ...item, evidence: [...item.evidence, ...nextItems] } : item)),
+                  );
+                }}
+                onExportReport={(ncr) => {
+                  const opened = openPrintableReport(
+                    `[${ncr.reference}] Non-Conformance Report`,
+                    `
+                    <h1>${ncr.reference} Non-Conformance Report</h1>
+                    <p class="meta">Status: ${ncr.status} | Raised: ${ncr.raisedAt}</p>
+                    <h2>Core details</h2>
+                    <ul>
+                      <li>Audit: ${ncr.auditName}</li>
+                      <li>Question: ${ncr.auditQuestion}</li>
+                      <li>Selected answer: ${ncr.selectedAnswer.toUpperCase()}</li>
+                      <li>Site: ${ncr.site}</li>
+                      <li>Auditor: ${ncr.auditorName}</li>
+                      <li>Assigned line manager: ${ncr.assignedLineManager}</li>
+                    </ul>
+                    <h2>Investigation</h2>
+                    <ul>
+                      <li>ISO clause: ${ncr.investigationIsoClause || "-"}</li>
+                      <li>Investigation notes: ${ncr.investigationNotes || "-"}</li>
+                      <li>Root cause: ${ncr.rootCause || "-"}</li>
+                      <li>Corrective action: ${ncr.correctiveAction || "-"}</li>
+                      <li>Extra notes: ${ncr.investigationExtraNotes || "-"}</li>
+                    </ul>
+                    <h2>Evidence references</h2>
+                    <ul>
+                      ${
+                        ncr.evidence.length
+                          ? ncr.evidence.map((item) => `<li>${item.name} (${item.addedAt})</li>`).join("")
+                          : "<li>No evidence uploaded.</li>"
+                      }
+                    </ul>
+                    <h2>Completion</h2>
+                    <ul>
+                      <li>Completed at: ${ncr.completionDateTime || "-"}</li>
+                      <li>Completed by: ${ncr.completedByName || "-"}</li>
+                    </ul>
+                  `,
+                  );
+                  if (!opened) {
+                    pushToast("PDF export blocked", "Allow pop-ups to open NCR report print view.", "warning");
+                    return;
+                  }
+                  pushToast("NCR report opened", `${ncr.reference} print view is ready to save as PDF.`, "success");
+                }}
               />
             )}
 
@@ -4409,7 +6384,6 @@ function App() {
                 completedToday={completedToday}
                 offlineQueueCount={offlineQueue.length}
                 reportUsers={companyReportUsers}
-                auditAccessMatrix={auditAccessMatrix}
                 reportRecipients={reportRecipients}
                 reportInbox={reportInbox}
                 history={history}
@@ -4437,7 +6411,7 @@ function App() {
               />
             )}
 
-            {screen === "schedules" && canAccessAdmin(currentUser.role) && (
+            {screen === "schedules" && canAccessSchedules(currentUser.role) && (
               <SchedulesScreen
                 selectedFolder={selectedFolder}
                 schedules={visibleSchedules}
@@ -4471,7 +6445,9 @@ function App() {
               />
             )}
 
-            {screen === "admin" && canAccessAdmin(currentUser.role) && (
+            {(screen === "admin" || screen === "onboarding") &&
+              canAccessAdmin(currentUser.role) &&
+              (screen !== "onboarding" || canAccessOnboarding(currentUser.role)) && (
               <AdminScreen
                 currentUser={currentUser}
                 googleConnected={googleConnected}
@@ -4538,6 +6514,7 @@ function App() {
                 onOpenOnboardingForm={handleOpenOnboardingForm}
                 onStartCompanyOnboarding={handleStartCompanyOnboarding}
                 onAddFolder={handleAddFolder}
+                onOneClickGoogleOnboarding={handleOneClickGoogleOnboarding}
                 onRequestNotifications={requestNotificationAccess}
                 onValidateWorkspace={() => void validateWorkspace()}
                 onRepairWorkspace={repairWorkspace}
@@ -4546,6 +6523,8 @@ function App() {
                 onTemplateQuestionTypeChange={setTemplateQuestionTypeInput}
                 onAddTemplateQuestion={handleAddTemplateQuestion}
                 onRemoveTemplateQuestion={handleRemoveTemplateQuestion}
+                onAddAnswerPromptToDraftQuestion={handleAddAnswerPromptToDraftQuestion}
+                onRemoveAnswerPromptFromDraftQuestion={handleRemoveAnswerPromptFromDraftQuestion}
                 onAddTemplate={handleAddTemplate}
                 onToggleTemplate={handleToggleTemplate}
                 onAddSchedule={handleAddSchedule}
@@ -4554,9 +6533,12 @@ function App() {
                 onVerifyAudits={handleVerifyAudits}
                 onVerifyResponseSheet={handleVerifyResponseSheet}
                 onSyncForms={handleSyncForms}
+                onLoadDemoData={handleLoadDemoData}
+                onClearDemoData={handleClearDemoData}
                 onInviteEmailChange={setInviteEmailInput}
                 onInviteRoleChange={setInviteRoleInput}
                 onInviteUser={handleInviteUser}
+                standaloneOnboarding={screen === "onboarding"}
                 scheduleNameInput={scheduleNameInput}
                 scheduleAreaInput={scheduleAreaInput}
                 scheduleOwnerInput={scheduleOwnerInput}
@@ -4581,13 +6563,96 @@ function App() {
                 accountPhotoUrl={accountPhotoUrl}
                 themeMode={themeMode}
                 onAccountNameChange={setAccountNameInput}
-                onAccountPhotoChange={(file) => setAccountPhotoUrl(URL.createObjectURL(file))}
+                onAccountPhotoChange={handleAccountPhotoChange}
                 onThemeModeChange={setThemeMode}
                 onSave={handleSaveAccountSettings}
               />
             )}
 
-            {screen === "complete" && activeAudit && (
+            {screen === "complete" && currentUser.role === "Auditor" && auditCompletionSummary && (
+              <AuditCompletionSummary
+                summary={auditCompletionSummary}
+                hasMoreAudits={Boolean(pickNextAuditorAudit(assignedAudits, drafts))}
+                onStartNext={() => {
+                  const next = pickNextAuditorAudit(assignedAudits, drafts);
+                  setAuditCompletionSummary(null);
+                  setResponses({});
+                  setNotes({});
+                  setEvidence({});
+                  setIssuePrompt(null);
+                  setAuditModeQuestionIndex(0);
+                  if (next) {
+                    startAudit(next.id);
+                  } else {
+                    setScreen("dashboard");
+                  }
+                }}
+                onReturnDashboard={() => {
+                  setAuditCompletionSummary(null);
+                  setResponses({});
+                  setNotes({});
+                  setEvidence({});
+                  setIssuePrompt(null);
+                  setAuditModeQuestionIndex(0);
+                  setScreen("dashboard");
+                }}
+              />
+            )}
+
+            {screen === "complete" && activeAudit && currentUser.role === "Auditor" && !auditCompletionSummary && (
+              <>
+                <AuditModeScreen
+                  audit={activeAudit}
+                  responses={responses}
+                  notes={notes}
+                  evidence={evidence}
+                  evidenceDebugLabel={evidenceDebugLabel}
+                  questionIndex={auditModeQuestionIndex}
+                  offlineMode={offlineMode}
+                  pendingSyncCount={pendingSyncCount}
+                  failedSyncCount={failedSyncCount}
+                  onAnswerSelect={handleAuditModeAnswer}
+                  onJumpToQuestion={setAuditModeQuestionIndex}
+                  onNoteChange={(questionId, value) =>
+                    setNotes((current) => ({
+                      ...current,
+                      [questionId]: value,
+                    }))
+                  }
+                  onAddEvidence={(questionId, files) => {
+                    const fileCount = files.length;
+                    setEvidenceDebugLabel(`Selected: ${Array.from(files).map((file) => file.name).join(", ")}`);
+                    const nextItems = Array.from(files).map((file) => ({
+                      id: `${questionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                      name: file.name,
+                      previewUrl: URL.createObjectURL(file),
+                      addedAt: formatStamp(),
+                    }));
+                    setEvidence((current) => ({
+                      ...current,
+                      [questionId]: [...(current[questionId] ?? []), ...nextItems],
+                    }));
+                    pushToast(
+                      "Evidence attached",
+                      `${fileCount} file${fileCount === 1 ? "" : "s"} added to this question.`,
+                      "success",
+                    );
+                  }}
+                  onComplete={completeAuditModeFlow}
+                  onSaveAndExit={handleAuditModeSaveAndExit}
+                />
+                {issuePrompt && (
+                  <IssueFoundPrompt
+                    issue={issuePrompt}
+                    existingNote={notes[issuePrompt.question.id] || ""}
+                    onSave={handleAuditModeSaveIssue}
+                    onCancel={() => setIssuePrompt(null)}
+                  />
+                )}
+              </>
+            )}
+
+            {screen === "complete" && activeAudit && currentUser.role !== "Auditor" && (
               <CompleteAuditScreen
                 audit={activeAudit}
                 responses={responses}
@@ -4611,6 +6676,8 @@ function App() {
                   }))
                 }
                 onAddEvidence={(questionId, files) => {
+                  const fileCount = files.length;
+                  setEvidenceDebugLabel(`Selected: ${Array.from(files).map((file) => file.name).join(", ")}`);
                   const nextItems = Array.from(files).map((file) => ({
                     id: `${questionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                     name: file.name,
@@ -4621,6 +6688,11 @@ function App() {
                     ...current,
                     [questionId]: [...(current[questionId] ?? []), ...nextItems],
                   }));
+                  pushToast(
+                    "Evidence attached",
+                    `${fileCount} file${fileCount === 1 ? "" : "s"} added to this question.`,
+                    "success",
+                  );
                 }}
                 onRemoveEvidence={(questionId, evidenceId) =>
                   setEvidence((current) => ({
@@ -4648,7 +6720,7 @@ function App() {
           </div>
         </main>
 
-        <nav className="qms-bottom-nav absolute inset-x-0 bottom-0 mx-auto w-full max-w-[37rem] px-3 pb-3">
+        <nav className="qms-bottom-nav absolute inset-x-0 bottom-0 mx-auto w-full max-w-[37rem] px-3 pb-3 lg:hidden">
           <div
             className={[
               "qms-bottom-nav-grid grid gap-2 rounded-[1.75rem] border p-2 shadow-[0_20px_45px_rgba(15,23,42,0.16)] backdrop-blur-xl",
@@ -4666,10 +6738,10 @@ function App() {
                   className={[
                     "qms-nav-button group flex h-12 flex-col items-center justify-center rounded-2xl border px-1 text-[10px] font-semibold leading-none transition-all duration-200 sm:text-[11px]",
                     selected
-                      ? "border-slate-900 bg-slate-900 text-white shadow-[0_12px_30px_rgba(15,23,42,0.22)]"
-                      : themeMode === "dark"
-                        ? "border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-slate-700 hover:text-slate-100"
-                        : "border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 text-slate-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] hover:border-slate-300 hover:text-slate-900",
+                        ? `border-slate-900 bg-slate-900 text-white shadow-[0_12px_30px_rgba(15,23,42,0.22)] ${slatePrimaryCtaInteract}`
+                        : themeMode === "dark"
+                        ? "border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-slate-700 hover:bg-slate-900/25 hover:text-slate-100"
+                        : "border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 text-slate-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] hover:border-slate-300 hover:bg-slate-900/25 hover:text-slate-900",
                   ].join(" ")}
                 >
                   <span
@@ -4711,6 +6783,8 @@ function DashboardScreen({
   evidenceCount,
   completedToday,
   offlineQueueCount,
+  pendingSyncCount,
+  failedSyncCount,
   assignedAudits,
   history,
   drafts,
@@ -4721,8 +6795,23 @@ function DashboardScreen({
   recurringFailedQuestions,
   topOverdueSchedules,
   riskSummary,
+  themeMode,
+  dashboardPreferences,
+  dashboardSectionOrder,
   onOpenAudit,
   onAdvanceAction,
+  onApplyDashboardPreset,
+  onToggleDashboardSection,
+  onMoveDashboardSection,
+  reportUsersCount,
+  activeSchedulesCount,
+  templatesCount,
+  workspaceValidation,
+  selectedFolder,
+  onValidateWorkspace,
+  onRepairWorkspace,
+  onLoadDemoData,
+  onClearDemoData,
 }: {
   currentUser: User;
   workspaceName: string;
@@ -4738,6 +6827,8 @@ function DashboardScreen({
   evidenceCount: number;
   completedToday: number;
   offlineQueueCount: number;
+  pendingSyncCount: number;
+  failedSyncCount: number;
   assignedAudits: Audit[];
   history: HistoryEntry[];
   drafts: Record<string, AuditDraft>;
@@ -4753,128 +6844,202 @@ function DashboardScreen({
     criticalFindings: number;
     highFindings: number;
   };
+  themeMode: ThemeMode;
+  dashboardPreferences: DashboardPreferences;
+  dashboardSectionOrder: DashboardSectionKey[];
   onOpenAudit: (auditId: string) => void;
   onAdvanceAction: (actionId: string) => void;
+  onApplyDashboardPreset: (preset: "minimal" | "operations" | "executive") => void;
+  onToggleDashboardSection: (section: DashboardSectionKey) => void;
+  onMoveDashboardSection: (section: DashboardSectionKey, direction: "up" | "down") => void;
+  reportUsersCount: number;
+  activeSchedulesCount: number;
+  templatesCount: number;
+  workspaceValidation: WorkspaceValidation | null;
+  selectedFolder: CompanyFolder | null;
+  onValidateWorkspace: () => void;
+  onRepairWorkspace: () => void;
+  onLoadDemoData: () => void;
+  onClearDemoData: () => void;
 }) {
+  if (currentUser.role === "Auditor") {
+    return (
+      <AuditorTaskDashboard
+        currentUser={currentUser}
+        groupedAudits={groupedAudits}
+        assignedAudits={assignedAudits}
+        drafts={drafts}
+        actions={actions}
+        pendingSyncCount={pendingSyncCount}
+        failedSyncCount={failedSyncCount}
+        onOpenAudit={onOpenAudit}
+      />
+    );
+  }
+
+  if (currentUser.role === "Manager") {
+    return (
+      <ManagerDashboard
+        groupedAudits={groupedAudits}
+        assignedAudits={assignedAudits}
+        actions={actions}
+        onOpenAudit={onOpenAudit}
+        onAdvanceAction={onAdvanceAction}
+        recurringFailedQuestions={recurringFailedQuestions}
+      />
+    );
+  }
+
+  if (currentUser.role === "Admin") {
+    return (
+      <AdminDashboard
+        groupedAudits={groupedAudits}
+        assignedAudits={assignedAudits}
+        actions={actions}
+        pendingSyncCount={pendingSyncCount}
+        failedSyncCount={failedSyncCount}
+        reportUsersCount={reportUsersCount}
+        activeSchedulesCount={activeSchedulesCount}
+        templatesCount={templatesCount}
+        onOpenAudit={onOpenAudit}
+        onAdvanceAction={onAdvanceAction}
+      />
+    );
+  }
+
+  if (currentUser.role === "Master") {
+    return (
+      <GodModeDashboard
+        workspaceValidation={workspaceValidation}
+        selectedFolder={selectedFolder}
+        reportUsersCount={reportUsersCount}
+        activeSchedulesCount={activeSchedulesCount}
+        templatesCount={templatesCount}
+        onValidateWorkspace={onValidateWorkspace}
+        onRepairWorkspace={onRepairWorkspace}
+        onLoadDemoData={onLoadDemoData}
+        onClearDemoData={onClearDemoData}
+      />
+    );
+  }
+
+  return null;
+  
+  const [showDashboardOptions, setShowDashboardOptions] = useState(false);
+  const visibleSectionOrder = dashboardSectionOrder.filter((key) => dashboardPreferences[key]);
+
+  const renderSection = (section: DashboardSectionKey) => {
+    if (section === "trafficBoard") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="dashboard" eyebrow="Live status" title="Traffic light audit board" subtitle="First-look status across live audits." />
+          <div className="mt-2 grid gap-2">
+            <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red.slice(0, 1)} status="red" onOpenAudit={onOpenAudit} />
+            <TrafficLane title="Amber" subtitle={`<${amberThresholdHours}h remaining`} audits={groupedAudits.amber.slice(0, 1)} status="amber" onOpenAudit={onOpenAudit} />
+            <TrafficLane title="Green" subtitle={`>${amberThresholdHours}h remaining`} audits={groupedAudits.green.slice(0, 1)} status="green" onOpenAudit={onOpenAudit} />
+          </div>
+        </section>
+      );
+    }
+    if (section === "liveSummary") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="chart" eyebrow="Live summary" title="Operations snapshot" subtitle="Quick KPI pulse for field and admin teams." />
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <KpiCard title="Open actions" value={String(openActions.length)} tone={openActions.length ? "amber" : "green"} subtitle={`${overdueActions.length} overdue`} dark={themeMode === "dark"} />
+            <KpiCard title="Compliance" value={`${compliance}%`} tone="green" subtitle={complianceDelta >= 0 ? `Up ${complianceDelta}%` : `Down ${Math.abs(complianceDelta)}%`} dark={themeMode === "dark"} />
+            <KpiCard title="Completion" value={`${auditCompletionRate}%`} tone={auditCompletionRate > 79 ? "green" : "amber"} subtitle={`${completedToday} today`} dark={themeMode === "dark"} />
+            <KpiCard title="Queue" value={String(offlineQueueCount)} tone={offlineQueueCount ? "amber" : "green"} subtitle={`${evidenceCount} evidence`} dark={themeMode === "dark"} />
+          </div>
+        </section>
+      );
+    }
+    if (section === "upcomingAudits") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="clipboard" eyebrow="Upcoming" title="Upcoming audits" subtitle="Prioritized from your assigned workload." />
+          <div className="mt-2 space-y-2">
+            {assignedAudits.slice(0, 4).map((audit) => (
+              <button key={audit.id} onClick={() => onOpenAudit(audit.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left transition hover:bg-white">
+                <p className="text-sm font-semibold text-slate-900">{audit.name}</p>
+                <p className="mt-1 text-xs text-slate-500">{audit.siteArea} - {getDueWarning(audit.dueHours)}</p>
+              </button>
+            ))}
+            {assignedAudits.length === 0 && <EmptyPanel title="No upcoming audits" text="Linked and assigned audits will appear here." />}
+          </div>
+        </section>
+      );
+    }
+    if (section === "openActions") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="warningTriangle" eyebrow="Actions" title="Open actions" subtitle="Items needing progress or verification." />
+          <div className="mt-2 space-y-2">
+            {actions.slice(0, 4).map((action) => (
+              <button key={action.id} onClick={() => onAdvanceAction(action.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left transition hover:bg-white">
+                <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
+                <p className="mt-1 text-xs text-slate-500">{action.owner} - {action.status}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+      );
+    }
+    return (
+      <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+        <SectionHeader icon="shield" eyebrow="Compliance" title="Compliance snapshot" subtitle="Risk, closure, and recurring findings." />
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <KpiCard title="Critical/high" value={String(criticalActions.length)} tone={criticalActions.length ? "red" : "green"} subtitle={`${riskSummary.criticalFindings} critical`} dark={themeMode === "dark"} />
+          <KpiCard title="Closure rate" value={`${actionClosureRate}%`} tone={actionClosureRate > 79 ? "green" : "amber"} subtitle={`${averageActionClosureDays || 0} days avg`} dark={themeMode === "dark"} />
+        </div>
+      </section>
+    );
+  };
+
   return (
     <div className="space-y-4">
-      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
+      <section className="rounded-[1.4rem] bg-slate-950 p-3.5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Live overview</p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight">{workspaceName}</h2>
-            <p className="mt-2 max-w-sm text-sm leading-6 text-slate-300">
-              Live control of onboarding, site audits, and corrective action ownership from one field-ready workspace.
-            </p>
+            <h2 className="mt-1 text-xl font-semibold tracking-tight">{workspaceName}</h2>
+            <p className="mt-1 max-w-sm text-xs leading-5 text-slate-300">Dashboard controls and traffic status in one view.</p>
           </div>
-          <div className="rounded-2xl bg-white/10 px-4 py-3 text-right">
-            <p className="text-xs text-slate-300">Overdue audits</p>
-            <p className="mt-1 text-2xl font-semibold">{overdueAudits.length}</p>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowDashboardOptions((current) => !current)} className="h-8 rounded-lg bg-white/12 px-3 text-xs font-semibold text-white">
+              Customize
+            </button>
+            <div className="rounded-xl bg-white/10 px-3 py-1.5 text-right">
+              <p className="text-[11px] text-slate-300">Overdue</p>
+              <p className="text-lg font-semibold">{overdueAudits.length}</p>
+            </div>
           </div>
         </div>
       </section>
+      {showDashboardOptions && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Dashboard options</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button onClick={() => onApplyDashboardPreset("minimal")} className="h-8 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700">Minimal</button>
+            <button onClick={() => onApplyDashboardPreset("operations")} className="h-8 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700">Operations</button>
+            <button onClick={() => onApplyDashboardPreset("executive")} className="h-8 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700">Executive</button>
+          </div>
+          <div className="mt-3 space-y-2">
+            {dashboardSectionOrder.map((section, index) => (
+              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <input type="checkbox" checked={dashboardPreferences[section]} onChange={() => onToggleDashboardSection(section)} />
+                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
+                <button onClick={() => onMoveDashboardSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
+                <button onClick={() => onMoveDashboardSection(section, "down")} disabled={index === dashboardSectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
-      <section className="grid grid-cols-3 gap-3">
-        <KpiCard
-          title="Live audits due today"
-          value={String(assignedAudits.length)}
-          tone={assignedAudits.length === 0 ? "green" : "amber"}
-          subtitle={`${completedToday} completed today`}
-        />
-        <KpiCard
-          title="Overdue audits"
-          value={String(overdueAudits.length)}
-          tone={overdueAudits.length === 0 ? "green" : "red"}
-          subtitle={`${offlineQueueCount} pending offline sync`}
-        />
-        <KpiCard
-          title="Open corrective actions"
-          value={String(openActions.length)}
-          tone={openActions.length === 0 ? "green" : "amber"}
-          subtitle={`${overdueActions.length} overdue`}
-        />
-      </section>
-
-      <section className="grid grid-cols-3 gap-3">
-        <KpiCard
-          title="Overdue CAPA"
-          value={String(overdueActions.length)}
-          tone={overdueActions.length === 0 ? "green" : "red"}
-          subtitle={`${awaitingVerificationActions.length} awaiting verification`}
-        />
-        <KpiCard
-          title="Critical/high risk"
-          value={String(criticalActions.length)}
-          tone={criticalActions.length === 0 ? "green" : "red"}
-          subtitle={`${riskSummary.criticalFindings} critical findings`}
-        />
-        <KpiCard
-          title="Failed questions"
-          value={String(recurringFailedQuestions.reduce((sum, item) => sum + item[1], 0))}
-          tone={recurringFailedQuestions.length === 0 ? "green" : "amber"}
-          subtitle={`${recurringFailedQuestions.length} recurring patterns`}
-        />
-      </section>
-
-      <section className="grid grid-cols-3 gap-3">
-        <KpiCard
-          title="Compliance"
-          value={`${compliance}%`}
-          tone="green"
-          subtitle={complianceDelta >= 0 ? `Up ${complianceDelta}% vs previous run` : `Down ${Math.abs(complianceDelta)}% vs previous run`}
-        />
-        <KpiCard
-          title="Closure rate"
-          value={`${actionClosureRate}%`}
-          tone={actionClosureRate > 79 ? "green" : "amber"}
-          subtitle={`${averageActionClosureDays || 0} day average close`}
-        />
-        <KpiCard
-          title="Audit completion"
-          value={`${auditCompletionRate}%`}
-          tone={auditCompletionRate > 79 ? "green" : "amber"}
-          subtitle={`${riskSummary.highestRiskLevel} highest risk`}
-        />
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="shield"
-          eyebrow="Workspace identity"
-          title="Live company system"
-          subtitle={companySheetSync ? `Connected to ${companySheetSync.sheetName} with ${companySheetSync.tabs.length} live tabs.` : "Waiting for company master sheet sync to complete."}
-        />
-        <div className="grid grid-cols-2 gap-3">
-          <QuickActionTile title="Workspace" value={workspaceName} caption="Current live company" />
-          <QuickActionTile title="Data sync" value={companySheetSync ? "Healthy" : "Waiting"} caption={companySheetSync ? `Synced ${companySheetSync.lastSyncedAt}` : "Populate app to complete sync"} />
-        </div>
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="dashboard"
-          eyebrow="Live status"
-          title="Traffic light audit board"
-          subtitle="Operational status across every live audit area"
-        />
-        <div className="grid gap-3">
-          <TrafficLane
-            title="Green"
-            subtitle={`More than ${amberThresholdHours} hours remaining`}
-            audits={groupedAudits.green}
-            status="green"
-            onOpenAudit={onOpenAudit}
-          />
-          <TrafficLane
-            title="Amber"
-            subtitle={`Less than ${amberThresholdHours} hours remaining`}
-            audits={groupedAudits.amber}
-            status="amber"
-            onOpenAudit={onOpenAudit}
-          />
-          <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red} status="red" onOpenAudit={onOpenAudit} />
-        </div>
-      </section>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {visibleSectionOrder.map((section) => renderSection(section))}
+      </div>
 
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <SectionHeader
@@ -4895,7 +7060,7 @@ function DashboardScreen({
 
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <SectionHeader
-          icon="checklist"
+          icon="warningTriangle"
           eyebrow="Recurring issues"
           title="Top recurring failures"
           subtitle="Patterns in repeated failed questions and schedules needing intervention."
@@ -4953,7 +7118,7 @@ function DashboardScreen({
                     </div>
                     <p className="mt-3 text-xs font-medium text-slate-600">{getDueWarning(audit.dueHours)}</p>
                     <p className="mt-1 text-xs text-slate-400">
-                      {drafts[audit.id] ? `Draft saved ${drafts[audit.id].updatedAt}` : `Last completed ${audit.lastCompletedAt}`}
+                      {drafts[audit.id] ? `In progress ${drafts[audit.id].updatedAt}` : `Last completed ${audit.lastCompletedAt}`}
                     </p>
                   </div>
                   <div className="shrink-0 space-y-2 text-right">
@@ -5004,18 +7169,899 @@ function DashboardScreen({
   );
 }
 
+function AuditorTaskDashboard({
+  currentUser,
+  groupedAudits,
+  assignedAudits,
+  drafts,
+  actions,
+  pendingSyncCount,
+  failedSyncCount,
+  onOpenAudit,
+}: {
+  currentUser: User;
+  groupedAudits: Record<AuditStatus, Audit[]>;
+  assignedAudits: Audit[];
+  drafts: Record<string, AuditDraft>;
+  actions: ActionItem[];
+  pendingSyncCount: number;
+  failedSyncCount: number;
+  onOpenAudit: (auditId: string) => void;
+}) {
+  const sortedAudits = useMemo(
+    () =>
+      [...assignedAudits].sort((a, b) => {
+        const rankDiff = rankAuditorAudit(a, Boolean(drafts[a.id])) - rankAuditorAudit(b, Boolean(drafts[b.id]));
+        if (rankDiff !== 0) return rankDiff;
+        return a.dueHours - b.dueHours;
+      }),
+    [assignedAudits, drafts],
+  );
+  const draftAudits = useMemo(() => sortedAudits.filter((audit) => Boolean(drafts[audit.id])), [sortedAudits, drafts]);
+  const dueTodayAudits = useMemo(() => sortedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours <= 24), [sortedAudits]);
+  const orphanDraftCount = useMemo(() => {
+    const assignedAuditIds = new Set(assignedAudits.map((audit) => audit.id));
+    return Object.keys(drafts).filter((auditId) => !assignedAuditIds.has(auditId)).length;
+  }, [assignedAudits, drafts]);
+  const overdueCount = useMemo(() => sortedAudits.filter((audit) => audit.dueHours < 0).length, [sortedAudits]);
+  const dueTodayCount = useMemo(() => sortedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours <= 24).length, [sortedAudits]);
+  const dueSoonCount = useMemo(
+    () => sortedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours < amberThresholdHours).length,
+    [sortedAudits],
+  );
+  const onTrackCount = useMemo(
+    () => sortedAudits.filter((audit) => audit.dueHours >= amberThresholdHours).length,
+    [sortedAudits],
+  );
+  const draftCount = useMemo(() => sortedAudits.filter((audit) => Boolean(drafts[audit.id])).length, [sortedAudits, drafts]);
+  const evidenceNeededCount = useMemo(
+    () =>
+      actions.filter(
+        (action) =>
+          (action.assignedToUserId === currentUser.username || action.assignedToName === currentUser.name) &&
+          action.status !== "Closed" &&
+          action.evidenceRequired &&
+          action.evidenceCount === 0,
+      ).length,
+    [actions, currentUser.name, currentUser.username],
+  );
+  const nextAudit = useMemo(() => pickNextAuditorAudit(sortedAudits, drafts), [sortedAudits, drafts]);
+  const primaryLabel = useMemo(() => {
+    if (!nextAudit) return "No Audits Due";
+    if (drafts[nextAudit.id]) return "Resume Audit";
+    if (nextAudit.dueHours < 0) return "Start Overdue Audit";
+    if (getAuditTrafficStatus(nextAudit.dueHours) === "amber") return "Start Due Soon Audit";
+    if (nextAudit.dueHours <= 24) return "Start Today’s Audits";
+    return "Start Next Audit";
+  }, [nextAudit, drafts]);
+  const primarySubtitle = useMemo(() => {
+    if (!nextAudit) return "All clear - no audits due right now.";
+    if (drafts[nextAudit.id]) return `Resume ${nextAudit.name}`;
+    if (nextAudit.dueHours < 0) return `Overdue now: ${nextAudit.name}`;
+    if (getAuditTrafficStatus(nextAudit.dueHours) === "amber") return `Due soon: ${nextAudit.name}`;
+    if (nextAudit.dueHours <= 24) return `Due today: ${nextAudit.name}`;
+    return nextAudit.name;
+  }, [nextAudit, drafts]);
+  const evidenceActions = useMemo(
+    () =>
+      actions.filter(
+        (action) =>
+          (action.assignedToUserId === currentUser.username || action.assignedToName === currentUser.name) &&
+          action.status !== "Closed" &&
+          action.evidenceRequired &&
+          action.evidenceCount === 0,
+      ),
+    [actions, currentUser.name, currentUser.username],
+  );
+  const syncLabel =
+    failedSyncCount > 0 ? `${failedSyncCount} sync failed` : pendingSyncCount > 0 ? `${pendingSyncCount} pending sync` : "Synced";
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
+        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Today&apos;s tasks</p>
+        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">Morning {currentUser.name.split(" ")[0]}</h2>
+        <p className="mt-1 text-sm text-slate-500">What do you need to do now?</p>
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+          <MiniMetric label="Outstanding (Red)" value={String(overdueCount)} tone="red" />
+          <MiniMetric label="Due now (Amber)" value={String(dueSoonCount)} tone="amber" />
+          <MiniMetric label="On track (Green)" value={String(onTrackCount)} tone="green" />
+          <MiniMetric label="Due today" value={String(dueTodayCount)} tone="slate" />
+          <MiniMetric label="Audits in progress" value={String(draftCount)} tone="sky" />
+          <MiniMetric label="Not closed: evidence missing" value={String(evidenceNeededCount)} tone="amber" />
+        </div>
+        <button
+          type="button"
+          onClick={() => nextAudit && onOpenAudit(nextAudit.id)}
+          disabled={!nextAudit}
+          className={`mt-4 h-16 w-full rounded-2xl text-lg font-semibold text-white ${nextAudit ? `bg-slate-900 ${slatePrimaryCtaInteract}` : "cursor-not-allowed bg-slate-300"}`}
+        >
+          {nextAudit ? `Audit Mode: ${primaryLabel}` : "Audit Mode: No Audits Due"}
+        </button>
+        <p className="mt-2 text-sm text-slate-500">{primarySubtitle}</p>
+        {orphanDraftCount > 0 && (
+          <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+            {orphanDraftCount} in-progress audit{orphanDraftCount === 1 ? "" : "s"} could not be matched to a live audit template.
+          </p>
+        )}
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-sm font-semibold text-slate-900">Task list</p>
+          <div
+            className={[
+              "rounded-full px-3 py-1 text-xs font-semibold",
+              failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700",
+            ].join(" ")}
+          >
+            {syncLabel}
+          </div>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Today&apos;s audits</p>
+            <div className="space-y-2">
+              {dueTodayAudits.slice(0, 3).map((audit) => (
+                <button key={audit.id} type="button" onClick={() => onOpenAudit(audit.id)} className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-left">
+                  <StatusBadge status={getAuditTrafficStatus(audit.dueHours)} />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900">{audit.name}</p>
+                    <p className="text-xs text-slate-500">{getDueWarning(audit.dueHours)}</p>
+                  </div>
+                </button>
+              ))}
+              {dueTodayAudits.length === 0 && <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No audits due today.</p>}
+            </div>
+          </div>
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Draft audits</p>
+            <div className="space-y-2">
+              {draftAudits.slice(0, 2).map((audit) => (
+                <button key={audit.id} type="button" onClick={() => onOpenAudit(audit.id)} className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-left">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900">{audit.name}</p>
+                    <p className="text-xs text-slate-500">{drafts[audit.id]?.updatedAt || "In progress"}</p>
+                  </div>
+                  <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700">Resume</span>
+                </button>
+              ))}
+              {draftAudits.length === 0 && <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No audits in progress.</p>}
+            </div>
+          </div>
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Actions needing evidence</p>
+            <div className="space-y-2">
+              {evidenceActions.slice(0, 2).map((action) => (
+                <div key={action.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                  <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
+                  <p className="text-xs text-slate-500">{action.auditName}</p>
+                </div>
+              ))}
+              {evidenceActions.length === 0 && <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No assigned actions waiting for evidence.</p>}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ManagerDashboard({
+  groupedAudits,
+  assignedAudits,
+  actions,
+  onOpenAudit,
+  onAdvanceAction,
+  recurringFailedQuestions,
+}: {
+  groupedAudits: Record<AuditStatus, Audit[]>;
+  assignedAudits: Audit[];
+  actions: ActionItem[];
+  onOpenAudit: (auditId: string) => void;
+  onAdvanceAction: (actionId: string, nextStatus?: ActionStatus) => void;
+  recurringFailedQuestions: [string, number][];
+}) {
+  const overdueAudits = useMemo(
+    () => assignedAudits.filter((audit) => getAuditTrafficStatus(audit.dueHours) === "red"),
+    [assignedAudits],
+  );
+  const overdueActions = useMemo(
+    () => actions.filter((action) => isOverdue(action)),
+    [actions],
+  );
+  const escalatedActions = useMemo(
+    () => actions.filter((action) => isEscalated(action)),
+    [actions],
+  );
+  const stuckActions = useMemo(
+    () => actions.filter((action) => isStuck(action)),
+    [actions],
+  );
+  const auditsDueToday = useMemo(
+    () => assignedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours <= 24),
+    [assignedAudits],
+  );
+  const actionsDueToday = useMemo(
+    () => actions.filter((action) => action.dueHours >= 0 && action.dueHours <= 24 && action.status !== "Closed"),
+    [actions],
+  );
+  const repeatedTop3 = useMemo(() => recurringFailedQuestions.slice(0, 3), [recurringFailedQuestions]);
+  const allClear = overdueAudits.length === 0 && overdueActions.length === 0 && escalatedActions.length === 0 && stuckActions.length === 0;
+  const totalLiveAudits = Math.max(1, groupedAudits.red.length + groupedAudits.amber.length + groupedAudits.green.length);
+  const openActionsCount = actions.filter((item) => item.status === "Open").length;
+  const inProgressActionsCount = actions.filter((item) => item.status === "In Progress").length;
+  const awaitingVerificationCount = actions.filter((item) => item.status === "Awaiting Verification").length;
+  const closedActionsCount = actions.filter((item) => item.status === "Closed").length;
+  const totalActionsCount = Math.max(1, actions.length);
+  const [selectedLiveGraph, setSelectedLiveGraph] = useState<"auditTraffic" | "actionStatus" | "riskFocus">("auditTraffic");
+  const [selectedGraphType, setSelectedGraphType] = useState<"column" | "line" | "area" | "bar">("column");
+
+  const {
+    showLayoutOptions,
+    setShowLayoutOptions,
+    sectionOrder,
+    sectionVisibility,
+    visibleSectionOrder,
+    toggleSection,
+    moveSection,
+  } = useDashboardSectionLayout("qms-precast-layout-manager", ["immediateAttention", "todaysWork", "liveBoard", "liveGraphs", "repeatIssues"]);
+
+  const renderSection = (section: string) => {
+    if (section === "immediateAttention") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="shield" eyebrow="Immediate attention" title="Immediate attention" subtitle="Items that need action now." />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue actions {overdueActions.length}</div>
+            <div className="rounded-full bg-rose-200 px-3 py-1 text-xs font-semibold text-rose-900">Escalated {escalatedActions.length}</div>
+            <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Stuck {stuckActions.length}</div>
+            <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue audits {overdueAudits.length}</div>
+          </div>
+          {allClear ? (
+            <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm font-semibold text-emerald-800">
+              All clear - No overdue audits, actions, or critical issues.
+            </div>
+          ) : (
+            <div className="mt-3 space-y-2">
+              {[...escalatedActions.slice(0, 2), ...stuckActions.slice(0, 2), ...overdueActions.slice(0, 2)].slice(0, 4).map((action) => (
+                <div key={`attention-${action.id}`} className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5">
+                  <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
+                  <p className="mt-1 text-xs text-slate-500">{action.auditName} - {action.assignedToName}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      );
+    }
+    if (section === "todaysWork") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="clock" eyebrow="Today's work" title="Today's work" subtitle="Audits and actions due today." />
+          <div className="mt-2 grid gap-3 lg:grid-cols-2">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Audits due today</p>
+              {auditsDueToday.length === 0 ? (
+                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No audits due today.</div>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  {auditsDueToday.slice(0, 4).map((audit) => (
+                    <button key={audit.id} onClick={() => onOpenAudit(audit.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left">
+                      <p className="text-sm font-semibold text-slate-900">{audit.name}</p>
+                      <p className="mt-1 text-xs text-slate-500">{getDueWarning(audit.dueHours)}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Actions due today</p>
+              {actionsDueToday.length === 0 ? (
+                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No actions due today.</div>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  {actionsDueToday.slice(0, 4).map((action) => (
+                    <button key={action.id} onClick={() => onAdvanceAction(action.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left">
+                      <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
+                      <p className="mt-1 text-xs text-slate-500">{action.assignedToName} - {action.dueLabel}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      );
+    }
+    if (section === "liveBoard") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="dashboard" eyebrow="Live audit board" title="Live audit board" subtitle="Red, amber, green grouped audits." />
+          <div className="mt-2 grid gap-2">
+            <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red.slice(0, 1)} status="red" onOpenAudit={onOpenAudit} />
+            <TrafficLane title="Amber" subtitle={`<${amberThresholdHours}h remaining`} audits={groupedAudits.amber.slice(0, 1)} status="amber" onOpenAudit={onOpenAudit} />
+            <TrafficLane title="Green" subtitle={`>${amberThresholdHours}h remaining`} audits={groupedAudits.green.slice(0, 1)} status="green" onOpenAudit={onOpenAudit} />
+          </div>
+        </section>
+      );
+    }
+    if (section === "liveGraphs") {
+      const graphSeries =
+        selectedLiveGraph === "auditTraffic"
+          ? [
+              { label: "Red", value: groupedAudits.red.length, tone: "red" as const },
+              { label: "Amber", value: groupedAudits.amber.length, tone: "amber" as const },
+              { label: "Green", value: groupedAudits.green.length, tone: "green" as const },
+            ]
+          : selectedLiveGraph === "actionStatus"
+            ? [
+                { label: "Open", value: openActionsCount, tone: "red" as const },
+                { label: "In progress", value: inProgressActionsCount, tone: "amber" as const },
+                { label: "Awaiting verification", value: awaitingVerificationCount, tone: "amber" as const },
+                { label: "Closed", value: closedActionsCount, tone: "green" as const },
+              ]
+            : [
+                { label: "Overdue audits", value: overdueAudits.length, tone: "red" as const },
+                { label: "Overdue actions", value: overdueActions.length, tone: "red" as const },
+                { label: "Escalated", value: escalatedActions.length, tone: "amber" as const },
+                { label: "Stuck", value: stuckActions.length, tone: "amber" as const },
+              ];
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="chart" eyebrow="Live graphs" title="Live performance graphs" subtitle="Real-time compliance and action movement." />
+          <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Graph view</p>
+              <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+                <div className="relative w-full sm:w-[16rem]">
+                  <select
+                    value={selectedLiveGraph}
+                    onChange={(event) => setSelectedLiveGraph(event.target.value as "auditTraffic" | "actionStatus" | "riskFocus")}
+                    className="h-9 w-full appearance-none rounded-lg border border-slate-200 bg-slate-50 px-3 pr-8 text-sm font-medium text-slate-700 outline-none transition focus:border-slate-400 focus:bg-white"
+                  >
+                    <option value="auditTraffic">Audit traffic mix</option>
+                    <option value="actionStatus">Action status mix</option>
+                    <option value="riskFocus">Risk focus and pressure points</option>
+                  </select>
+                  <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-slate-400">▾</span>
+                </div>
+                <div className="relative w-full sm:w-[10rem]">
+                  <select
+                    value={selectedGraphType}
+                    onChange={(event) => setSelectedGraphType(event.target.value as "column" | "line" | "area" | "bar")}
+                    className="h-9 w-full appearance-none rounded-lg border border-slate-200 bg-slate-50 px-3 pr-8 text-sm font-medium text-slate-700 outline-none transition focus:border-slate-400 focus:bg-white"
+                  >
+                    <option value="column">Column</option>
+                    <option value="line">Line</option>
+                    <option value="area">Area</option>
+                    <option value="bar">Bar</option>
+                  </select>
+                  <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-slate-400">▾</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <LiveGraphChart data={graphSeries} chartType={selectedGraphType} />
+            {selectedLiveGraph === "auditTraffic" && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Audit traffic mix</p>
+                <TrendBar label="Red" value={groupedAudits.red.length} total={totalLiveAudits} tone="red" />
+                <TrendBar label="Amber" value={groupedAudits.amber.length} total={totalLiveAudits} tone="amber" />
+                <TrendBar label="Green" value={groupedAudits.green.length} total={totalLiveAudits} tone="green" />
+              </div>
+            )}
+            {selectedLiveGraph === "actionStatus" && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Action status mix</p>
+                <TrendBar label="Open" value={openActionsCount} total={totalActionsCount} tone="red" />
+                <TrendBar label="In progress" value={inProgressActionsCount} total={totalActionsCount} tone="amber" />
+                <TrendBar label="Awaiting verification" value={awaitingVerificationCount} total={totalActionsCount} tone="amber" />
+                <TrendBar label="Closed" value={closedActionsCount} total={totalActionsCount} tone="green" />
+              </div>
+            )}
+            {selectedLiveGraph === "riskFocus" && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Risk focus</p>
+                <TrendBar label="Overdue audits" value={overdueAudits.length} total={Math.max(1, assignedAudits.length)} tone="red" />
+                <TrendBar label="Overdue actions" value={overdueActions.length} total={totalActionsCount} tone="red" />
+                <TrendBar label="Escalated actions" value={escalatedActions.length} total={totalActionsCount} tone="amber" />
+                <TrendBar label="Stuck actions" value={stuckActions.length} total={totalActionsCount} tone="amber" />
+              </div>
+            )}
+          </div>
+        </section>
+      );
+    }
+    return (
+      <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+        <SectionHeader icon="warningTriangle" eyebrow="Repeat issues" title="Top repeated failures" subtitle="Most frequent failed findings this week." />
+        {repeatedTop3.length === 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">All clear - no repeated failures.</div>
+        ) : (
+          <div className="space-y-2">
+            {repeatedTop3.map(([question, count]) => (
+              <div key={`repeat-${question}`} className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
+                {question} failed {count} time{count === 1 ? "" : "s"} this week
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    );
+  };
+
+  const hasImmediateAttention = visibleSectionOrder.includes("immediateAttention");
+  const hasTodaysWork = visibleSectionOrder.includes("todaysWork");
+  const remainingSections = visibleSectionOrder.filter((section) => section !== "immediateAttention" && section !== "todaysWork");
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
+          <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
+            Layout options
+          </button>
+        </div>
+        {showLayoutOptions && (
+          <div className="mt-2 space-y-2">
+            {sectionOrder.map((section, index) => (
+              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
+                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
+                <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
+                <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      {(hasImmediateAttention || hasTodaysWork) && (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {hasTodaysWork && (
+            <div className="lg:h-[21rem] [&>section]:h-full [&>section]:overflow-y-auto">
+              {renderSection("todaysWork")}
+            </div>
+          )}
+          {hasImmediateAttention && (
+            <div className="lg:h-[21rem] [&>section]:h-full [&>section]:overflow-y-auto">
+              {renderSection("immediateAttention")}
+            </div>
+          )}
+        </div>
+      )}
+      {remainingSections.map((section) => renderSection(section))}
+    </div>
+  );
+}
+
+function AdminDashboard({
+  groupedAudits,
+  assignedAudits,
+  actions,
+  pendingSyncCount,
+  failedSyncCount,
+  reportUsersCount,
+  activeSchedulesCount,
+  templatesCount,
+  onOpenAudit,
+  onAdvanceAction,
+}: {
+  groupedAudits: Record<AuditStatus, Audit[]>;
+  assignedAudits: Audit[];
+  actions: ActionItem[];
+  pendingSyncCount: number;
+  failedSyncCount: number;
+  reportUsersCount: number;
+  activeSchedulesCount: number;
+  templatesCount: number;
+  onOpenAudit: (auditId: string) => void;
+  onAdvanceAction: (actionId: string, nextStatus?: ActionStatus) => void;
+}) {
+  const overdueAudits = useMemo(() => assignedAudits.filter((audit) => getAuditTrafficStatus(audit.dueHours) === "red"), [assignedAudits]);
+  const overdueActions = useMemo(() => actions.filter((action) => isOverdue(action)), [actions]);
+  const escalatedActions = useMemo(() => actions.filter((action) => isEscalated(action)), [actions]);
+  const stuckActions = useMemo(() => actions.filter((action) => isStuck(action)), [actions]);
+  const auditsDueToday = useMemo(() => assignedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours <= 24), [assignedAudits]);
+  const actionsDueToday = useMemo(() => actions.filter((action) => action.dueHours >= 0 && action.dueHours <= 24 && action.status !== "Closed"), [actions]);
+  const allClear = overdueAudits.length === 0 && overdueActions.length === 0 && escalatedActions.length === 0 && stuckActions.length === 0;
+
+  const {
+    showLayoutOptions,
+    setShowLayoutOptions,
+    sectionOrder,
+    sectionVisibility,
+    visibleSectionOrder,
+    toggleSection,
+    moveSection,
+  } = useDashboardSectionLayout("qms-precast-layout-admin", ["immediateAttention", "todaysWork", "systemOverview"]);
+
+  const renderSection = (section: string) => {
+    if (section === "immediateAttention") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="shield" eyebrow="Immediate attention" title="Immediate attention" subtitle="Operational issues needing action." />
+          {allClear ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm font-semibold text-emerald-800">All clear - No overdue audits, actions, or critical issues.</div>
+          ) : (
+            <div className="mt-2 flex flex-wrap gap-2">
+              <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue actions {overdueActions.length}</div>
+              <div className="rounded-full bg-rose-200 px-3 py-1 text-xs font-semibold text-rose-900">Escalated {escalatedActions.length}</div>
+              <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Stuck {stuckActions.length}</div>
+              <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue audits {overdueAudits.length}</div>
+            </div>
+          )}
+        </section>
+      );
+    }
+    if (section === "todaysWork") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="clock" eyebrow="Today's work" title="Today's work" subtitle="What must be completed today." />
+          <div className="mt-2 grid gap-3 lg:grid-cols-2">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Audits due today</p>
+              {auditsDueToday.length === 0 ? <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No audits due today.</div> : auditsDueToday.slice(0, 4).map((audit) => (
+                <button key={audit.id} onClick={() => onOpenAudit(audit.id)} className="mt-2 w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left">
+                  <p className="text-sm font-semibold text-slate-900">{audit.name}</p>
+                </button>
+              ))}
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Actions due today</p>
+              {actionsDueToday.length === 0 ? <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No actions due today.</div> : actionsDueToday.slice(0, 4).map((action) => (
+                <button key={action.id} onClick={() => onAdvanceAction(action.id)} className="mt-2 w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left">
+                  <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+      );
+    }
+    return (
+      <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+        <SectionHeader icon="chart" eyebrow="System overview" title="System overview" subtitle="Running state and sync health." />
+        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Total users</p><p className="text-lg font-semibold text-slate-900">{reportUsersCount}</p></div>
+          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Active schedules</p><p className="text-lg font-semibold text-slate-900">{activeSchedulesCount}</p></div>
+          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Audit templates</p><p className="text-lg font-semibold text-slate-900">{templatesCount}</p></div>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">Pending sync {pendingSyncCount}</div>
+          <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Failed sync {failedSyncCount}</div>
+          <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Conflicts {failedSyncCount}</div>
+        </div>
+      </section>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
+          <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
+            Layout options
+          </button>
+        </div>
+        {showLayoutOptions && (
+          <div className="mt-2 space-y-2">
+            {sectionOrder.map((section, index) => (
+              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
+                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
+                <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
+                <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      {visibleSectionOrder.map((section) => renderSection(section))}
+    </div>
+  );
+}
+
+function GodModeDashboard({
+  workspaceValidation,
+  selectedFolder,
+  reportUsersCount,
+  activeSchedulesCount,
+  templatesCount,
+  onValidateWorkspace,
+  onRepairWorkspace,
+  onLoadDemoData,
+  onClearDemoData,
+}: {
+  workspaceValidation: WorkspaceValidation | null;
+  selectedFolder: CompanyFolder | null;
+  reportUsersCount: number;
+  activeSchedulesCount: number;
+  templatesCount: number;
+  onValidateWorkspace: () => void;
+  onRepairWorkspace: () => void;
+  onLoadDemoData: () => void;
+  onClearDemoData: () => void;
+}) {
+  const {
+    showLayoutOptions,
+    setShowLayoutOptions,
+    sectionOrder,
+    sectionVisibility,
+    visibleSectionOrder,
+    toggleSection,
+    moveSection,
+  } = useDashboardSectionLayout("qms-precast-layout-godmode", ["workspaceHealth", "repairActions", "companySetup"]);
+
+  const renderSection = (section: string) => {
+    if (section === "workspaceHealth") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="shield" eyebrow="Workspace health" title="Workspace health" subtitle="Validation and configuration status." />
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <FolderCheckRow label="Google folder connected" ok={Boolean(selectedFolder)} />
+            <FolderCheckRow label="Master sheet valid" ok={Boolean(workspaceValidation?.folders.companyFolder)} />
+            <FolderCheckRow label="Required tabs present" ok={(workspaceValidation?.missingTabs.length || 0) === 0} />
+            <FolderCheckRow label="Schema version valid" ok={Boolean(workspaceValidation?.ok)} />
+          </div>
+        </section>
+      );
+    }
+    if (section === "repairActions") {
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="sync" eyebrow="Repair actions" title="Repair actions" subtitle="Validate and repair the current workspace." />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button onClick={onValidateWorkspace} className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>Validate workspace</button>
+            <button onClick={onRepairWorkspace} className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700">Repair workspace</button>
+            <button
+              type="button"
+              onClick={onLoadDemoData}
+              className="h-11 rounded-xl border border-sky-200 bg-sky-50 px-4 text-sm font-semibold text-sky-800"
+            >
+              Load Demo Data
+            </button>
+            <button
+              type="button"
+              onClick={onClearDemoData}
+              className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700"
+            >
+              Clear Demo Data
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-slate-500">
+            Demo data is local-only and for review; it does not overwrite a linked Google company sheet.
+          </p>
+        </section>
+      );
+    }
+    return (
+      <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+        <SectionHeader icon="chart" eyebrow="Company setup" title="Company setup status" subtitle="Provisioning completeness snapshot." />
+        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Users created</p><p className="text-lg font-semibold text-slate-900">{reportUsersCount}</p></div>
+          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Schedules active</p><p className="text-lg font-semibold text-slate-900">{activeSchedulesCount}</p></div>
+          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Templates present</p><p className="text-lg font-semibold text-slate-900">{templatesCount}</p></div>
+        </div>
+      </section>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
+          <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
+            Layout options
+          </button>
+        </div>
+        {showLayoutOptions && (
+          <div className="mt-2 space-y-2">
+            {sectionOrder.map((section, index) => (
+              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
+                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
+                <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
+                <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      {visibleSectionOrder.map((section) => renderSection(section))}
+    </div>
+  );
+}
+
+function NonConformanceScreen({
+  currentUser,
+  nonConformances,
+  canViewCompletedReports,
+  onSaveProgress,
+  onComplete,
+  onAddEvidence,
+  onExportReport,
+}: {
+  currentUser: User;
+  nonConformances: NonConformanceRecord[];
+  canViewCompletedReports: boolean;
+  onSaveProgress: (
+    ncrId: string,
+    payload: Pick<NonConformanceRecord, "investigationIsoClause" | "investigationNotes" | "rootCause" | "correctiveAction" | "investigationExtraNotes">,
+  ) => void;
+  onComplete: (
+    ncrId: string,
+    payload: Pick<NonConformanceRecord, "investigationIsoClause" | "investigationNotes" | "rootCause" | "correctiveAction" | "investigationExtraNotes">,
+  ) => boolean;
+  onAddEvidence: (ncrId: string, files: FileList) => void;
+  onExportReport: (record: NonConformanceRecord) => void;
+}) {
+  const visible = useMemo(() => {
+    const byRef = [...nonConformances].sort((a, b) => {
+      const left = parseNcrSequence(a.reference) || 0;
+      const right = parseNcrSequence(b.reference) || 0;
+      return left - right;
+    });
+    if (currentUser.role === "Auditor") {
+      return byRef.filter((item) => item.auditorUserId === currentUser.username);
+    }
+    return byRef;
+  }, [nonConformances, currentUser]);
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [isoClause, setIsoClause] = useState("");
+  const [investigationNotes, setInvestigationNotes] = useState("");
+  const [rootCause, setRootCause] = useState("");
+  const [correctiveAction, setCorrectiveAction] = useState("");
+  const [extraNotes, setExtraNotes] = useState("");
+
+  const selected = visible.find((item) => item.id === selectedId) || null;
+  useEffect(() => {
+    if (!selected && visible.length) {
+      setSelectedId(visible[0].id);
+      return;
+    }
+    if (!selected) return;
+    setIsoClause(selected.investigationIsoClause || "");
+    setInvestigationNotes(selected.investigationNotes || "");
+    setRootCause(selected.rootCause || "");
+    setCorrectiveAction(selected.correctiveAction || "");
+    setExtraNotes(selected.investigationExtraNotes || "");
+  }, [selectedId, selected, visible]);
+
+  const completed = visible.filter((item) => item.status === "Completed");
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
+        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Non-conformance register</p>
+        <h2 className="mt-2 text-2xl font-semibold tracking-tight">Escalation and investigation</h2>
+      </section>
+      <section className="rounded-[1.6rem] border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid gap-2">
+          {visible.length === 0 ? (
+            <p className="text-sm text-slate-500">No NCR records yet.</p>
+          ) : (
+            visible.map((item) => (
+              <button key={item.id} onClick={() => setSelectedId(item.id)} className={`grid grid-cols-6 gap-2 rounded-xl border px-3 py-2 text-left ${selectedId === item.id ? "border-slate-900 bg-slate-50" : "border-slate-200 bg-white"}`}>
+                <p className="text-xs font-semibold text-slate-900">{item.reference}</p>
+                <p className="text-xs text-slate-600">{item.site}</p>
+                <p className="text-xs text-slate-600">{item.auditorName}</p>
+                <p className="text-xs text-slate-600">{item.raisedAt}</p>
+                <p className="text-xs text-slate-600">{item.status}</p>
+                <p className="text-xs text-slate-600">{item.assignedLineManager}</p>
+              </button>
+            ))
+          )}
+        </div>
+      </section>
+      {selected && (
+        <section className="rounded-[1.6rem] border border-slate-200 bg-white p-4 shadow-sm">
+          <h3 className="text-base font-semibold text-slate-900">Investigation form - {selected.reference}</h3>
+          <p className="mt-1 text-xs text-slate-500">{selected.auditQuestion}</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <input value={isoClause} onChange={(event) => setIsoClause(event.target.value)} placeholder="ISO clause" className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm" />
+            <textarea value={investigationNotes} onChange={(event) => setInvestigationNotes(event.target.value)} placeholder="Investigation notes" className="min-h-[6rem] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            <textarea value={rootCause} onChange={(event) => setRootCause(event.target.value)} placeholder="Root cause" className="min-h-[6rem] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            <textarea value={correctiveAction} onChange={(event) => setCorrectiveAction(event.target.value)} placeholder="Corrective action" className="min-h-[6rem] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+          </div>
+          <textarea value={extraNotes} onChange={(event) => setExtraNotes(event.target.value)} placeholder="Extra notes" className="mt-2 min-h-[5rem] w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+          <div className="mt-2">
+            <input
+              type="file"
+              multiple
+              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+              className="h-11 max-w-[22rem] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700"
+              onChange={(event) => {
+                if (event.target.files?.length) onAddEvidence(selected.id, event.target.files);
+                event.target.value = "";
+              }}
+            />
+            <p className="mt-1 text-xs text-slate-500">{selected.evidence.length} evidence file(s)</p>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                onSaveProgress(selected.id, {
+                  investigationIsoClause: isoClause,
+                  investigationNotes,
+                  rootCause,
+                  correctiveAction,
+                  investigationExtraNotes: extraNotes,
+                })
+              }
+              className={`h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 ${slatePrimaryCtaInteract}`}
+            >
+              Save progress
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!isoClause.trim() || !investigationNotes.trim() || !rootCause.trim() || !correctiveAction.trim()) {
+                  return;
+                }
+                onComplete(selected.id, {
+                  investigationIsoClause: isoClause,
+                  investigationNotes,
+                  rootCause,
+                  correctiveAction,
+                  investigationExtraNotes: extraNotes,
+                });
+              }}
+              className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
+            >
+              NCR complete
+            </button>
+          </div>
+        </section>
+      )}
+      {canViewCompletedReports && (
+        <section className="rounded-[1.6rem] border border-slate-200 bg-white p-4 shadow-sm">
+          <h3 className="text-base font-semibold text-slate-900">Completed NCR reports</h3>
+          <div className="mt-2 space-y-2">
+            {completed.length === 0 ? (
+              <p className="text-sm text-slate-500">No completed NCR reports yet.</p>
+            ) : (
+              completed.map((item) => (
+                <div key={item.id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-sm text-slate-700">{item.reference} - {item.site} - {item.completedByName || "-"}</p>
+                  <button type="button" onClick={() => onExportReport(item)} className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white">Print / export PDF</button>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 function AuditsScreen({
   currentUser,
   audits,
   groupedAudits,
   drafts,
+  unsyncedAuditIds,
+  userProfilePhotos,
   onOpenAudit,
+  auditAccessMatrix,
+  auditScheduleMatrix,
+  onToggleAuditAccess,
 }: {
   currentUser: User;
   audits: Audit[];
   groupedAudits: Record<AuditStatus, Audit[]>;
   drafts: Record<string, AuditDraft>;
+  unsyncedAuditIds: Set<string>;
+  userProfilePhotos: Record<string, string>;
   onOpenAudit: (auditId: string) => void;
+  auditAccessMatrix: AuditAccessMatrixRow[];
+  auditScheduleMatrix: Record<string, AuditScheduleMatrixInfo>;
+  onToggleAuditAccess: (email: string, auditId: string, currentAccess: AuditAccessLevel) => void;
 }) {
   return (
     <div className="space-y-4">
@@ -5047,15 +8093,7 @@ function AuditsScreen({
         />
       )}
 
-      <TrafficLane
-        title="Green"
-        subtitle={`More than ${amberThresholdHours} hours remaining`}
-        audits={groupedAudits.green}
-        status="green"
-        onOpenAudit={onOpenAudit}
-        expanded
-        drafts={drafts}
-      />
+      <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red} status="red" onOpenAudit={onOpenAudit} expanded drafts={drafts} unsyncedAuditIds={unsyncedAuditIds} />
       <TrafficLane
         title="Amber"
         subtitle={`Less than ${amberThresholdHours} hours remaining`}
@@ -5064,8 +8102,37 @@ function AuditsScreen({
         onOpenAudit={onOpenAudit}
         expanded
         drafts={drafts}
+        unsyncedAuditIds={unsyncedAuditIds}
       />
-      <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red} status="red" onOpenAudit={onOpenAudit} expanded drafts={drafts} />
+      <TrafficLane
+        title="Green"
+        subtitle={`More than ${amberThresholdHours} hours remaining`}
+        audits={groupedAudits.green}
+        status="green"
+        onOpenAudit={onOpenAudit}
+        expanded
+        drafts={drafts}
+        unsyncedAuditIds={unsyncedAuditIds}
+      />
+
+      {currentUser.role !== "Auditor" && (
+        <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+          <SectionHeader
+            icon="user"
+            eyebrow="Access control"
+            title="Audit access matrix"
+            subtitle="Manage exactly which users can access each audit."
+          />
+          <div className="mt-4">
+            <AccessMatrixTable
+              auditAccessMatrix={auditAccessMatrix}
+              auditScheduleMatrix={auditScheduleMatrix}
+              userProfilePhotos={userProfilePhotos}
+              onToggleAuditAccess={onToggleAuditAccess}
+            />
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -5075,21 +8142,29 @@ function ActionsScreen({
   actions,
   actionFilter,
   actionSeverityFilter,
+  actionNcFilter,
+  availableNonConformanceIds,
   availableAuditors,
   onFilterChange,
   onSeverityFilterChange,
+  onNcFilterChange,
   onAdvanceAction,
   onAssignAction,
+  onAddEvidence,
 }: {
   currentUser: User;
   actions: ActionItem[];
   actionFilter: "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity";
   actionSeverityFilter: RiskLevel | "All";
+  actionNcFilter: string;
+  availableNonConformanceIds: string[];
   availableAuditors: string[];
   onFilterChange: (value: "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity") => void;
   onSeverityFilterChange: (value: RiskLevel | "All") => void;
+  onNcFilterChange: (value: string) => void;
   onAdvanceAction: (actionId: string, nextStatus?: ActionStatus) => void;
   onAssignAction: (actionId: string, assignee: string) => void;
+  onAddEvidence: (actionId: string, files: FileList) => void;
 }) {
   const permissions = getRolePermissions(currentUser.role);
   return (
@@ -5097,7 +8172,7 @@ function ActionsScreen({
       <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
         <div className="flex items-start gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
-            <AppIcon name="checklist" className="h-5 w-5" />
+            <AppIcon name="warningTriangle" className="h-5 w-5" />
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">{currentUser.role === "Auditor" ? "My actions" : "Corrective actions"}</p>
@@ -5108,7 +8183,7 @@ function ActionsScreen({
       </section>
 
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-3">
           <select value={actionFilter} onChange={(event) => onFilterChange(event.target.value as "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
             <option value="Open">Open</option>
             <option value="Overdue">Overdue</option>
@@ -5123,6 +8198,14 @@ function ActionsScreen({
             <option value="Medium">Medium</option>
             <option value="Low">Low</option>
           </select>
+          <select value={actionNcFilter} onChange={(event) => onNcFilterChange(event.target.value)} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
+            <option value="All">All non-conformance refs</option>
+            {availableNonConformanceIds.map((reference) => (
+              <option key={reference} value={reference}>
+                {reference}
+              </option>
+            ))}
+          </select>
         </div>
       </section>
 
@@ -5132,18 +8215,52 @@ function ActionsScreen({
         <div className="space-y-3">
           {actions.map((action) => (
             <section key={action.id} className="rounded-[1.6rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
+              {(() => {
+                const urgency = getActionUrgency(action);
+                const urgencyTone =
+                  urgency === "Escalated"
+                    ? "bg-rose-200 text-rose-900"
+                    : urgency === "Overdue"
+                      ? "bg-rose-100 text-rose-700"
+                      : urgency === "Stuck"
+                        ? "bg-amber-100 text-amber-800"
+                        : urgency === "Due soon"
+                          ? "bg-amber-50 text-amber-700"
+                          : "bg-slate-100 text-slate-700";
+                return (
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{action.status}</div>
+                    <div className={`rounded-full px-3 py-1 text-xs font-semibold ${urgencyTone}`}>{urgency}</div>
+                  </div>
+                );
+              })()}
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-slate-900">{action.auditName}</p>
                   <p className="mt-2 text-sm text-slate-600">{action.questionText}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
+                    {action.nonConformanceId && <MetaPill icon="spark" label={action.nonConformanceId} />}
                     <MetaPill icon="spark" label={action.severity} />
                     <MetaPill icon="clipboard" label={action.riskCategory} />
                     <MetaPill icon="user" label={action.assignedToName} />
                     <MetaPill icon="clock" label={action.dueDate || action.dueLabel} />
+                    <MetaPill
+                      icon="camera"
+                      label={
+                        action.evidenceRequired
+                          ? action.evidenceCount === 0
+                            ? "Evidence required"
+                            : `${action.evidenceCount} evidence`
+                          : action.evidenceCount > 0
+                            ? `${action.evidenceCount} evidence`
+                            : "Evidence optional"
+                      }
+                    />
                   </div>
+                  {action.status !== "Closed" && action.evidenceRequired && action.evidenceCount === 0 && (
+                    <p className="mt-2 text-xs font-semibold text-amber-700">Reason not closed: evidence missing.</p>
+                  )}
                 </div>
-                <div className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold bg-slate-100 text-slate-700">{action.status}</div>
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 {permissions.canAssignActions && (
@@ -5154,7 +8271,55 @@ function ActionsScreen({
                   </select>
                 )}
                 <div className="flex flex-wrap gap-2">
-                  {action.status !== "Closed" && <button onClick={() => onAdvanceAction(action.id, action.status === "Open" ? "In Progress" : action.status === "In Progress" ? "Awaiting Verification" : "Closed")} className="h-11 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white">{action.status === "Open" ? "Start action" : action.status === "In Progress" ? "Submit for verification" : "Verify & close"}</button>}
+                  {action.status !== "Closed" && (
+                    <div className="w-full">
+                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Upload evidence</p>
+                      <label className={`inline-flex h-11 w-full cursor-pointer items-center justify-center rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+                        Attach photo evidence
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                          onChange={(event) => {
+                            if (event.target.files?.length) {
+                              onAddEvidence(action.id, event.target.files);
+                              event.target.value = "";
+                            }
+                          }}
+                        />
+                      </label>
+                      <p className="mt-1 text-[11px] text-slate-500">Add photo evidence before submitting for verification.</p>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        title="Fallback file chooser"
+                        className="mt-2 h-9 w-full rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-500"
+                        onChange={(event) => {
+                          if (event.target.files?.length) {
+                            onAddEvidence(action.id, event.target.files);
+                            event.target.value = "";
+                          }
+                        }}
+                      />
+                    </div>
+                  )}
+                  {action.status === "Open" && (
+                    <button onClick={() => onAdvanceAction(action.id, "In Progress")} className={`h-11 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+                      Start action
+                    </button>
+                  )}
+                  {action.status === "Awaiting Verification" && permissions.canVerifyActions && (
+                    <button onClick={() => onAdvanceAction(action.id, "Closed")} className={`h-11 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+                      Verify & close
+                    </button>
+                  )}
+                  {action.status === "In Progress" && (
+                    <button onClick={() => onAdvanceAction(action.id, "Awaiting Verification")} className={`h-11 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+                      Submit for verification
+                    </button>
+                  )}
                   {permissions.canVerifyActions && action.status === "Awaiting Verification" && <button onClick={() => onAdvanceAction(action.id, "Rejected")} className="h-11 rounded-2xl bg-rose-50 px-4 text-sm font-semibold text-rose-700">Reject</button>}
                 </div>
               </div>
@@ -5215,7 +8380,11 @@ function SyncCentreScreen({
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 <div className="rounded-full bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">Retries {item.retryCount}</div>
-                {(item.status === "Failed" || item.status === "Conflict") && <button onClick={() => onRetryItem(item.localId)} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white">Retry</button>}
+                {(item.status === "Failed" || item.status === "Conflict") && (
+                  <button onClick={() => onRetryItem(item.localId)} className={`rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
+                    Retry
+                  </button>
+                )}
                 {permissions.canRepairWorkspace && <button onClick={() => onForceSyncItem(item.localId)} className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">Force sync</button>}
               </div>
             </section>
@@ -5223,6 +8392,158 @@ function SyncCentreScreen({
         </div>
       )}
     </div>
+  );
+}
+
+function AccessMatrixTable({
+  auditAccessMatrix,
+  auditScheduleMatrix,
+  userProfilePhotos,
+  onToggleAuditAccess,
+}: {
+  auditAccessMatrix: AuditAccessMatrixRow[];
+  auditScheduleMatrix: Record<string, AuditScheduleMatrixInfo>;
+  userProfilePhotos: Record<string, string>;
+  onToggleAuditAccess: (email: string, auditId: string, currentAccess: AuditAccessLevel) => void;
+}) {
+  const matrixAuditColumns = auditAccessMatrix[0]?.cells ?? [];
+  const visibleMatrixAuditColumns = matrixAuditColumns;
+  const filteredMatrixRows = auditAccessMatrix;
+  const findProfilePhoto = (matrixUser: AuditAccessMatrixRow) => {
+    const emailKey = matrixUser.email.split("@")[0]?.toLowerCase() || "";
+    const nameKey = matrixUser.name.toLowerCase();
+    const knownUser = users.find((item) => item.name.toLowerCase() === nameKey || item.username === emailKey);
+    return (
+      (knownUser ? userProfilePhotos[knownUser.username] : "") ||
+      userProfilePhotos[emailKey] ||
+      userProfilePhotos[nameKey] ||
+      ""
+    );
+  };
+
+  return (
+    <>
+      {filteredMatrixRows.length === 0 || visibleMatrixAuditColumns.length === 0 ? (
+        <div className="mt-4">
+          <EmptyPanel
+            title="No access matrix available yet"
+            text="Add live audits and users to this company workspace to generate the access matrix."
+          />
+        </div>
+      ) : (
+        <div className="mt-4 rounded-[1.25rem] border border-slate-200 bg-white">
+            <table className="w-full table-fixed border-collapse text-left">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="w-[11rem] bg-slate-50 px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    User
+                  </th>
+                  {visibleMatrixAuditColumns.map((audit) => (
+                    <th
+                      key={audit.auditId}
+                      className="px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500"
+                    >
+                      <span className="block truncate leading-4">{audit.auditName}</span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredMatrixRows.map((user) => (
+                  <tr key={user.email} className="border-b border-slate-100 align-top last:border-b-0">
+                    <td className="bg-white px-2 py-2">
+                      <div className="flex items-center gap-2">
+                        {findProfilePhoto(user) ? (
+                          <img
+                            src={findProfilePhoto(user)}
+                            alt={user.name}
+                            className="h-7 w-7 shrink-0 rounded-full border border-slate-200 object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[10px] font-semibold uppercase tracking-[0.08em] text-white">
+                            {getWorkspaceInitials(user.name)}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold leading-4 text-slate-900">{user.name}</p>
+                          <p className="mt-1 text-[10px] font-semibold text-slate-400">
+                            {user.accessibleCount} audit{user.accessibleCount === 1 ? "" : "s"} accessible
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                    {user.cells.map((cell) => (
+                      <td key={`${user.email}-${cell.auditId}`} className="px-1.5 py-2">
+                        <button
+                          type="button"
+                          onClick={() => onToggleAuditAccess(user.email, cell.auditId, cell.access)}
+                          className={[
+                            "w-full rounded-lg border px-2 py-1.5 text-left",
+                            "cursor-pointer",
+                            cell.access === "Full access"
+                              ? "border-slate-200 bg-slate-950 text-white"
+                              : cell.access === "Oversight"
+                                ? "border-sky-200 bg-sky-50"
+                                : cell.access === "Complete"
+                                  ? "border-emerald-200 bg-emerald-50"
+                                  : "border-slate-200 bg-slate-50",
+                          ].join(" ")}
+                        >
+                          <p
+                            className={[
+                              "text-[10px] font-semibold uppercase tracking-[0.12em]",
+                              cell.access === "Full access"
+                                ? "text-slate-200"
+                                : cell.access === "Oversight"
+                                  ? "text-sky-700"
+                                  : cell.access === "Complete"
+                                    ? "text-emerald-700"
+                                    : "text-slate-500",
+                            ].join(" ")}
+                          >
+                            {cell.access}
+                          </p>
+                          <p className="mt-0.5 text-[9px] font-semibold text-slate-400">
+                            Tap to change
+                          </p>
+                        </button>
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="border-t border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Schedule mapping</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {visibleMatrixAuditColumns.map((audit) => {
+                  const schedule = auditScheduleMatrix[audit.auditId];
+                  return (
+                    <div key={`schedule-map-${audit.auditId}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <p className="text-sm font-semibold text-slate-900">{audit.auditName}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {schedule
+                          ? `${schedule.frequency} • ${schedule.days.join(", ")} • ${schedule.liveTime} • ${schedule.completionHours}h`
+                          : "Not scheduled"}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+        </div>
+      )}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <QuickActionTile title="Users" value={String(filteredMatrixRows.length)} caption="Included in matrix" />
+        <QuickActionTile title="Audits" value={String(visibleMatrixAuditColumns.length)} caption="Available on this workspace" />
+        <QuickActionTile
+          title="Assigned access"
+          value={String(filteredMatrixRows.reduce((sum, row) => sum + row.accessibleCount, 0))}
+          caption="User-to-audit links"
+        />
+      </div>
+    </>
   );
 }
 
@@ -5242,7 +8563,6 @@ function ReportsScreen({
   completedToday,
   offlineQueueCount,
   reportUsers,
-  auditAccessMatrix,
   reportRecipients,
   reportInbox,
   history,
@@ -5277,7 +8597,6 @@ function ReportsScreen({
   completedToday: number;
   offlineQueueCount: number;
   reportUsers: CompanyReportUser[];
-  auditAccessMatrix: AuditAccessMatrixRow[];
   reportRecipients: string[];
   reportInbox: ReportItem[];
   history: HistoryEntry[];
@@ -5292,7 +8611,14 @@ function ReportsScreen({
   onExportAuditPack: () => void;
   onExportAuditPackPdf: () => void;
 }) {
-  const matrixAuditColumns = auditAccessMatrix[0]?.cells ?? [];
+  const [showReportCreator, setShowReportCreator] = useState(false);
+  const [showAuditPackOptions, setShowAuditPackOptions] = useState(false);
+  const [selectedReportGraphType, setSelectedReportGraphType] = useState<"column" | "line" | "area" | "bar">("column");
+  const reportPreviewSeries = [
+    { label: "Completion", value: compliance, tone: "green" as const },
+    { label: "Open actions", value: openActions.length, tone: "amber" as const },
+    { label: "Overdue audits", value: overdueAudits.length, tone: "red" as const },
+  ];
 
   return (
     <div className="space-y-4">
@@ -5313,7 +8639,7 @@ function ReportsScreen({
 
       <section className="grid grid-cols-2 gap-3">
         <MiniMetric label="Compliance" value={`${compliance}%`} />
-        <MiniMetric label="Open actions" value={String(openActions.length)} />
+        <MiniMetric label="Open actions" value={String(openActions.length)} icon="warningTriangle" />
         <MiniMetric label="Overdue audits" value={String(overdueAudits.length)} />
         <MiniMetric label="Evidence items" value={String(evidenceCount)} />
       </section>
@@ -5329,8 +8655,21 @@ function ReportsScreen({
           <div className="rounded-[1.4rem] border border-slate-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
             <div className="mb-3 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-900">Audit status split</p>
-              <p className="text-xs text-slate-500">Live</p>
+              <div className="relative w-[8.5rem]">
+                <select
+                  value={selectedReportGraphType}
+                  onChange={(event) => setSelectedReportGraphType(event.target.value as "column" | "line" | "area" | "bar")}
+                  className="h-8 w-full appearance-none rounded-lg border border-slate-200 bg-slate-50 px-2.5 pr-7 text-xs font-medium text-slate-700 outline-none transition focus:border-slate-400 focus:bg-white"
+                >
+                  <option value="column">Column</option>
+                  <option value="line">Line</option>
+                  <option value="area">Area</option>
+                  <option value="bar">Bar</option>
+                </select>
+                <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-slate-400">▾</span>
+              </div>
             </div>
+            <LiveGraphChart data={reportPreviewSeries} chartType={selectedReportGraphType} />
             <div className="space-y-3">
               <TrendBar label="Completion rate" value={compliance} total={100} tone="green" />
               <TrendBar label="Open actions" value={openActions.length} total={Math.max(1, openActions.length + overdueActions.length + 2)} tone="amber" />
@@ -5353,235 +8692,173 @@ function ReportsScreen({
       </section>
 
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="user"
-          eyebrow="Access control"
-          title="Audit access matrix"
-          subtitle="Managers and above can see exactly which company users can access each audit."
-        />
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <QuickActionTile title="Users" value={String(auditAccessMatrix.length)} caption="Included in matrix" />
-          <QuickActionTile title="Audits" value={String(matrixAuditColumns.length)} caption="Available on this workspace" />
-          <QuickActionTile
-            title="Assigned access"
-            value={String(auditAccessMatrix.reduce((sum, row) => sum + row.accessibleCount, 0))}
-            caption="User-to-audit links"
-          />
-        </div>
-
-        {auditAccessMatrix.length === 0 || matrixAuditColumns.length === 0 ? (
-          <div className="mt-4">
-            <EmptyPanel
-              title="No access matrix available yet"
-              text="Add live audits and users to this company workspace to generate the access matrix."
-            />
-          </div>
-        ) : (
-          <div className="mt-4 overflow-x-auto rounded-[1.5rem] border border-slate-200 bg-white">
-            <table className="min-w-[62rem] border-collapse text-left">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="sticky left-0 z-10 min-w-[13rem] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    User
-                  </th>
-                  {matrixAuditColumns.map((audit) => (
-                    <th
-                      key={audit.auditId}
-                      className="min-w-[10rem] px-4 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500"
-                    >
-                      {audit.auditName}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {auditAccessMatrix.map((user) => (
-                  <tr key={user.email} className="border-b border-slate-100 align-top last:border-b-0">
-                    <td className="sticky left-0 z-10 min-w-[13rem] bg-white px-4 py-4">
-                      <p className="text-sm font-semibold text-slate-900">{user.name}</p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {user.role} • {user.email}
-                      </p>
-                      <p className="mt-2 text-xs font-semibold text-slate-400">
-                        {user.accessibleCount} audit{user.accessibleCount === 1 ? "" : "s"} accessible
-                      </p>
-                    </td>
-                    {user.cells.map((cell) => (
-                      <td key={`${user.email}-${cell.auditId}`} className="px-4 py-4">
-                        <div
-                          className={[
-                            "rounded-2xl border px-3 py-3",
-                            cell.access === "Full access"
-                              ? "border-slate-200 bg-slate-950 text-white"
-                              : cell.access === "Oversight"
-                                ? "border-sky-200 bg-sky-50"
-                                : cell.access === "Complete"
-                                  ? "border-emerald-200 bg-emerald-50"
-                                  : "border-slate-200 bg-slate-50",
-                          ].join(" ")}
-                        >
-                          <p
-                            className={[
-                              "text-xs font-semibold uppercase tracking-[0.18em]",
-                              cell.access === "Full access"
-                                ? "text-slate-200"
-                                : cell.access === "Oversight"
-                                  ? "text-sky-700"
-                                  : cell.access === "Complete"
-                                    ? "text-emerald-700"
-                                    : "text-slate-500",
-                            ].join(" ")}
-                          >
-                            {cell.access}
-                          </p>
-                          <p
-                            className={[
-                              "mt-2 text-xs leading-5",
-                              cell.access === "Full access"
-                                ? "text-slate-300"
-                                : cell.access === "Oversight"
-                                  ? "text-sky-700"
-                                  : cell.access === "Complete"
-                                    ? "text-emerald-700"
-                                    : "text-slate-500",
-                            ].join(" ")}
-                          >
-                            {cell.detail}
-                          </p>
-                        </div>
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader
             icon="chart"
             eyebrow="Export centre"
-            title="Report creator"
+            title="Report / Audit Pack Creator"
             subtitle="Generate the output you need without cluttering the live dashboard."
           />
           <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
             Queue {offlineQueueCount}
           </div>
         </div>
-        <div className="mb-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm font-semibold text-slate-900">Report type</p>
-          <p className="mt-1 text-sm text-slate-500">Pick the report outcome you want to create for this workspace.</p>
-          <div className="mt-3 grid gap-2">
-            {reportTemplates.map((template) => {
-              const selected = template.type === selectedReportTemplate;
-              return (
-                <button
-                  key={template.type}
-                  onClick={() => onSelectReportTemplate(template.type)}
-                  className={[
-                    "rounded-2xl border px-4 py-3 text-left transition",
-                    selected ? "border-slate-900 bg-slate-900 text-white shadow-[0_14px_28px_rgba(15,23,42,0.14)]" : "border-slate-200 bg-white",
-                  ].join(" ")}
-                >
-                  <p className="text-sm font-semibold">{template.title}</p>
-                  <p className={["mt-1 text-xs leading-5", selected ? "text-slate-300" : "text-slate-500"].join(" ")}>{template.subtitle}</p>
-                </button>
-              );
-            })}
-          </div>
-          <div className="mt-4">
-            <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Report title</label>
-            <input
-              value={reportTitleInput}
-              onChange={(event) => onReportTitleChange(event.target.value)}
-              className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-              placeholder="Enter report title"
-            />
-          </div>
-        </div>
-        <div className="mb-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm font-semibold text-slate-900">Who can see this report?</p>
-          <p className="mt-1 text-sm text-slate-500">Select the company users who should see the report in their app.</p>
-          <div className="mt-3 space-y-2">
-            {reportUsers.map((user) => {
-              const selected = reportRecipients.includes(user.email);
-              return (
-                <button
-                  key={user.email}
-                  onClick={() => onToggleReportRecipient(user.email)}
-                  className={[
-                    "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
-                    selected ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white",
-                  ].join(" ")}
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{user.name}</p>
-                    <p className="truncate text-xs text-slate-500">
-                      {user.role} • {user.email}
-                    </p>
-                  </div>
-                  <div
-                    className={[
-                      "rounded-full px-3 py-1 text-xs font-semibold",
-                      selected ? "bg-emerald-500/12 text-emerald-700" : "bg-slate-100 text-slate-500",
-                    ].join(" ")}
-                  >
-                    {selected ? "Can view" : "Select"}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div className="mb-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm font-semibold text-slate-900">Choose what goes into the report</p>
-          <p className="mt-1 text-sm text-slate-500">Select the sections to include in this export.</p>
-          <div className="mt-3 space-y-2">
-            {reportSectionOptions.map((section) => {
-              const selected = selectedReportSections.includes(section.key);
-              return (
-                <button
-                  key={section.key}
-                  onClick={() => onToggleReportSection(section.key)}
-                  className={[
-                    "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
-                    selected ? "border-slate-900 bg-white" : "border-slate-200 bg-white",
-                  ].join(" ")}
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-900">{section.title}</p>
-                    <p className="mt-1 text-xs text-slate-500">{section.description}</p>
-                  </div>
-                  <div
-                    className={[
-                      "rounded-full px-3 py-1 text-xs font-semibold",
-                      selected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500",
-                    ].join(" ")}
-                  >
-                    {selected ? "Included" : "Exclude"}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div className="grid gap-3">
+        {!showReportCreator ? (
           <button
-            onClick={onExportAuditPackPdf}
-            className="h-14 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white"
+            onClick={() => setShowReportCreator(true)}
+            className={`h-12 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
           >
-            Export PDF report
+            Create a report
           </button>
-          <button
-            onClick={onExportAuditPack}
-            className="h-14 rounded-2xl bg-slate-100 px-4 text-sm font-semibold text-slate-800"
-          >
-            Export text audit pack
-          </button>
-        </div>
+        ) : (
+          <>
+            <div className="mb-4 grid gap-2 sm:grid-cols-2">
+              <button
+                onClick={() => setShowAuditPackOptions((current) => !current)}
+                className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 transition-colors duration-200 ease-in-out hover:bg-slate-900/25 hover:text-white"
+              >
+                {showAuditPackOptions ? "Hide audit pack options" : "Create audit pack"}
+              </button>
+              <button
+                onClick={() => onSelectReportTemplate("Evidence pack")}
+                className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 transition-colors duration-200 ease-in-out hover:bg-slate-900/25 hover:text-white"
+              >
+                Evidence pack
+              </button>
+            </div>
+            <div className="mb-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-semibold text-slate-900">Report type</p>
+              <p className="mt-1 text-sm text-slate-500">Pick the report outcome you want to create for this workspace.</p>
+              <div className="mt-3 grid gap-2">
+                {reportTemplates.map((template) => {
+                  const selected = template.type === selectedReportTemplate;
+                  return (
+                    <button
+                      key={template.type}
+                      onClick={() => onSelectReportTemplate(template.type)}
+                      className={[
+                        "rounded-2xl border px-4 py-3 text-left transition-colors duration-200 ease-in-out",
+                        selected ? `border-slate-900 bg-slate-900 text-white shadow-[0_14px_28px_rgba(15,23,42,0.14)] ${slatePrimaryCtaInteract}` : "border-slate-200 bg-white hover:bg-slate-900/25 hover:text-white",
+                      ].join(" ")}
+                    >
+                      <p className="text-sm font-semibold">{template.title}</p>
+                      <p className={["mt-1 text-xs leading-5", selected ? "text-slate-300" : "text-slate-500"].join(" ")}>{template.subtitle}</p>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-4">
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Report title</label>
+                <input
+                  value={reportTitleInput}
+                  onChange={(event) => onReportTitleChange(event.target.value)}
+                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                  placeholder="Enter report title"
+                />
+              </div>
+            </div>
+            <div className="mb-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-semibold text-slate-900">Who can see this report?</p>
+              <p className="mt-1 text-sm text-slate-500">Select the company users who should see the report in their app.</p>
+              <div className="mt-3 space-y-2">
+                {reportUsers.map((user) => {
+                  const selected = reportRecipients.includes(user.email);
+                  return (
+                    <button
+                      key={user.email}
+                      onClick={() => onToggleReportRecipient(user.email)}
+                      className={[
+                        "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
+                        selected ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white",
+                      ].join(" ")}
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-900">{user.name}</p>
+                        <p className="truncate text-xs text-slate-500">
+                          {user.role} • {user.email}
+                        </p>
+                      </div>
+                      <div
+                        className={[
+                          "rounded-full px-3 py-1 text-xs font-semibold",
+                          selected ? "bg-emerald-500/12 text-emerald-700" : "bg-slate-100 text-slate-500",
+                        ].join(" ")}
+                      >
+                        {selected ? "Can view" : "Select"}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="mb-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-semibold text-slate-900">Choose what goes into the report</p>
+              <p className="mt-1 text-sm text-slate-500">Select the sections to include in this export.</p>
+              <div className="mt-3 space-y-2">
+                {reportSectionOptions.map((section) => {
+                  const selected = selectedReportSections.includes(section.key);
+                  return (
+                    <button
+                      key={section.key}
+                      onClick={() => onToggleReportSection(section.key)}
+                      className={[
+                        "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
+                        selected ? "border-slate-900 bg-white" : "border-slate-200 bg-white",
+                      ].join(" ")}
+                    >
+                      <div className="flex min-w-0 flex-1 items-start gap-3">
+                        {section.icon ? (
+                          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
+                            <AppIcon name={section.icon} className="h-[18px] w-[18px]" />
+                          </div>
+                        ) : null}
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-900">{section.title}</p>
+                          <p className="mt-1 text-xs text-slate-500">{section.description}</p>
+                        </div>
+                      </div>
+                      <div
+                        className={[
+                          "rounded-full px-3 py-1 text-xs font-semibold",
+                          selected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500",
+                        ].join(" ")}
+                      >
+                        {selected ? "Included" : "Exclude"}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="grid gap-3">
+              <button
+                onClick={onExportAuditPackPdf}
+                className={`h-14 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
+              >
+                Export PDF report
+              </button>
+              {showAuditPackOptions && (
+                <>
+                  <button
+                    onClick={onExportAuditPack}
+                    className="h-14 rounded-2xl bg-slate-100 px-4 text-sm font-semibold text-slate-800 transition-colors duration-200 ease-in-out hover:bg-slate-900/25 hover:text-white"
+                  >
+                    Export text audit pack
+                  </button>
+                </>
+              )}
+              <button
+                onClick={() => {
+                  setShowReportCreator(false);
+                  setShowAuditPackOptions(false);
+                }}
+                className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors duration-200 ease-in-out hover:bg-slate-900/25 hover:text-white"
+              >
+                Close report options
+              </button>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
@@ -5615,26 +8892,29 @@ function ReportsScreen({
         </div>
       </section>
 
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="clipboard"
-          eyebrow="Included sections"
-          title="Report contents"
-          subtitle="Only the sections marked below will be included in the export."
-        />
-        <div className="mt-4 space-y-3">
-          {reportSectionOptions
-            .filter((section) => selectedReportSections.includes(section.key))
-            .map((section, index) => (
-              <FlowItem
-                key={section.key}
-                number={String(index + 1).padStart(2, "0")}
-                title={section.title}
-                text={section.description}
-              />
-            ))}
-        </div>
-      </section>
+      {showReportCreator && (
+        <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+          <SectionHeader
+            icon="clipboard"
+            eyebrow="Included sections"
+            title="Report contents"
+            subtitle="Only the sections marked below will be included in the export."
+          />
+          <div className="mt-4 space-y-3">
+            {reportSectionOptions
+              .filter((section) => selectedReportSections.includes(section.key))
+              .map((section, index) => (
+                <FlowItem
+                  key={section.key}
+                  number={String(index + 1).padStart(2, "0")}
+                  title={section.title}
+                  text={section.description}
+                  icon={section.icon}
+                />
+              ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -5708,23 +8988,34 @@ function SchedulesScreen({
   return (
     <div className="space-y-4">
       <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
-            <AppIcon name="clock" className="h-5 w-5" />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
+              <AppIcon name="clock" className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Schedule control</p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight">Live schedules</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                Create, edit, archive, and reactivate company audit schedules for {selectedFolder?.name || "the live workspace"}.
+              </p>
+            </div>
           </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Schedule control</p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight">Live schedules</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-300">
-              Create, edit, archive, and reactivate company audit schedules for {selectedFolder?.name || "the live workspace"}.
-            </p>
-          </div>
+          <button onClick={onOpenNew} className={`h-12 rounded-2xl bg-white px-5 text-sm font-semibold text-slate-900 ${slatePrimaryCtaInteract}`}>
+            Add new schedule
+          </button>
         </div>
       </section>
 
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <div className="flex items-end justify-between gap-3">
-          <div className="flex-1">
+          <SectionHeader
+            icon="clock"
+            eyebrow="Schedule list"
+            title={filter}
+            subtitle="Open a schedule to edit its timings, audits, auditors, and revision history."
+          />
+          <div className="w-full max-w-[18rem]">
             <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Schedule view</label>
             <select
               value={filter}
@@ -5736,19 +9027,7 @@ function SchedulesScreen({
               <option value="All schedules">All schedules</option>
             </select>
           </div>
-          <button onClick={onOpenNew} className="h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white">
-            Add new schedule
-          </button>
         </div>
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="clock"
-          eyebrow="Schedule list"
-          title={filter}
-          subtitle="Open a schedule to edit its timings, audits, auditors, and revision history."
-        />
         <div className="mt-4 space-y-3">
           {schedules.length === 0 ? (
             <EmptyPanel title="No schedules in this view" text="Add a new schedule or switch the filter to see archived revisions." />
@@ -5768,7 +9047,7 @@ function SchedulesScreen({
                     </p>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={() => onOpenSchedule(schedule.id)} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white">
+                    <button onClick={() => onOpenSchedule(schedule.id)} className={`rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
                       Edit
                     </button>
                     {schedule.lifecycle === "Archived" && (
@@ -5812,19 +9091,26 @@ function SchedulesScreen({
                 {availableAudits.map((audit) => {
                   const selected = selectedAuditIds.includes(audit.id);
                   return (
-                    <button
+                    <label
                       key={audit.id}
-                      onClick={() => onToggleAudit(audit.id, audit.name)}
                       className={[
                         "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
                         selected ? "border-slate-900 bg-white" : "border-slate-200 bg-white",
                       ].join(" ")}
                     >
-                      <span className="text-sm font-semibold text-slate-900">{audit.name}</span>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => onToggleAudit(audit.id, audit.name)}
+                          className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+                        />
+                        <span className="text-sm font-semibold text-slate-900">{audit.name}</span>
+                      </div>
                       <span className={["rounded-full px-3 py-1 text-xs font-semibold", selected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"].join(" ")}>
                         {selected ? "Added" : "Add"}
                       </span>
-                    </button>
+                    </label>
                   );
                 })}
               </div>
@@ -5839,16 +9125,21 @@ function SchedulesScreen({
                     {scheduleDayOptions.map((day) => {
                       const selected = audit.days.includes(day);
                       return (
-                        <button
+                        <label
                           key={day}
-                          onClick={() => onToggleAuditDay(audit.auditId, day)}
                           className={[
-                            "rounded-full px-3 py-2 text-xs font-semibold",
-                            selected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600",
+                            "inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold",
+                            selected ? `bg-slate-900 text-white ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition-colors duration-200 hover:bg-slate-200",
                           ].join(" ")}
                         >
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => onToggleAuditDay(audit.auditId, day)}
+                            className="h-3.5 w-3.5 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+                          />
                           {day}
-                        </button>
+                        </label>
                       );
                     })}
                   </div>
@@ -5941,26 +9232,33 @@ function SchedulesScreen({
                 {availableAuditors.map((auditor) => {
                   const selected = selectedAuditors.includes(auditor);
                   return (
-                    <button
+                    <label
                       key={auditor}
-                      onClick={() => onToggleAuditor(auditor)}
                       className={[
                         "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
                         selected ? "border-slate-900 bg-white" : "border-slate-200 bg-white",
                       ].join(" ")}
                     >
-                      <span className="text-sm font-semibold text-slate-900">{auditor}</span>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => onToggleAuditor(auditor)}
+                          className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+                        />
+                        <span className="text-sm font-semibold text-slate-900">{auditor}</span>
+                      </div>
                       <span className={["rounded-full px-3 py-1 text-xs font-semibold", selected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"].join(" ")}>
                         {selected ? "Added" : "Add"}
                       </span>
-                    </button>
+                    </label>
                   );
                 })}
               </div>
             </div>
 
             <div className="flex flex-wrap gap-3">
-              <button onClick={onSave} className="h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white">
+              <button onClick={onSave} className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
                 Save schedule
               </button>
               <button onClick={onCancel} className="h-12 rounded-2xl bg-slate-100 px-5 text-sm font-semibold text-slate-700">
@@ -5997,10 +9295,10 @@ function AccountSettingsScreen({
 
   return (
     <div className="space-y-4">
-      <section className={["rounded-[1.75rem] p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]", themeMode === "dark" ? "bg-slate-900" : "bg-slate-950"].join(" ")}>
+      <section className={["rounded-[1.75rem] px-5 py-3 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]", themeMode === "dark" ? "bg-slate-900" : "bg-slate-950"].join(" ")}>
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Account settings</p>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight">{godMode ? "Device settings" : "Manage your profile"}</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-300">
+        <h2 className="mt-1 text-xl font-semibold tracking-tight">{godMode ? "Device settings" : "Manage your profile"}</h2>
+        <p className="mt-1 text-sm leading-5 text-slate-300">
           {godMode
             ? "Control the appearance and device-level settings used for platform setup."
             : "Update your display name, profile photo, and appearance for this device."}
@@ -6022,7 +9320,7 @@ function AccountSettingsScreen({
             <div className="min-w-0">
               <p className="text-sm font-semibold text-slate-900">{accountNameInput || currentUser.name}</p>
               <p className="text-xs text-slate-500">{getRoleDisplayName(currentUser.role)}</p>
-              <label className="mt-3 inline-flex h-10 cursor-pointer items-center rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white">
+              <label className={`mt-3 inline-flex h-10 cursor-pointer items-center rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
                 Upload photo
                 <input
                   type="file"
@@ -6055,7 +9353,7 @@ function AccountSettingsScreen({
                 className={[
                   "rounded-[1.5rem] border px-4 py-4 text-left transition",
                   selected
-                    ? "border-slate-900 bg-slate-900 text-white shadow-[0_16px_28px_rgba(15,23,42,0.18)]"
+                    ? `border-slate-900 bg-slate-900 text-white shadow-[0_16px_28px_rgba(15,23,42,0.18)] ${slatePrimaryCtaInteract}`
                     : "border-slate-200 bg-slate-50 text-slate-700",
                 ].join(" ")}
               >
@@ -6080,12 +9378,336 @@ function AccountSettingsScreen({
           />
           <button
             onClick={onSave}
-            className="mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white"
+            className={`mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
           >
             Save account settings
           </button>
         </section>
       )}
+    </div>
+  );
+}
+
+function EvidencePickerButtons({
+  onFiles,
+  compact = false,
+}: {
+  onFiles: (files: FileList) => void;
+  compact?: boolean;
+}) {
+  const inputClass = compact
+    ? "h-10 max-w-[14rem] rounded-xl border border-slate-300 bg-white px-2 text-xs text-slate-700"
+    : "h-11 max-w-[18rem] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700";
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      <input
+        type="file"
+        accept="image/*"
+        className={inputClass}
+        onChange={(event) => {
+          if (event.target.files?.length) onFiles(event.target.files);
+          event.target.value = "";
+        }}
+      />
+    </div>
+  );
+}
+
+function AuditModeScreen({
+  audit,
+  responses,
+  notes,
+  evidence,
+  evidenceDebugLabel,
+  questionIndex,
+  offlineMode,
+  pendingSyncCount,
+  failedSyncCount,
+  onAnswerSelect,
+  onJumpToQuestion,
+  onNoteChange,
+  onAddEvidence,
+  onComplete,
+  onSaveAndExit,
+}: {
+  audit: Audit;
+  responses: Record<string, Answer>;
+  notes: Record<string, string>;
+  evidence: Record<string, EvidenceItem[]>;
+  evidenceDebugLabel: string;
+  questionIndex: number;
+  offlineMode: boolean;
+  pendingSyncCount: number;
+  failedSyncCount: number;
+  onAnswerSelect: (question: AuditQuestion, answer: Answer) => void;
+  onJumpToQuestion: (index: number) => void;
+  onNoteChange: (questionId: string, value: string) => void;
+  onAddEvidence: (questionId: string, files: FileList) => void;
+  onComplete: () => void;
+  onSaveAndExit: () => void;
+}) {
+  const noteInputRef = useRef<HTMLTextAreaElement | null>(null);
+  if (audit.questions.length === 0) {
+    return (
+      <div className="space-y-4">
+        <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Audit mode</p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight">{audit.name}</h2>
+          <p className="mt-1 text-sm text-slate-300">{getDueWarning(audit.dueHours)}</p>
+        </section>
+        <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-base font-semibold text-slate-900">No questions are available for this audit.</p>
+          <p className="mt-1 text-sm text-slate-500">Save and exit to return to your dashboard.</p>
+          <button type="button" onClick={onSaveAndExit} className="mt-4 h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700">
+            Save &amp; exit
+          </button>
+        </section>
+      </div>
+    );
+  }
+  const safeIndex = Math.max(0, Math.min(questionIndex, audit.questions.length - 1));
+  const currentQuestion = audit.questions[safeIndex];
+  const answeredCount = audit.questions.filter((question) => Boolean(responses[question.id])).length;
+  const syncBadgeClass =
+    failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
+  const syncLabel = failedSyncCount > 0 ? "Sync failed" : pendingSyncCount > 0 ? `${pendingSyncCount} pending sync` : "Synced";
+  const options: Answer[] = currentQuestion.fieldType === "Traffic light" ? ["pass", "nc", "fail"] : ["pass", "fail", "nc"];
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Audit mode</p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight">{audit.name}</h2>
+            <p className="mt-1 text-sm text-slate-300">{getDueWarning(audit.dueHours)}</p>
+          </div>
+          <StatusBadge status={getAuditTrafficStatus(audit.dueHours)} dark />
+        </div>
+        <div className="mt-4 rounded-2xl bg-white/10 px-4 py-3">
+          <p className="text-sm font-semibold">Question {safeIndex + 1} of {audit.questions.length}</p>
+          <div className="mt-2 h-2 rounded-full bg-white/15">
+            <div className="h-2 rounded-full bg-white transition-all" style={{ width: `${(answeredCount / audit.questions.length) * 100}%` }} />
+          </div>
+          <p className="mt-2 text-xs text-slate-300">{answeredCount} answered</p>
+        </div>
+      </section>
+
+      <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{currentQuestion.riskLevel || "Medium"} risk</p>
+        <p className="mt-2 text-xl font-semibold text-slate-900">{currentQuestion.text}</p>
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onAnswerSelect(currentQuestion, option)}
+              className={[
+                "h-16 rounded-2xl border text-lg font-semibold",
+                responses[currentQuestion.id] === option ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-slate-50 text-slate-900",
+              ].join(" ")}
+            >
+              {option === "pass" ? "Pass" : option === "nc" ? "No Conformance" : "Fail"}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => noteInputRef.current?.focus()}
+            className="h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700"
+          >
+            Add note
+          </button>
+          <label className={`inline-flex h-11 cursor-pointer items-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+            Upload photo
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => {
+                if (event.target.files?.length) {
+                  onAddEvidence(currentQuestion.id, event.target.files);
+                  event.target.value = "";
+                }
+              }}
+            />
+          </label>
+          <input
+            type="file"
+            accept="image/*"
+            className="h-11 max-w-[16rem] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700"
+            onChange={(event) => {
+              if (event.target.files?.length) {
+                onAddEvidence(currentQuestion.id, event.target.files);
+                event.target.value = "";
+              }
+            }}
+          />
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <textarea
+            ref={noteInputRef}
+            value={notes[currentQuestion.id] || ""}
+            onChange={(event) => onNoteChange(currentQuestion.id, event.target.value)}
+            placeholder="Add note"
+            className="min-h-[7rem] rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none"
+          />
+          <div className="flex min-h-[7rem] items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4">
+            <label className={`inline-flex h-11 cursor-pointer items-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+              Upload photo
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(event) => {
+                  if (event.target.files?.length) {
+                    onAddEvidence(currentQuestion.id, event.target.files);
+                    event.target.value = "";
+                  }
+                }}
+              />
+            </label>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-500">{evidence[currentQuestion.id]?.length || 0} photo(s) attached</p>
+        {evidenceDebugLabel && <p className="mt-1 text-xs text-sky-700">{evidenceDebugLabel}</p>}
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button type="button" onClick={onSaveAndExit} className="h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700">
+            Save &amp; exit
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (safeIndex === audit.questions.length - 1) onComplete();
+              else onJumpToQuestion(safeIndex + 1);
+            }}
+            className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
+          >
+            {safeIndex === audit.questions.length - 1 ? "Complete audit" : "Next question"}
+          </button>
+          <div className={`ml-auto rounded-full px-3 py-1 text-xs font-semibold ${syncBadgeClass}`}>{syncLabel}</div>
+        </div>
+        {offlineMode && <p className="mt-3 text-sm font-medium text-amber-700">Saved on this tablet. It will sync when online.</p>}
+      </section>
+    </div>
+  );
+}
+
+function IssueFoundPrompt({
+  issue,
+  existingNote,
+  onSave,
+  onCancel,
+}: {
+  issue: IssuePromptState;
+  existingNote: string;
+  onSave: ({ noteValue, escalate }: { noteValue: string; escalate?: boolean }) => void;
+  onCancel: () => void;
+}) {
+  const [noteValue, setNoteValue] = useState(existingNote);
+  const [resolved, setResolved] = useState<boolean | null>(issue.solved);
+  const severity = issue.question.riskLevel || (issue.answer === "fail" ? "Critical" : "High");
+
+  useEffect(() => {
+    setNoteValue(existingNote);
+    setResolved(issue.solved);
+  }, [existingNote, issue.question.id]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-slate-900/45 p-3">
+      <div className="w-full rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-2xl">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-600">Issue found</p>
+        <p className="mt-2 text-sm font-semibold text-slate-900">{issue.question.text}</p>
+        <p className="mt-1 text-xs text-slate-500">Answer: {issue.answer.toUpperCase()} • Risk: {severity}</p>
+        {issue.actionPrompts.length > 0 && (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700">Action prompts</p>
+            <ul className="mt-2 space-y-1 text-sm text-amber-900">
+              {issue.actionPrompts.map((prompt, index) => (
+                <li key={`${prompt}-${index}`}>- {prompt}</li>
+              ))}
+            </ul>
+            <p className="mt-3 text-sm font-semibold text-slate-900">Has this solved the issue?</p>
+            <div className="mt-2 flex gap-2">
+              <button type="button" onClick={() => setResolved(true)} className={`h-10 rounded-xl px-3 text-xs font-semibold text-white ${resolved === true ? "bg-emerald-700" : "bg-emerald-600"} ${slatePrimaryCtaInteract}`}>
+                Yes
+              </button>
+              <button type="button" onClick={() => setResolved(false)} className={`h-10 rounded-xl px-3 text-xs font-semibold text-white ${resolved === false ? "bg-rose-700" : "bg-rose-600"} ${slatePrimaryCtaInteract}`}>
+                No
+              </button>
+            </div>
+            {resolved === true && (
+              <button type="button" onClick={() => onSave({ noteValue, escalate: false })} className={`mt-2 h-10 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
+                Continue audit
+              </button>
+            )}
+            {resolved === false && (
+              <button type="button" onClick={() => onSave({ noteValue, escalate: true })} className={`mt-2 h-10 rounded-xl bg-rose-600 px-3 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
+                Escalation
+              </button>
+            )}
+          </div>
+        )}
+        <textarea
+          value={noteValue}
+          onChange={(event) => setNoteValue(event.target.value)}
+          placeholder="Describe what was found"
+          className="mt-3 min-h-[7rem] w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none"
+        />
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button type="button" onClick={() => onSave({ noteValue, escalate: false })} className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+            Save issue and continue
+          </button>
+          {issue.actionPrompts.length === 0 && (
+            <button type="button" onClick={() => onSave({ noteValue, escalate: true })} className={`h-11 rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+              Escalation
+            </button>
+          )}
+          <button type="button" onClick={onCancel} className="h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700">
+            Change answer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AuditCompletionSummary({
+  summary,
+  hasMoreAudits,
+  onStartNext,
+  onReturnDashboard,
+}: {
+  summary: AuditCompletionSummaryState;
+  hasMoreAudits: boolean;
+  onStartNext: () => void;
+  onReturnDashboard: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <section className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
+        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Audit complete</p>
+        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{summary.auditName}</h2>
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <MiniMetric label="Answered" value={String(summary.questionsAnswered)} />
+          <MiniMetric label="Issues" value={String(summary.issuesFound)} />
+          <MiniMetric label="Actions" value={String(summary.actionsCreated)} />
+          <MiniMetric label="Photos" value={String(summary.photosCaptured)} />
+          <MiniMetric label="Sync" value={summary.syncLabel} />
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button type="button" onClick={onStartNext} className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+            {hasMoreAudits ? "Start next audit" : "All audits complete"}
+          </button>
+          <button type="button" onClick={onReturnDashboard} className="h-12 rounded-2xl border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-700">
+            Return to dashboard
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -6208,24 +9830,10 @@ function CompleteAuditScreen({
                   <div>
                     <p className="text-sm font-semibold text-slate-900">Photo evidence</p>
                     <p className="mt-1 text-xs text-slate-500">
-                      Add images to support failures, no conformances, or proof of completion.
+                      Capture live photos or choose files from the device.
                     </p>
                   </div>
-                  <label className="inline-flex h-10 cursor-pointer items-center rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white">
-                    Add photo
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                      onChange={(event) => {
-                        if (event.target.files?.length) {
-                          onAddEvidence(question.id, event.target.files);
-                          event.target.value = "";
-                        }
-                      }}
-                    />
-                  </label>
+                  <EvidencePickerButtons compact onFiles={(files) => onAddEvidence(question.id, files)} />
                 </div>
                 {questionEvidence.length > 0 && (
                   <div className="mt-3 grid grid-cols-2 gap-2">
@@ -6279,7 +9887,7 @@ function CompleteAuditScreen({
           disabled={!canSubmit}
           className={[
             "h-14 rounded-2xl text-sm font-semibold text-white shadow-[0_14px_28px_rgba(15,23,42,0.18)] transition",
-            canSubmit ? "bg-slate-900 active:scale-[0.99]" : "bg-slate-300",
+            canSubmit ? `bg-slate-900 active:scale-[0.99] ${slatePrimaryCtaInteract}` : "bg-slate-300",
           ].join(" ")}
         >
           Submit
@@ -6372,11 +9980,14 @@ function AdminScreen({
   onOpenOnboardingForm,
   onStartCompanyOnboarding,
   onAddFolder,
+  onOneClickGoogleOnboarding,
   onTemplateNameChange,
   onTemplateQuestionChange,
   onTemplateQuestionTypeChange,
   onAddTemplateQuestion,
   onRemoveTemplateQuestion,
+  onAddAnswerPromptToDraftQuestion,
+  onRemoveAnswerPromptFromDraftQuestion,
   onAddTemplate,
   onToggleTemplate,
   onAddSchedule,
@@ -6385,9 +9996,12 @@ function AdminScreen({
   onVerifyAudits,
   onVerifyResponseSheet,
   onSyncForms,
+  onLoadDemoData,
+  onClearDemoData,
   onInviteEmailChange,
   onInviteRoleChange,
   onInviteUser,
+  standaloneOnboarding = false,
 }: {
   currentUser: User;
   googleConnected: boolean;
@@ -6471,11 +10085,14 @@ function AdminScreen({
   onOpenOnboardingForm: () => void;
   onStartCompanyOnboarding: () => void;
   onAddFolder: () => void;
+  onOneClickGoogleOnboarding: () => void;
   onTemplateNameChange: (value: string) => void;
   onTemplateQuestionChange: (value: string) => void;
   onTemplateQuestionTypeChange: (value: AuditQuestion["fieldType"]) => void;
   onAddTemplateQuestion: () => void;
   onRemoveTemplateQuestion: (questionId: string) => void;
+  onAddAnswerPromptToDraftQuestion: (questionId: string, answer: Answer) => void;
+  onRemoveAnswerPromptFromDraftQuestion: (questionId: string, answer: Answer, promptIndex: number) => void;
   onAddTemplate: () => void;
   onToggleTemplate: (templateId: string) => void;
   onAddSchedule: () => void;
@@ -6484,15 +10101,92 @@ function AdminScreen({
   onVerifyAudits: () => void;
   onVerifyResponseSheet: () => void;
   onSyncForms: () => void;
+  onLoadDemoData: () => void;
+  onClearDemoData: () => void;
   onInviteEmailChange: (value: string) => void;
   onInviteRoleChange: (value: Role) => void;
   onInviteUser: () => void;
+  standaloneOnboarding?: boolean;
 }) {
   const adminOnly = !canAccessAdmin(currentUser.role);
   const masterOnly = currentUser.role !== "Master";
+  const godModeFirstUserInvite =
+    currentUser.role === "Master" &&
+    (companySheetSync?.usersCount ?? 0) === 0 &&
+    invitedUsers.length === 0;
+  const [adminView, setAdminView] = useState<"overview" | "onboarding">(standaloneOnboarding ? "onboarding" : "overview");
+  const onboardingMode = standaloneOnboarding || (canAccessOnboarding(currentUser.role) && adminView === "onboarding");
 
   return (
     <div className="space-y-4">
+      {!onboardingMode && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
+        <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-slate-900">Workspace control</h2>
+            <p className="mt-1 text-sm text-slate-500">Tools and configuration based on your access level.</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              Online
+            </div>
+            <div className="rounded-full bg-fuchsia-100 px-2.5 py-1 text-xs font-semibold text-fuchsia-700">{getRoleDisplayName(currentUser.role)}</div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          {[
+            { key: "overview", icon: "user", title: "User Management", subtitle: "Invite users and manage roles" },
+            { key: "overview", icon: "checklist", title: "Audit Templates", subtitle: "Build and manage audit form templates" },
+            { key: "overview", icon: "sync", title: "Maintenance", subtitle: "Sync queue tools, data export, and reset" },
+          ].map((card) => (
+            <button
+              key={card.title}
+              onClick={() => {
+                if (card.key === "onboarding") {
+                  setAdminView("onboarding");
+                }
+              }}
+              className="flex min-h-[76px] items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-slate-300 hover:bg-white"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-500">
+                  <AppIcon name={card.icon} className="h-4 w-4" />
+                </span>
+                <span className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-900">{card.title}</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">{card.subtitle}</p>
+                </span>
+              </div>
+              <span className="ml-3 text-sm text-slate-400">{">"}</span>
+            </button>
+          ))}
+        </div>
+        {(currentUser.role === "Master" || currentUser.role === "Admin") && (
+          <div className="mt-3 rounded-xl border border-sky-100 bg-sky-50/80 p-3">
+            <button
+              type="button"
+              onClick={onLoadDemoData}
+              className="h-11 rounded-xl border border-sky-200 bg-white px-4 text-sm font-semibold text-sky-900 shadow-sm"
+            >
+              Load Demo Data
+            </button>
+            <button
+              type="button"
+              onClick={onClearDemoData}
+              className="ml-2 h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm"
+            >
+              Clear Demo Data
+            </button>
+            <p className="mt-2 text-xs text-slate-600">
+              Inserts realistic precast H&amp;S sample audits, CAPAs, and sync items in this tablet only — it does not write to linked Google Sheets.
+            </p>
+          </div>
+        )}
+        </section>
+      )}
+
       {masterOnly && (
         <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
           <SectionHeader
@@ -6510,15 +10204,25 @@ function AdminScreen({
         </section>
       )}
 
-      {currentUser.role === "Master" && (
+      {canAccessOnboarding(currentUser.role) && onboardingMode && (
         <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
+          {!standaloneOnboarding && (
+            <div className="mb-3">
+              <button
+                onClick={() => setAdminView("overview")}
+                className="rounded-lg border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/10"
+              >
+                Back to admin overview
+              </button>
+            </div>
+          )}
           <div className="flex items-start gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
               <AppIcon name="shield" className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">God Mode control</p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight">Onboard new company</h2>
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Company setup onboarding</p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight">Onboard new company workspace</h2>
               <p className="mt-2 text-sm leading-6 text-slate-300">
                 Complete the platform setup steps below to connect Google Drive, link the company folder, and make the app live.
               </p>
@@ -6534,7 +10238,7 @@ function AdminScreen({
             <MiniPill label={syncState === "Synced" ? "App live" : "App not live"} active={syncState === "Synced"} />
           </div>
           <div className="mt-5 rounded-[1.5rem] bg-white/6 p-4">
-            <p className="text-sm font-semibold text-white">Setup status</p>
+            <p className="text-sm font-semibold text-white">Onboarding status</p>
             <p className="mt-1 text-sm leading-6 text-slate-300">
               {!backendConfigured
                 ? "The platform backend needs to be configured before Google Drive can be connected."
@@ -6634,7 +10338,7 @@ function AdminScreen({
                   ? "Checking Google Drive..."
                   : !googleConnected
                     ? "Connect Google Drive"
-                    : "Link company workspace"}
+                    : "Start onboarding setup"}
               </button>
               {selectedFolder && (
                 <a
@@ -6673,6 +10377,18 @@ function AdminScreen({
                   : syncState === "Synced"
                     ? "Populate app again"
                     : "Populate app"}
+              </button>
+              <button
+                onClick={onOneClickGoogleOnboarding}
+                disabled={adminOnly || !backendConfigured || folderInspectionLoading}
+                className={[
+                  "h-12 rounded-2xl px-5 text-sm font-semibold transition",
+                  adminOnly || !backendConfigured || folderInspectionLoading
+                    ? "bg-white/10 text-slate-400"
+                    : "bg-sky-300 text-slate-900 shadow-[0_14px_28px_rgba(14,165,233,0.25)] active:scale-[0.99]",
+                ].join(" ")}
+              >
+                Run onboarding (one click)
               </button>
             </div>
             {(folderInspection || selectedFolder) && (
@@ -6769,7 +10485,11 @@ function AdminScreen({
         </section>
       )}
 
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+      {!standaloneOnboarding && (
+        <>
+          {onboardingMode && (
+            <>
+              <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader
             icon="spark"
@@ -6784,7 +10504,7 @@ function AdminScreen({
         <div className="flex flex-wrap gap-3">
           <button
             onClick={onRequestNotifications}
-            className="h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white"
+            className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
           >
             Enable browser notifications
           </button>
@@ -6792,9 +10512,9 @@ function AdminScreen({
             Invite emails open as mail drafts from the device, while live alerts use browser notifications.
           </div>
         </div>
-      </section>
+              </section>
 
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+              <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader
             icon="chart"
@@ -6826,9 +10546,9 @@ function AdminScreen({
             text="Populate the app from a company folder that contains a Company Master Sheet with Users and Schedule tabs."
           />
         )}
-      </section>
+              </section>
 
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+              <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader
             icon="shield"
@@ -6893,17 +10613,17 @@ function AdminScreen({
           />
         )}
         <div className="mt-4 flex flex-wrap gap-3">
-          <button onClick={onValidateWorkspace} className="h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white">
+          <button onClick={onValidateWorkspace} className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
             {workspaceValidationLoading ? "Validating..." : "Validate workspace"}
           </button>
           <button onClick={onRepairWorkspace} className="h-12 rounded-2xl bg-emerald-50 px-5 text-sm font-semibold text-emerald-700">
             Repair / upgrade workspace
           </button>
         </div>
-      </section>
+              </section>
 
-      {syncState === "Synced" && selectedFolder && (
-        <section className="rounded-[1.75rem] border border-emerald-200 bg-gradient-to-b from-emerald-50 to-white p-4 shadow-[0_16px_36px_rgba(16,185,129,0.10)]">
+              {syncState === "Synced" && selectedFolder && (
+                <section className="rounded-[1.75rem] border border-emerald-200 bg-gradient-to-b from-emerald-50 to-white p-4 shadow-[0_16px_36px_rgba(16,185,129,0.10)]">
           <SectionHeader
             icon="check"
             eyebrow="Go live complete"
@@ -6915,8 +10635,10 @@ function AdminScreen({
             <QuickActionTile title="Users" value={String(companySheetSync?.usersCount ?? 0)} caption="Synced from master sheet" />
             <QuickActionTile title="Schedules" value={String(companySheetSync?.schedulesCount ?? 0)} caption="Ready in app" />
           </div>
-        </section>
-      )}
+                </section>
+              )}
+            </>
+          )}
 
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <div className="mb-4 flex items-start justify-between gap-3">
@@ -6964,7 +10686,7 @@ function AdminScreen({
             </button>
             <button
               onClick={onAddTemplate}
-              className="h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white"
+              className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
             >
               Create template
             </button>
@@ -6972,19 +10694,49 @@ function AdminScreen({
           {templateDraftQuestions.length > 0 && (
             <div className="mt-4 space-y-2">
               {templateDraftQuestions.map((question, index) => (
-                <div key={question.id} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">
-                      {index + 1}. {question.text}
-                    </p>
-                    <p className="truncate text-xs text-slate-500">{question.fieldType}</p>
+                <div key={question.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {index + 1}. {question.text}
+                      </p>
+                      <p className="truncate text-xs text-slate-500">{question.fieldType}</p>
+                    </div>
+                    <button
+                      onClick={() => onRemoveTemplateQuestion(question.id)}
+                      className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700"
+                    >
+                      Remove
+                    </button>
                   </div>
-                  <button
-                    onClick={() => onRemoveTemplateQuestion(question.id)}
-                    className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700"
-                  >
-                    Remove
-                  </button>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    {(["pass", "nc", "fail"] as Answer[]).map((answer) => (
+                      <div key={`${question.id}-${answer}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2">
+                        <button
+                          type="button"
+                          onClick={() => onAddAnswerPromptToDraftQuestion(question.id, answer)}
+                          className="w-full rounded-lg bg-white px-2 py-1.5 text-xs font-semibold text-slate-700"
+                        >
+                          Do you need a prompt for this answer?
+                        </button>
+                        <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{answer.toUpperCase()}</p>
+                        <div className="mt-1 space-y-1">
+                          {(question.answerPrompts?.[answer] || []).map((prompt, promptIndex) => (
+                            <div key={`${question.id}-${answer}-${promptIndex}`} className="flex items-start justify-between gap-2 rounded-lg bg-white px-2 py-1.5">
+                              <p className="text-xs text-slate-700">{prompt}</p>
+                              <button
+                                type="button"
+                                onClick={() => onRemoveAnswerPromptFromDraftQuestion(question.id, answer, promptIndex)}
+                                className="text-[10px] font-semibold text-rose-600"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -7017,7 +10769,7 @@ function AdminScreen({
         </div>
       </section>
 
-      <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
+          <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h3 className="text-base font-semibold text-slate-900">User management</h3>
@@ -7048,17 +10800,23 @@ function AdminScreen({
               </div>
               <div>
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Role to create</label>
-                <select
-                  value={inviteRoleInput}
-                  onChange={(event) => onInviteRoleChange(event.target.value as Role)}
-                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-                >
-                  {creatableRoles.map((role) => (
-                    <option key={role} value={role}>
-                      {role}
-                    </option>
-                  ))}
-                </select>
+                {godModeFirstUserInvite ? (
+                  <div className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 text-sm font-semibold leading-[3rem] text-slate-700">
+                    Admin (first company user)
+                  </div>
+                ) : (
+                  <select
+                    value={inviteRoleInput}
+                    onChange={(event) => onInviteRoleChange(event.target.value as Role)}
+                    className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                  >
+                    {creatableRoles.map((role) => (
+                      <option key={role} value={role}>
+                        {role}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
@@ -7068,7 +10826,7 @@ function AdminScreen({
             </div>
             <button
               onClick={onInviteUser}
-              className="mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white transition active:scale-[0.99]"
+              className={`mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white active:scale-[0.99] ${slatePrimaryCtaInteract}`}
             >
               Send onboarding link
             </button>
@@ -7091,7 +10849,7 @@ function AdminScreen({
                   </div>
                   <div className="flex items-center gap-2">
                     {invite.mailtoUrl && (
-                      <a href={invite.mailtoUrl} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white">
+                      <a href={invite.mailtoUrl} className={`inline-flex items-center justify-center rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white no-underline ${slatePrimaryCtaInteract}`}>
                         Open email
                       </a>
                     )}
@@ -7104,7 +10862,9 @@ function AdminScreen({
             </div>
           )}
         </div>
-      </section>
+          </section>
+        </>
+      )}
     </div>
   );
 }
@@ -7114,41 +10874,99 @@ function KpiCard({
   value,
   subtitle,
   tone,
+  dark = false,
 }: {
   title: string;
   value: string;
   subtitle: string;
   tone: "green" | "amber" | "red";
+  dark?: boolean;
 }) {
   const toneClasses =
     tone === "green"
-      ? "bg-emerald-500/12 text-emerald-700 ring-emerald-500/20"
+      ? dark
+        ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/30"
+        : "bg-emerald-500/12 text-emerald-700 ring-emerald-500/20"
       : tone === "red"
-        ? "bg-rose-500/12 text-rose-700 ring-rose-500/20"
-        : "bg-amber-500/12 text-amber-700 ring-amber-500/20";
+        ? dark
+          ? "bg-rose-500/20 text-rose-200 ring-rose-400/30"
+          : "bg-rose-500/12 text-rose-700 ring-rose-500/20"
+        : dark
+          ? "bg-amber-500/20 text-amber-200 ring-amber-400/30"
+          : "bg-amber-500/12 text-amber-700 ring-amber-500/20";
 
   return (
-    <div className="rounded-[1.6rem] border border-slate-200/80 bg-gradient-to-b from-white via-white to-slate-50 p-4 shadow-[0_18px_35px_rgba(15,23,42,0.08)]">
+    <div className={["rounded-[1.6rem] border p-4 shadow-[0_18px_35px_rgba(15,23,42,0.08)]", dark ? "border-sky-700/70 bg-slate-900" : "border-sky-200/80 bg-white"].join(" ")}>
       <div className="flex items-center justify-between gap-3">
         <div className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${toneClasses}`}>{title}</div>
         <div
           className={[
             "h-10 w-10 rounded-2xl",
-            tone === "green" ? "bg-emerald-500/12" : tone === "red" ? "bg-rose-500/12" : "bg-amber-500/12",
+            tone === "green" ? (dark ? "bg-emerald-500/22" : "bg-emerald-500/12") : tone === "red" ? (dark ? "bg-rose-500/22" : "bg-rose-500/12") : (dark ? "bg-amber-500/22" : "bg-amber-500/12"),
           ].join(" ")}
         />
       </div>
-      <p className="mt-4 text-3xl font-semibold tracking-tight text-slate-900">{value}</p>
-      <p className="mt-1 text-sm leading-6 text-slate-500">{subtitle}</p>
+      <p className={["mt-4 text-3xl font-semibold tracking-tight", dark ? "text-slate-100" : "text-slate-900"].join(" ")}>{value}</p>
+      <p className={["mt-1 text-sm leading-6", dark ? "text-slate-300" : "text-slate-500"].join(" ")}>{subtitle}</p>
     </div>
   );
 }
 
-function MiniMetric({ label, value }: { label: string; value: string }) {
+function MiniMetric({
+  label,
+  value,
+  icon,
+  tone = "slate",
+}: {
+  label: string;
+  value: string;
+  icon?: string;
+  tone?: "slate" | "red" | "amber" | "green" | "sky";
+}) {
+  const toneClasses: Record<NonNullable<typeof tone>, { shell: string; icon: string; label: string; value: string }> = {
+    slate: {
+      shell: "border-slate-200/80 bg-gradient-to-b from-white to-slate-50",
+      icon: "text-slate-600",
+      label: "text-slate-400",
+      value: "text-slate-900",
+    },
+    red: {
+      shell: "border-rose-200 bg-gradient-to-b from-rose-50 to-white",
+      icon: "text-rose-600",
+      label: "text-rose-500",
+      value: "text-rose-900",
+    },
+    amber: {
+      shell: "border-amber-200 bg-gradient-to-b from-amber-50 to-white",
+      icon: "text-amber-600",
+      label: "text-amber-600",
+      value: "text-amber-900",
+    },
+    green: {
+      shell: "border-emerald-200 bg-gradient-to-b from-emerald-50 to-white",
+      icon: "text-emerald-600",
+      label: "text-emerald-600",
+      value: "text-emerald-900",
+    },
+    sky: {
+      shell: "border-sky-200 bg-gradient-to-b from-sky-50 to-white",
+      icon: "text-sky-600",
+      label: "text-sky-600",
+      value: "text-sky-900",
+    },
+  };
+  const classes = toneClasses[tone];
   return (
-    <div className="rounded-[1.5rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_14px_30px_rgba(15,23,42,0.07)]">
-      <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">{label}</p>
-      <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
+    <div className={`rounded-[1.5rem] border p-4 shadow-[0_14px_30px_rgba(15,23,42,0.07)] ${classes.shell}`}>
+      <div className="flex items-center gap-2">
+        {icon ? (
+          <span className={classes.icon}>
+            <AppIcon name={icon} className="h-4 w-4" />
+          </span>
+        ) : null}
+        <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${classes.label}`}>{label}</p>
+      </div>
+      <p className={`mt-3 text-2xl font-semibold tracking-tight ${classes.value}`}>{value}</p>
     </div>
   );
 }
@@ -7205,6 +11023,93 @@ function FolderCheckRow({ label, ok }: { label: string; ok: boolean }) {
       >
         {ok ? "Found" : "Missing"}
       </div>
+    </div>
+  );
+}
+
+function LiveGraphChart({
+  data,
+  chartType,
+}: {
+  data: Array<{ label: string; value: number; tone: "green" | "amber" | "red" }>;
+  chartType: "column" | "line" | "area" | "bar";
+}) {
+  const max = Math.max(1, ...data.map((item) => item.value));
+  const toneColor = (tone: "green" | "amber" | "red") => (tone === "green" ? "#10b981" : tone === "amber" ? "#f59e0b" : "#f43f5e");
+
+  if (chartType === "bar") {
+    return (
+      <div className="mb-3 space-y-2 rounded-xl border border-slate-200 bg-white p-3">
+        {data.map((item) => {
+          const width = Math.max(8, Math.round((item.value / max) * 100));
+          return (
+            <div key={`bar-${item.label}`} className="space-y-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-700">{item.label}</span>
+                <span className="text-slate-500">{item.value}</span>
+              </div>
+              <div className="h-2 rounded-full bg-slate-100">
+                <div className="h-2 rounded-full" style={{ width: `${width}%`, backgroundColor: toneColor(item.tone) }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const width = 480;
+  const height = 180;
+  const left = 24;
+  const right = 12;
+  const top = 12;
+  const bottom = 32;
+  const plotW = width - left - right;
+  const plotH = height - top - bottom;
+  const step = data.length > 1 ? plotW / (data.length - 1) : plotW;
+  const points = data.map((item, index) => {
+    const x = left + step * index;
+    const y = top + (1 - item.value / max) * plotH;
+    return { ...item, x, y };
+  });
+  const linePoints = points.map((point) => `${point.x},${point.y}`).join(" ");
+  const areaPoints = `${left},${top + plotH} ${linePoints} ${left + plotW},${top + plotH}`;
+
+  return (
+    <div className="mb-3 rounded-xl border border-slate-200 bg-white p-3">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-44 w-full">
+        <line x1={left} y1={top + plotH} x2={left + plotW} y2={top + plotH} stroke="#cbd5e1" strokeWidth="1" />
+        {chartType === "column" &&
+          points.map((point) => {
+            const barW = Math.max(18, plotW / Math.max(data.length * 2, 6));
+            return (
+              <rect
+                key={`col-${point.label}`}
+                x={point.x - barW / 2}
+                y={point.y}
+                width={barW}
+                height={top + plotH - point.y}
+                rx="4"
+                fill={toneColor(point.tone)}
+                fillOpacity="0.9"
+              />
+            );
+          })}
+        {chartType === "line" && <polyline points={linePoints} fill="none" stroke="#0f172a" strokeWidth="2.5" strokeLinecap="round" />}
+        {chartType === "area" && (
+          <>
+            <polygon points={areaPoints} fill="#0f172a" fillOpacity="0.16" />
+            <polyline points={linePoints} fill="none" stroke="#0f172a" strokeWidth="2.5" strokeLinecap="round" />
+          </>
+        )}
+        {(chartType === "line" || chartType === "area") &&
+          points.map((point) => <circle key={`dot-${point.label}`} cx={point.x} cy={point.y} r="4" fill={toneColor(point.tone)} />)}
+        {points.map((point) => (
+          <text key={`lbl-${point.label}`} x={point.x} y={height - 10} textAnchor="middle" fontSize="10" fill="#64748b">
+            {point.label}
+          </text>
+        ))}
+      </svg>
     </div>
   );
 }
@@ -7339,6 +11244,7 @@ function TrafficLane({
   onOpenAudit,
   expanded = false,
   drafts = {},
+  unsyncedAuditIds = new Set<string>(),
 }: {
   title: string;
   subtitle: string;
@@ -7347,46 +11253,55 @@ function TrafficLane({
   onOpenAudit: (auditId: string) => void;
   expanded?: boolean;
   drafts?: Record<string, AuditDraft>;
+  unsyncedAuditIds?: Set<string>;
 }) {
+  const compact = !expanded;
+  const visibleAudits = compact ? audits.slice(0, 1) : audits;
+  const hiddenCount = Math.max(0, audits.length - visibleAudits.length);
+
   return (
-    <div className={["rounded-[1.6rem] p-4 ring-1 shadow-[0_16px_30px_rgba(15,23,42,0.06)]", statusStyles[status].soft, statusStyles[status].ring].join(" ")}>
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className={`h-3 w-3 rounded-full ${statusStyles[status].dot}`} />
+    <div className={["rounded-[1.2rem] p-2 ring-1 shadow-[0_8px_18px_rgba(15,23,42,0.05)]", statusStyles[status].soft, statusStyles[status].ring].join(" ")}>
+      <div className="mb-1.5 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className={`h-2 w-2 rounded-full ${statusStyles[status].dot}`} />
           <div>
-            <p className={`text-sm font-semibold ${statusStyles[status].text}`}>{title}</p>
-            <p className="text-xs text-slate-500">{subtitle}</p>
+            <p className={`text-xs font-semibold ${statusStyles[status].text}`}>{title}</p>
+            <p className="text-[10px] text-slate-500">{subtitle}</p>
           </div>
         </div>
-        <div className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-slate-700 shadow-[0_4px_12px_rgba(15,23,42,0.06)]">{audits.length}</div>
+        <div className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-slate-700 shadow-[0_3px_10px_rgba(15,23,42,0.05)]">{audits.length}</div>
       </div>
 
-      <div className="space-y-3">
-        {audits.map((audit) => (
+      <div className="space-y-1.5">
+        {visibleAudits.map((audit) => (
           <button
             key={audit.id}
             onClick={() => onOpenAudit(audit.id)}
-            className={["w-full rounded-[1.35rem] bg-white/95 px-4 py-4 text-left shadow-[0_10px_24px_rgba(15,23,42,0.07)] transition active:scale-[0.99]", expanded ? "min-h-[6rem]" : ""].join(" ")}
+            className={["w-full rounded-xl bg-white/95 px-3 py-2 text-left shadow-[0_6px_14px_rgba(15,23,42,0.06)] transition active:scale-[0.99]", expanded ? "min-h-[4.25rem]" : ""].join(" ")}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-slate-900">{audit.name}</p>
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="text-xs font-semibold text-slate-900">{audit.name}</p>
+                <p className="mt-0.5 text-[10px] text-slate-500">
                   {audit.siteArea} • {audit.priority} • Owner {audit.owner}
                 </p>
-                <p className="mt-2 text-xs font-medium text-slate-600">{getDueWarning(audit.dueHours)}</p>
-                <p className="mt-1 text-xs text-slate-400">
-                  {drafts[audit.id] ? `Draft saved ${drafts[audit.id].updatedAt}` : `Last completed ${audit.lastCompletedAt}`}
+                <p className="mt-1 text-[10px] font-medium text-slate-600">{getDueWarning(audit.dueHours)}</p>
+                <p className="mt-0.5 text-[10px] text-slate-400">
+                  {drafts[audit.id] ? `In progress ${drafts[audit.id].updatedAt}` : `Last completed ${audit.lastCompletedAt}`}
                 </p>
+                {unsyncedAuditIds.has(audit.id) && (
+                  <p className="mt-0.5 text-[10px] font-semibold text-amber-700">Audit complete / not synced</p>
+                )}
               </div>
-              <div className="shrink-0 space-y-2 text-right">
+              <div className="shrink-0 space-y-1 text-right">
                 <StatusBadge status={getAuditTrafficStatus(audit.dueHours)} />
-                <div className="text-xs text-slate-400">{audit.dueLabel}</div>
+                <div className="text-[10px] text-slate-400">{audit.dueLabel}</div>
               </div>
             </div>
           </button>
         ))}
-        {audits.length === 0 && <div className="rounded-[1.35rem] bg-white/85 px-4 py-4 text-sm text-slate-500 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">No audits in this group.</div>}
+        {hiddenCount > 0 && <div className="px-1 text-[10px] font-semibold text-slate-500">+{hiddenCount} more</div>}
+        {audits.length === 0 && <div className="rounded-xl bg-white/85 px-3 py-2 text-xs text-slate-500 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">No audits in this group.</div>}
       </div>
     </div>
   );
@@ -7456,7 +11371,11 @@ function AdminAction({
         disabled={disabled}
         className={[
           "shrink-0 rounded-xl px-4 py-3 text-xs font-semibold transition",
-          disabled ? "bg-slate-200 text-slate-400" : active ? "bg-emerald-500/12 text-emerald-700" : "bg-slate-900 text-white",
+          disabled
+            ? "bg-slate-200 text-slate-400"
+            : active
+              ? "bg-emerald-500/12 text-emerald-700"
+              : `bg-slate-900 text-white ${slatePrimaryCtaInteract}`,
         ].join(" ")}
       >
         {active ? "Ready" : actionLabel}
@@ -7465,11 +11384,11 @@ function AdminAction({
   );
 }
 
-function FlowItem({ number, title, text }: { number: string; title: string; text: string }) {
+function FlowItem({ number, title, text, icon }: { number: string; title: string; text: string; icon?: string }) {
   return (
     <div className="flex gap-4 rounded-2xl bg-slate-50 p-4">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-sm font-semibold text-white">
-        {number}
+        {icon ? <AppIcon name={icon} className="h-5 w-5 text-white" /> : number}
       </div>
       <div>
         <p className="text-sm font-semibold text-slate-900">{title}</p>
@@ -7524,7 +11443,7 @@ function ProcessCard({
           disabled={disabled || active}
           className={[
             "mt-3 h-11 w-full rounded-2xl text-sm font-semibold transition",
-            disabled || active ? "bg-slate-200 text-slate-400" : "bg-slate-900 text-white active:scale-[0.99]",
+            disabled || active ? "bg-slate-200 text-slate-400" : `bg-slate-900 text-white active:scale-[0.99] ${slatePrimaryCtaInteract}`,
           ].join(" ")}
         >
           {active ? "Ready" : actionLabel}
