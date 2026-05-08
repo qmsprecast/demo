@@ -1,6 +1,6 @@
 {
-  "name": "BertAudit",
-  "short_name": "QMS",
+  "name": "Audit App",
+  "short_name": "Audit",
   "description": "Health and safety audit system for live company audit workflows.",
   "start_url": "/",
   "scope": "/",

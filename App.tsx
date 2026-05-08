@@ -16,6 +16,7 @@ type ScheduleScope = "Company schedule" | "Personal schedule";
 type OverdueAlertTiming = "At due time" | "30 minutes overdue" | "1 hour overdue" | "2 hours overdue";
 type CompletionCheckTiming = "30 minutes after send" | "1 hour after send" | "At due time" | "2 hours after due";
 type Screen = "dashboard" | "audits" | "actions" | "nonConformance" | "reports" | "sync" | "schedules" | "admin" | "onboarding" | "account" | "complete";
+type NavItemId = Exclude<Screen, "complete">;
 type ThemeMode = "light" | "dark";
 type ReportTemplateType = "Executive summary" | "Overdue audit pack" | "Corrective action pack" | "Evidence pack" | "Full report";
 type ScheduleDay = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
@@ -32,6 +33,9 @@ type User = {
   role: Role;
   name: string;
 };
+
+type RoleNavVisibilityMatrix = Record<Role, Record<NavItemId, boolean>>;
+type RoleSiteSelectorVisibility = Record<Role, boolean>;
 
 type UserInvite = {
   id: string;
@@ -103,6 +107,7 @@ type EvidenceItem = {
 type ActionItem = {
   id: string;
   companyId: string;
+  siteArea?: string;
   auditId: string;
   auditName: string;
   questionId: string;
@@ -151,6 +156,13 @@ type CompanyFolder = {
   onboardingVerified: boolean;
   auditFormsVerified: boolean;
   responseSheetVerified: boolean;
+};
+
+type Site = {
+  id: string;
+  name: string;
+  code: string;
+  active: boolean;
 };
 
 type OnboardingSource = {
@@ -524,7 +536,15 @@ type AuditCompletionSummaryState = {
   syncLabel: string;
 };
 
-const companyName = "BertAudit";
+const companyName = (import.meta.env.VITE_APP_NAME || "Audit App").trim();
+function isDemoRoleSwitchEnabled() {
+  const rawValue = String(import.meta.env.VITE_ENABLE_DEMO_ROLE_SWITCH || "").trim().toLowerCase();
+  return rawValue === "true" || rawValue === "1" || rawValue === "yes" || rawValue === "on";
+}
+function canCreatePreviewProfile() {
+  return isDemoRoleSwitchEnabled();
+}
+const demoRoleSwitchEnabled = isDemoRoleSwitchEnabled();
 const CURRENT_SCHEMA_VERSION = "2.0.0";
 const REQUIRED_WORKSPACE_TABS = ["Onboarding", "Users", "Schedule", "Actions", "Notes", "Config"] as const;
 const ACTION_DUE_DAYS_BY_SEVERITY: Record<RiskLevel, number> = {
@@ -602,7 +622,7 @@ const statusStyles: Record<
   },
 };
 
-const navItems: { id: Exclude<Screen, "complete">; label: string; icon: string }[] = [
+const navItems: { id: NavItemId; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "dashboard" },
   { id: "audits", label: "Audits", icon: "clipboard" },
   { id: "actions", label: "Actions", icon: "warningTriangle" },
@@ -625,6 +645,10 @@ const compactNavLabels: Partial<Record<Exclude<Screen, "complete">, string>> = {
 
 /** Transitions only — hover uses shell-wide 15% contrasting overlay (.qms-app-shell / .qms-login-shell). */
 const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
+const qmsDarkShellGradient =
+  "bg-[radial-gradient(circle_at_top,var(--qms-shell-dark-radial),_transparent_35%),linear-gradient(180deg,var(--qms-shell-dark-start)_0%,var(--qms-shell-dark-mid)_45%,var(--qms-shell-dark-end)_100%)]";
+const qmsLightShellGradient =
+  "bg-[radial-gradient(circle_at_top,var(--qms-shell-light-radial),_transparent_35%),linear-gradient(180deg,var(--qms-shell-light-start)_0%,var(--qms-shell-light-mid)_45%,var(--qms-shell-light-end)_100%)]";
 
 const appMotionStyles = `
   @keyframes qmsFadeSlideUp {
@@ -680,22 +704,22 @@ const appMotionStyles = `
   /* 15% opposite-colour tint (readable: inset shadow sits beneath button content) */
   .qms-app-shell[data-qms-theme="light"] button:enabled:hover,
   .qms-login-shell[data-qms-theme="light"] button:enabled:hover {
-    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-light);
   }
 
   .qms-app-shell[data-qms-theme="dark"] button:enabled:hover,
   .qms-login-shell[data-qms-theme="dark"] button:enabled:hover {
-    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-dark);
   }
 
   .qms-app-shell[data-qms-theme="light"] button:enabled:active,
   .qms-login-shell[data-qms-theme="light"] button:enabled:active {
-    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.22);
+    box-shadow: inset 0 0 0 9999px var(--qms-active-overlay-light);
   }
 
   .qms-app-shell[data-qms-theme="dark"] button:enabled:active,
   .qms-login-shell[data-qms-theme="dark"] button:enabled:active {
-    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.22);
+    box-shadow: inset 0 0 0 9999px var(--qms-active-overlay-dark);
   }
 
   .qms-app-shell button:disabled,
@@ -713,22 +737,22 @@ const appMotionStyles = `
 
   .qms-app-shell[data-qms-theme="light"] label.inline-flex.cursor-pointer:hover,
   .qms-login-shell[data-qms-theme="light"] label.inline-flex.cursor-pointer:hover {
-    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-light);
   }
 
   .qms-app-shell[data-qms-theme="dark"] label.inline-flex.cursor-pointer:hover,
   .qms-login-shell[data-qms-theme="dark"] label.inline-flex.cursor-pointer:hover {
-    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-dark);
   }
 
   .qms-app-shell[data-qms-theme="light"] a.inline-flex[class*="rounded"]:hover,
   .qms-login-shell[data-qms-theme="light"] a.inline-flex[class*="rounded"]:hover {
-    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-light);
   }
 
   .qms-app-shell[data-qms-theme="dark"] a.inline-flex[class*="rounded"]:hover,
   .qms-login-shell[data-qms-theme="dark"] a.inline-flex[class*="rounded"]:hover {
-    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-dark);
   }
 
   .qms-tablet-stage {
@@ -746,7 +770,7 @@ const appMotionStyles = `
     overflow: hidden;
     border-radius: 2.8rem;
     background:
-      linear-gradient(145deg, rgba(2,6,23,0.98), rgba(15,23,42,0.95)),
+      linear-gradient(145deg, var(--qms-navy-950), var(--qms-navy-900)),
       linear-gradient(180deg, rgba(0,0,0,0.4), rgba(0,0,0,0.2));
     box-shadow:
       0 30px 90px rgba(2, 6, 23, 0.45),
@@ -1717,7 +1741,7 @@ function buildDemoPrecastWorkspace(): {
 
   const companySheetSync: CompanySheetSyncStatus = {
     sheetId: "demo-master-sheet",
-    sheetName: "BertAudit Master Sheet",
+    sheetName: `${companyName} Master Sheet`,
     tabs: ["Onboarding", "Users", "Schedule", "Actions", "Notes", "Config"],
     usersCount: 5,
     schedulesCount: 4,
@@ -1760,6 +1784,37 @@ function parsePeopleList(value: string) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeSiteName(value: string | null | undefined) {
+  return String(value || "").trim();
+}
+
+function createSiteId(name: string) {
+  const normalized = normalizeSiteName(name).toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return normalized || `site-${Date.now()}`;
+}
+
+function deriveSitesFromWorkspace(audits: Audit[], schedules: ScheduleItem[], managedSchedules: ManagedSchedule[]) {
+  const names = new Set<string>();
+  audits.forEach((audit) => {
+    const site = normalizeSiteName(audit.siteArea);
+    if (site) names.add(site);
+  });
+  schedules.forEach((schedule) => {
+    const site = normalizeSiteName(schedule.siteArea);
+    if (site) names.add(site);
+  });
+  void managedSchedules;
+  if (names.size === 0) {
+    names.add("Main site");
+  }
+  return Array.from(names).map((name) => ({
+    id: createSiteId(name),
+    name,
+    code: name.slice(0, 3).toUpperCase(),
+    active: true,
+  }));
 }
 
 function safeLower(value: string | null | undefined) {
@@ -1825,6 +1880,36 @@ function canAccessAuditsCentre(role: Role) {
 
 function canEditLegalName(role: Role) {
   return role === "Master" || role === "Admin";
+}
+
+function canRoleAccessNavItem(role: Role, itemId: NavItemId) {
+  if (itemId === "admin") return canAccessAdmin(role);
+  if (itemId === "onboarding") return role === "Master" ? false : canAccessOnboarding(role);
+  if (itemId === "schedules") return canAccessSchedules(role);
+  if (itemId === "reports") return canAccessReports(role);
+  if (itemId === "actions" || itemId === "nonConformance") return canAccessActions(role);
+  if (itemId === "audits") return canAccessAuditsCentre(role);
+  return true;
+}
+
+function buildDefaultRoleNavVisibilityMatrix(): RoleNavVisibilityMatrix {
+  const roles: Role[] = ["Master", "Admin", "Manager", "Auditor"];
+  return roles.reduce((matrix, role) => {
+    const visibility = navItems.reduce(
+      (entry, item) => ({ ...entry, [item.id]: canRoleAccessNavItem(role, item.id) }),
+      {} as Record<NavItemId, boolean>,
+    );
+    return { ...matrix, [role]: visibility };
+  }, {} as RoleNavVisibilityMatrix);
+}
+
+function buildDefaultRoleSiteSelectorVisibility(): RoleSiteSelectorVisibility {
+  return {
+    Master: true,
+    Admin: true,
+    Manager: true,
+    Auditor: true,
+  };
 }
 
 function getRolePermissions(role: Role) {
@@ -2034,6 +2119,7 @@ function parseCompanySheetActions(records: Record<string, string>[], companyFold
       return {
         id: actionId,
         companyId: rowCompanyId || companyFolderId,
+        siteArea: extractByKeys(record, ["site area", "site", "area"]),
         auditId,
         auditName,
         questionId: extractByKeys(record, ["source question id", "question id"]),
@@ -2261,11 +2347,15 @@ function readStoredWorkspaceState() {
       selectedFolderId?: string;
       syncState?: string;
       invitedUsers?: UserInvite[];
+      sites?: Site[];
+      selectedSiteId?: string;
       companySheetSync?: CompanySheetSyncStatus | null;
       reportInbox?: ReportItem[];
       syncQueue?: SyncQueueItem[];
       auditAccessOverrides?: AuditAccessOverrideMap;
       managerAlerts?: ManagerAlert[];
+      roleNavVisibility?: RoleNavVisibilityMatrix;
+      roleSiteSelectorVisibility?: RoleSiteSelectorVisibility;
     };
   } catch {
     return null;
@@ -2311,11 +2401,15 @@ function getWorkspaceBootstrap() {
       selectedFolderId: "",
       syncState: "Synced",
       invitedUsers: [] as UserInvite[],
+      sites: deriveSitesFromWorkspace(demo.audits, initialSchedules, []),
+      selectedSiteId: "",
       companySheetSync: demo.companySheetSync,
       reportInbox: [] as ReportItem[],
       syncQueue: demo.syncQueue,
       auditAccessOverrides: {} as AuditAccessOverrideMap,
       managerAlerts: [] as ManagerAlert[],
+      roleNavVisibility: buildDefaultRoleNavVisibilityMatrix(),
+      roleSiteSelectorVisibility: buildDefaultRoleSiteSelectorVisibility(),
     };
   }
 
@@ -2332,11 +2426,15 @@ function getWorkspaceBootstrap() {
     selectedFolderId: stored?.selectedFolderId ?? "",
     syncState: stored?.syncState ?? "Not synced",
     invitedUsers: stored?.invitedUsers ?? [],
+    sites: stored?.sites ?? deriveSitesFromWorkspace(stored?.audits ?? initialAudits, stored?.schedules ?? initialSchedules, stored?.managedSchedules ?? []),
+    selectedSiteId: stored?.selectedSiteId ?? "",
     companySheetSync: stored?.companySheetSync ?? null,
     reportInbox: stored?.reportInbox ?? [],
     syncQueue: stored?.syncQueue ?? initialSyncQueue,
     auditAccessOverrides: stored?.auditAccessOverrides ?? {},
     managerAlerts: stored?.managerAlerts ?? [],
+    roleNavVisibility: stored?.roleNavVisibility ?? buildDefaultRoleNavVisibilityMatrix(),
+    roleSiteSelectorVisibility: stored?.roleSiteSelectorVisibility ?? buildDefaultRoleSiteSelectorVisibility(),
   };
 }
 
@@ -2503,6 +2601,8 @@ function App() {
   const [actions, setActions] = useState<ActionItem[]>(storedWorkspaceState?.actions || initialActions);
   const [nonConformances, setNonConformances] = useState<NonConformanceRecord[]>(storedWorkspaceState?.nonConformances || initialNonConformances);
   const [schedules, setSchedules] = useState<ScheduleItem[]>(storedWorkspaceState?.schedules || initialSchedules);
+  const [sites, setSites] = useState<Site[]>(storedWorkspaceState?.sites || deriveSitesFromWorkspace(storedWorkspaceState?.audits || initialAudits, storedWorkspaceState?.schedules || initialSchedules, storedWorkspaceState?.managedSchedules || []));
+  const [selectedSiteId, setSelectedSiteId] = useState<string>(storedWorkspaceState?.selectedSiteId || "");
   const [templates, setTemplates] = useState<AuditTemplate[]>(storedWorkspaceState?.templates || initialTemplates);
   const [drafts, setDrafts] = useState<Record<string, AuditDraft>>(storedWorkspaceState?.drafts || {});
   const [activeAuditId, setActiveAuditId] = useState<string | null>(null);
@@ -2579,7 +2679,7 @@ function App() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [companySheetSync, setCompanySheetSync] = useState<CompanySheetSyncStatus | null>(storedWorkspaceState?.companySheetSync || null);
   const [selectedReportTemplate, setSelectedReportTemplate] = useState<ReportTemplateType>("Executive summary");
-  const [reportTitleInput, setReportTitleInput] = useState("BertAudit Executive Summary");
+  const [reportTitleInput, setReportTitleInput] = useState(`${companyName} Executive Summary`);
   const [reportRecipients, setReportRecipients] = useState<string[]>([]);
   const [selectedReportSections, setSelectedReportSections] = useState<ReportSectionKey[]>(
     reportTemplateDefaults["Executive summary"],
@@ -2589,6 +2689,12 @@ function App() {
     storedWorkspaceState?.auditAccessOverrides || {},
   );
   const [managerAlerts, setManagerAlerts] = useState<ManagerAlert[]>(storedWorkspaceState?.managerAlerts || []);
+  const [roleNavVisibility, setRoleNavVisibility] = useState<RoleNavVisibilityMatrix>(
+    storedWorkspaceState?.roleNavVisibility || buildDefaultRoleNavVisibilityMatrix(),
+  );
+  const [roleSiteSelectorVisibility, setRoleSiteSelectorVisibility] = useState<RoleSiteSelectorVisibility>(
+    storedWorkspaceState?.roleSiteSelectorVisibility || buildDefaultRoleSiteSelectorVisibility(),
+  );
   const [actionFilter, setActionFilter] = useState<"Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity">("Open");
   const [actionSeverityFilter, setActionSeverityFilter] = useState<RiskLevel | "All">("All");
   const [actionNcFilter, setActionNcFilter] = useState<string>("All");
@@ -2604,6 +2710,29 @@ function App() {
     [folders, selectedFolderId],
   );
 
+  const selectedSite = useMemo(
+    () => sites.find((site) => site.id === selectedSiteId) ?? null,
+    [sites, selectedSiteId],
+  );
+
+  const siteScopedAudits = useMemo(() => {
+    if (!selectedSite) return audits;
+    const selectedName = normalizeIdentity(selectedSite.name);
+    return audits.filter((audit) => normalizeIdentity(audit.siteArea) === selectedName);
+  }, [audits, selectedSite]);
+
+  const siteScopedActions = useMemo(() => {
+    if (!selectedSite) return actions;
+    const selectedName = normalizeIdentity(selectedSite.name);
+    return actions.filter((action) => !action.siteArea || normalizeIdentity(action.siteArea) === selectedName);
+  }, [actions, selectedSite]);
+
+  const siteScopedSchedules = useMemo(() => {
+    if (!selectedSite) return schedules;
+    const selectedName = normalizeIdentity(selectedSite.name);
+    return schedules.filter((schedule) => normalizeIdentity(schedule.siteArea) === selectedName);
+  }, [schedules, selectedSite]);
+
   const getStoredProfilePhoto = (user: User | null) => {
     if (!user) return "";
     return userProfilePhotos[user.username] || userProfilePhotos[user.name.toLowerCase()] || "";
@@ -2617,26 +2746,26 @@ function App() {
   );
 
   const selectedFolderSchedules = useMemo(
-    () => schedules.filter((schedule) => schedule.companyFolderId === selectedFolderId),
-    [schedules, selectedFolderId],
+    () => siteScopedSchedules.filter((schedule) => schedule.companyFolderId === selectedFolderId),
+    [siteScopedSchedules, selectedFolderId],
   );
 
   const groupedAudits = useMemo(
     () => ({
-      green: audits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "green"),
-      amber: audits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "amber"),
-      red: audits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "red"),
+      green: siteScopedAudits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "green"),
+      amber: siteScopedAudits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "amber"),
+      red: siteScopedAudits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "red"),
     }),
-    [audits],
+    [siteScopedAudits],
   );
 
   const compliance = useMemo(() => {
-    if (audits.length === 0) {
+    if (siteScopedAudits.length === 0) {
       return 0;
     }
-    const safeCount = audits.filter((audit) => getAuditTrafficStatus(audit.dueHours) === "green").length;
-    return Math.round((safeCount / audits.length) * 100);
-  }, [audits]);
+    const safeCount = siteScopedAudits.filter((audit) => getAuditTrafficStatus(audit.dueHours) === "green").length;
+    return Math.round((safeCount / siteScopedAudits.length) * 100);
+  }, [siteScopedAudits]);
 
   const priorCompliance = useMemo(() => {
     const recent = history.slice(0, 6);
@@ -2651,8 +2780,8 @@ function App() {
   const criticalActions = useMemo(() => openActions.filter((action) => action.severity === "Critical" || action.severity === "High"), [openActions]);
   const awaitingVerificationActions = useMemo(() => openActions.filter((action) => action.status === "Awaiting Verification"), [openActions]);
   const overdueAudits = useMemo(
-    () => audits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "red"),
-    [audits],
+    () => siteScopedAudits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "red"),
+    [siteScopedAudits],
   );
   const evidenceCount = useMemo(
     () => Object.values(evidence).reduce((total, items) => total + items.length, 0),
@@ -2672,14 +2801,14 @@ function App() {
     [history],
   );
   const auditCompletionRate = useMemo(() => {
-    const total = audits.length + history.length;
+    const total = siteScopedAudits.length + history.length;
     if (total === 0) return 0;
     return Math.round((history.length / total) * 100);
-  }, [audits.length, history.length]);
+  }, [siteScopedAudits.length, history.length]);
   const actionClosureRate = useMemo(() => {
-    if (actions.length === 0) return 0;
-    return Math.round((actions.filter((item) => item.status === "Closed").length / actions.length) * 100);
-  }, [actions]);
+    if (siteScopedActions.length === 0) return 0;
+    return Math.round((siteScopedActions.filter((item) => item.status === "Closed").length / siteScopedActions.length) * 100);
+  }, [siteScopedActions]);
   const pendingSyncCount = useMemo(
     () => syncQueue.filter((item) => item.status === "Pending Sync" || item.status === "Syncing").length,
     [syncQueue],
@@ -2705,21 +2834,21 @@ function App() {
     [syncQueue],
   );
   const averageActionClosureDays = useMemo(() => {
-    const closed = actions.filter((item) => item.closedAt && item.createdAt);
+    const closed = siteScopedActions.filter((item) => item.closedAt && item.createdAt);
     if (closed.length === 0) return 0;
     const totalDays = closed.reduce((sum, item) => {
       const diff = new Date(item.closedAt).getTime() - new Date(item.createdAt).getTime();
       return sum + Math.max(1, Math.round(diff / 86400000));
     }, 0);
     return Math.round(totalDays / closed.length);
-  }, [actions]);
+  }, [siteScopedActions]);
   const recurringFailedQuestions = useMemo(() => {
     const map = new Map<string, number>();
-    actions.forEach((action) => {
+    siteScopedActions.forEach((action) => {
       map.set(action.questionText, (map.get(action.questionText) || 0) + 1);
     });
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  }, [actions]);
+  }, [siteScopedActions]);
   const topOverdueSchedules = useMemo(() => {
     return managedSchedules
       .filter((item) => computeScheduleHealthState(item) === "Overdue" || computeScheduleHealthState(item) === "Failing")
@@ -2731,7 +2860,7 @@ function App() {
     let total = 0;
     let critical = 0;
     let high = 0;
-    audits.forEach((audit) => {
+    siteScopedAudits.forEach((audit) => {
       levels.push(audit.highestRiskLevel || "Low");
       total += audit.totalRiskScore || 0;
       critical += audit.numberOfCriticalFindings || 0;
@@ -2743,7 +2872,7 @@ function App() {
       criticalFindings: critical,
       highFindings: high,
     };
-  }, [audits]);
+  }, [siteScopedAudits]);
   const visibleActions = useMemo(() => {
     const withEscalation = (items: ActionItem[]) =>
       items.map((action) => ({
@@ -2751,11 +2880,11 @@ function App() {
         escalated: isEscalated(action),
         isStuck: isStuck(action),
       }));
-    if (!currentUser) return withEscalation(actions);
+    if (!currentUser) return withEscalation(siteScopedActions);
     const permissions = getRolePermissions(currentUser.role);
-    if (permissions.canAssignActions) return withEscalation(actions);
-    return withEscalation(actions.filter((action) => action.assignedToName === currentUser.name || action.assignedToUserId === currentUser.username));
-  }, [actions, currentUser]);
+    if (permissions.canAssignActions) return withEscalation(siteScopedActions);
+    return withEscalation(siteScopedActions.filter((action) => action.assignedToName === currentUser.name || action.assignedToUserId === currentUser.username));
+  }, [siteScopedActions, currentUser]);
   const filteredActions = useMemo(() => {
     let next = [...visibleActions];
     if (actionFilter === "Open") {
@@ -2785,10 +2914,10 @@ function App() {
 
   const demoModeActive = useMemo(
     () =>
-      audits.some((audit) => audit.id.startsWith("audit-demo-")) ||
-      actions.some((action) => action.id.startsWith("action-demo-")) ||
+      siteScopedAudits.some((audit) => audit.id.startsWith("audit-demo-")) ||
+      siteScopedActions.some((action) => action.id.startsWith("action-demo-")) ||
       syncQueue.some((item) => item.id.startsWith("sync-demo-")),
-    [audits, actions, syncQueue],
+    [siteScopedAudits, siteScopedActions, syncQueue],
   );
 
   const roleLabel = useMemo(() => {
@@ -2818,35 +2947,18 @@ function App() {
       return [];
     }
     const filtered = navItems.filter((item) => {
-      if (item.id === "admin") {
-        return canAccessAdmin(currentUser.role);
-      }
-      if (item.id === "onboarding") {
-        return canAccessOnboarding(currentUser.role);
-      }
-      if (item.id === "schedules") {
-        return canAccessSchedules(currentUser.role);
-      }
-      if (item.id === "reports") {
-        return canAccessReports(currentUser.role);
-      }
-      if (item.id === "actions") {
-        return canAccessActions(currentUser.role);
-      }
-      if (item.id === "nonConformance") {
-        return canAccessActions(currentUser.role);
-      }
-      if (item.id === "audits") {
-        return canAccessAuditsCentre(currentUser.role);
-      }
-      if (item.id === "sync") {
-        return true;
-      }
-      return true;
+      const baselineVisible = canRoleAccessNavItem(currentUser.role, item.id);
+      const matrixVisible = roleNavVisibility[currentUser.role]?.[item.id] ?? baselineVisible;
+      return baselineVisible && matrixVisible;
     });
 
     // Safety net: always surface onboarding when role has onboarding access.
-    if (canAccessOnboarding(currentUser.role) && !filtered.some((item) => item.id === "onboarding")) {
+    if (
+      currentUser.role !== "Master" &&
+      canAccessOnboarding(currentUser.role) &&
+      (roleNavVisibility[currentUser.role]?.["onboarding"] ?? true) &&
+      !filtered.some((item) => item.id === "onboarding")
+    ) {
       const onboardingItem = navItems.find((item) => item.id === "onboarding");
       if (onboardingItem) {
         const accountIndex = filtered.findIndex((item) => item.id === "account");
@@ -2859,7 +2971,8 @@ function App() {
     }
 
     return filtered;
-  }, [currentUser]);
+  }, [currentUser, roleNavVisibility]);
+  const showSiteSelectorForRole = currentUser ? (roleSiteSelectorVisibility[currentUser.role] ?? true) : true;
 
   const creatableRoles = useMemo(
     () => (currentUser ? getCreatableRoles(currentUser.role) : []),
@@ -2972,19 +3085,19 @@ function App() {
 
   const assignedAudits = useMemo(() => {
     if (!currentUser) {
-      return audits.filter((audit) => !isAuditCompleted(audit));
+      return siteScopedAudits.filter((audit) => !isAuditCompleted(audit));
     }
     if (canAccessAdmin(currentUser.role) || currentUser.role === "Manager") {
-      return audits.filter((audit) => !isAuditCompleted(audit));
+      return siteScopedAudits.filter((audit) => !isAuditCompleted(audit));
     }
-    return audits.filter((audit) => {
+    return siteScopedAudits.filter((audit) => {
       if (isAuditCompleted(audit)) return false;
       if (audit.owner === currentUser.name) return true;
       if (currentUserAuditAccess.allowedAuditIds.has(audit.id)) return true;
       if (currentUserAuditAccess.allowedAuditNames.has(audit.name)) return true;
       return false;
     });
-  }, [audits, currentUser, currentUserAuditAccess]);
+  }, [siteScopedAudits, currentUser, currentUserAuditAccess]);
 
   const availableScheduleAuditors = useMemo(() => {
     const seeded = users.filter((user) => user.role === "Auditor").map((user) => user.name);
@@ -3307,6 +3420,8 @@ function App() {
         drafts,
         managedSchedules,
         folders,
+        sites,
+        selectedSiteId,
         selectedFolderId,
         syncState,
         invitedUsers,
@@ -3315,6 +3430,8 @@ function App() {
         syncQueue,
         auditAccessOverrides,
         managerAlerts,
+        roleNavVisibility,
+        roleSiteSelectorVisibility,
       }),
     );
   }, [
@@ -3327,6 +3444,8 @@ function App() {
     drafts,
     managedSchedules,
     folders,
+    sites,
+    selectedSiteId,
     selectedFolderId,
     syncState,
     invitedUsers,
@@ -3335,6 +3454,8 @@ function App() {
     syncQueue,
     auditAccessOverrides,
     managerAlerts,
+    roleNavVisibility,
+    roleSiteSelectorVisibility,
   ]);
 
   useEffect(() => {
@@ -3353,6 +3474,25 @@ function App() {
       setNotificationsEnabled(Notification.permission === "granted");
     }
   }, []);
+
+  useEffect(() => {
+    const derivedSites = deriveSitesFromWorkspace(audits, schedules, managedSchedules);
+    setSites((current) => {
+      const merged = [...current];
+      derivedSites.forEach((site) => {
+        if (!merged.some((item) => normalizeIdentity(item.name) === normalizeIdentity(site.name))) {
+          merged.push(site);
+        }
+      });
+      return merged;
+    });
+  }, [audits, schedules, managedSchedules]);
+
+  useEffect(() => {
+    if (selectedSiteId && !sites.some((site) => site.id === selectedSiteId && site.active)) {
+      setSelectedSiteId("");
+    }
+  }, [selectedSiteId, sites]);
 
   useEffect(() => {
     window.localStorage.setItem(themeStorageKey, themeMode);
@@ -3754,7 +3894,7 @@ function App() {
     setNotificationsEnabled(granted);
     pushToast(
       granted ? "Notifications enabled" : "Notifications blocked",
-      granted ? "BertAudit can now send live browser alerts." : "Enable browser notifications to receive live alerts.",
+      granted ? `${companyName} can now send live browser alerts.` : "Enable browser notifications to receive live alerts.",
       granted ? "success" : "warning",
     );
   };
@@ -3915,6 +4055,72 @@ function App() {
     setUsername("");
     setPassword("");
     pushToast("Welcome back", `Signed in as ${getRoleDisplayName(match.role)}.`, "success");
+  };
+
+  const switchUserSession = (user: User) => {
+    setCurrentUser(user);
+    setAccountNameInput(user.name);
+    setAccountPhotoUrl(getStoredProfilePhoto(user));
+    window.localStorage.setItem(userStorageKey, JSON.stringify(user));
+    setScreen("dashboard");
+    pushToast("Profile switched", `Now viewing as ${getRoleDisplayName(user.role)}.`, "success");
+  };
+
+  const createRoleFallbackUser = (role: Role): User => {
+    const suffix = role.toLowerCase();
+    return {
+      username: `quick-${suffix}`,
+      password: "demo",
+      role,
+      name:
+        role === "Master"
+          ? "System Setup"
+          : role === "Admin"
+            ? "Audit Control"
+            : role === "Manager"
+              ? "Manager View"
+              : "Auditor View",
+    };
+  };
+
+  const handleQuickRoleSwitch = (role: Role, fallbackLabel: string) => {
+    const existingUser = loginUsers.find((user) => user.role === role);
+    if (existingUser) {
+      switchUserSession(existingUser);
+      return;
+    }
+    if (!canCreatePreviewProfile()) {
+      pushToast("Profile missing", `No ${fallbackLabel} profile is available yet.`, "warning");
+      return;
+    }
+    const fallbackUser = createRoleFallbackUser(role);
+    if (demoRoleSwitchEnabled) {
+      pushToast("Using preview profile", `${fallbackLabel} view opened with a temporary profile.`, "success");
+    }
+    switchUserSession(fallbackUser);
+  };
+
+  const handleToggleRoleNavVisibility = (role: Role, navItemId: NavItemId) => {
+    if (navItemId === "dashboard" || navItemId === "account") {
+      return;
+    }
+    if (!canRoleAccessNavItem(role, navItemId)) {
+      return;
+    }
+    setRoleNavVisibility((current) => ({
+      ...current,
+      [role]: {
+        ...current[role],
+        [navItemId]: !(current[role]?.[navItemId] ?? true),
+      },
+    }));
+  };
+
+  const handleToggleRoleSiteSelectorVisibility = (role: Role) => {
+    setRoleSiteSelectorVisibility((current) => ({
+      ...current,
+      [role]: !(current[role] ?? true),
+    }));
   };
 
   const handleInviteUser = async () => {
@@ -4384,6 +4590,7 @@ function App() {
     const actionItem: ActionItem = {
       id: `${audit.id}-issue-${question.id}-${Date.now()}`,
       companyId: selectedFolderId || selectedFolder?.id || "local-company",
+      siteArea: audit.siteArea,
       auditId: audit.id,
       auditName: audit.name,
       questionId: question.id,
@@ -4615,7 +4822,7 @@ function App() {
       setSignatureSignedAt("");
       setScreen("dashboard");
       pushToast("Queued offline", `${activeAudit.name} has been saved and will sync when the tablet reconnects.`, "warning");
-      triggerNotification("BertAudit", `${activeAudit.name} has been queued offline for sync.`);
+      triggerNotification(companyName, `${activeAudit.name} has been queued offline for sync.`);
       notifySelectedManagersForNonCompliance(activeAudit, currentUser.name, nonComplianceCount, true);
       return;
     }
@@ -5066,6 +5273,41 @@ function App() {
     pushToast("Folder selected", `${folder.name} is now the active company source.`, "success");
   };
 
+  const handleAddSite = () => {
+    if (!canAccessAdmin(currentUser?.role || "Auditor")) {
+      pushToast("Access restricted", "Only Admin and God Mode can add sites.", "warning");
+      return;
+    }
+    const input = window.prompt("New site name");
+    const nextName = String(input || "").trim();
+    if (!nextName) return;
+    const exists = sites.some((site) => normalizeIdentity(site.name) === normalizeIdentity(nextName));
+    if (exists) {
+      pushToast("Site exists", `${nextName} already exists.`, "warning");
+      return;
+    }
+    const newSite: Site = {
+      id: createSiteId(nextName),
+      name: nextName,
+      code: nextName.slice(0, 3).toUpperCase(),
+      active: true,
+    };
+    setSites((current) => [newSite, ...current]);
+    setSelectedSiteId(newSite.id);
+    pushToast("Site added", `${nextName} is now available for schedules and audits.`, "success");
+  };
+
+  const handleArchiveSite = (siteId: string) => {
+    const site = sites.find((item) => item.id === siteId);
+    if (!site) return;
+    if (!window.confirm(`Archive ${site.name}?`)) return;
+    setSites((current) => current.map((item) => (item.id === siteId ? { ...item, active: false } : item)));
+    if (selectedSiteId === siteId) {
+      setSelectedSiteId("");
+    }
+    pushToast("Site archived", `${site.name} has been archived.`, "success");
+  };
+
   const handleVerifyOnboarding = () => {
     if (!selectedFolder) {
       pushToast("Link required", "Link a company folder before verifying onboarding.", "warning");
@@ -5198,7 +5440,7 @@ function App() {
         "Onboarding form unavailable",
         googleConnected
           ? "The onboarding form has not been discovered yet. Refresh the onboarding source or reconnect Google."
-          : "Reconnect Google first so BertAudit can find the onboarding form link.",
+          : `Reconnect Google first so ${companyName} can find the onboarding form link.`,
         "warning",
       );
       return;
@@ -5666,7 +5908,7 @@ function App() {
         title: reportDefinition.title,
         type: "Text audit pack",
         createdAt: timestamp,
-        createdBy: currentUser?.name || "BertAudit",
+        createdBy: currentUser?.name || companyName,
         visibleTo: reportRecipients,
         template: selectedReportTemplate,
       },
@@ -5712,7 +5954,7 @@ function App() {
         title: reportDefinition.title,
         type: "PDF report",
         createdAt: timestamp,
-        createdBy: currentUser?.name || "BertAudit",
+        createdBy: currentUser?.name || companyName,
         visibleTo: reportRecipients,
         template: selectedReportTemplate,
       },
@@ -6152,6 +6394,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    document.title = companyName;
+  }, [companyName]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("google") === "connected") {
       loadGoogleStatus();
@@ -6174,6 +6420,9 @@ function App() {
     if (currentUser && !canAccessAdmin(currentUser.role) && screen === "admin") {
       setScreen("dashboard");
     }
+    if (currentUser?.role === "Master" && screen === "onboarding") {
+      setScreen("admin");
+    }
     if (currentUser && !canAccessOnboarding(currentUser.role) && screen === "onboarding") {
       setScreen("dashboard");
     }
@@ -6192,7 +6441,10 @@ function App() {
     if (currentUser && !canAccessAuditsCentre(currentUser.role) && screen === "audits") {
       setScreen("dashboard");
     }
-  }, [currentUser, screen]);
+    if (currentUser && screen !== "complete" && !visibleNavItems.some((item) => item.id === screen)) {
+      setScreen("dashboard");
+    }
+  }, [currentUser, screen, visibleNavItems]);
 
   if (!currentUser) {
     return (
@@ -6201,8 +6453,8 @@ function App() {
           shellPreviewClass,
           "min-h-[100dvh] px-4 py-6",
           themeMode === "dark"
-            ? "bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_35%),linear-gradient(180deg,_#020617_0%,_#0f172a_45%,_#111827_100%)] text-slate-100"
-            : "bg-[radial-gradient(circle_at_top,_rgba(17,24,39,0.08),_transparent_35%),linear-gradient(180deg,_#eef4f7_0%,_#f9fbfc_45%,_#e8eff3_100%)] text-slate-900",
+            ? `${qmsDarkShellGradient} text-slate-100`
+            : `${qmsLightShellGradient} text-slate-900`,
         ].join(" ")}
       >
         <style>{appMotionStyles}</style>
@@ -6237,7 +6489,7 @@ function App() {
             <div className="qms-login-grid">
               <div>
                 <div className="mb-6 flex items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-900 text-lg font-semibold tracking-[0.28em] text-white">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--qms-teal-500)] text-lg font-semibold tracking-[0.28em] text-[var(--qms-navy-950)]">
                     QMS
                   </div>
                   <div>
@@ -6317,7 +6569,7 @@ function App() {
 
                 <button
                   onClick={handleLogin}
-                  className={`mt-6 h-14 w-full rounded-2xl bg-slate-900 text-base font-semibold text-white shadow-[0_16px_30px_rgba(15,23,42,0.24)] active:scale-[0.99] ${slatePrimaryCtaInteract}`}
+                  className={`mt-6 h-14 w-full rounded-2xl bg-[var(--qms-teal-500)] text-base font-semibold text-[var(--qms-navy-950)] shadow-[0_16px_30px_rgba(20,211,166,0.26)] active:scale-[0.99] ${slatePrimaryCtaInteract}`}
                 >
                   Sign in
                 </button>
@@ -6338,8 +6590,8 @@ function App() {
         shellPreviewClass,
         "h-[100dvh] overflow-hidden px-2 py-2 sm:px-3 sm:py-3",
         themeMode === "dark"
-          ? "bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.15),_transparent_32%),linear-gradient(180deg,_#020617_0%,_#0f172a_45%,_#111827_100%)] text-slate-100"
-          : "bg-[radial-gradient(circle_at_top,_rgba(2,132,199,0.12),_transparent_34%),linear-gradient(180deg,_#e4ebf1_0%,_#f1f5f8_45%,_#e3eaf0_100%)] text-slate-900",
+          ? `${qmsDarkShellGradient} text-slate-100`
+          : `${qmsLightShellGradient} text-slate-900`,
         ].join(" ")}
     >
       <style>{appMotionStyles}</style>
@@ -6351,32 +6603,62 @@ function App() {
               "qms-app-shell mx-auto flex h-full w-full flex-col overflow-hidden rounded-[2.25rem] border backdrop-blur",
               themeMode === "dark"
                 ? "border-slate-800/90 bg-slate-950/80 shadow-[0_28px_90px_rgba(2,6,23,0.5)]"
-                : "border-white/80 bg-white/90 shadow-[0_28px_90px_rgba(15,23,42,0.16)]",
+                : "border-[var(--qms-teal-500)] bg-white shadow-[0_28px_90px_rgba(15,23,42,0.16)]",
             ].join(" ")}
           >
-        <header className={["qms-app-header border-b px-3 pb-1 pt-1", themeMode === "dark" ? "border-slate-800 bg-slate-950/80" : "border-slate-200/80 bg-white/90"].join(" ")}>
+        <header className={["qms-app-header border-b px-3 pb-1 pt-1", themeMode === "dark" ? "border-slate-800 bg-slate-950/80" : "border-[var(--qms-teal-500)] bg-white"].join(" ")}>
           <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[9px] font-semibold uppercase tracking-[0.16em]">
-            <div className={["rounded-full px-2.5 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "bg-slate-100 text-slate-500"].join(" ")}>
+            <div className={["rounded-full px-2.5 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--qms-teal-500)] bg-white font-semibold text-[var(--qms-navy-900)]"].join(" ")}>
               Tablet workspace
             </div>
             <div className="flex items-center gap-1">
+              {demoRoleSwitchEnabled && <div className="hidden items-center gap-1 lg:flex">
+                <button
+                  type="button"
+                  onClick={() => handleQuickRoleSwitch("Master", "God Mode")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--qms-teal-500)]/50 bg-slate-900 text-[var(--qms-teal-400)]" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] hover:bg-teal-50"].join(" ")}
+                >
+                  GOD
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleQuickRoleSwitch("Admin", "Audit")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--qms-teal-500)]/50 bg-slate-900 text-[var(--qms-teal-400)]" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] hover:bg-teal-50"].join(" ")}
+                >
+                  AUDIT
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleQuickRoleSwitch("Manager", "Manager")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--qms-teal-500)]/50 bg-slate-900 text-[var(--qms-teal-400)]" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] hover:bg-teal-50"].join(" ")}
+                >
+                  MANAGER
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleQuickRoleSwitch("Auditor", "Auditor")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--qms-teal-500)]/50 bg-slate-900 text-[var(--qms-teal-400)]" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] hover:bg-teal-50"].join(" ")}
+                >
+                  AUDITOR
+                </button>
+              </div>}
               <button
                 type="button"
                 onClick={() => setScreen("dashboard")}
-                className={["rounded-full px-1.5 py-0 text-[8px]", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition-colors duration-200 hover:bg-slate-200"].join(" ")}
+                className={["rounded-full border px-1.5 py-0 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-teal-50"].join(" ")}
               >
                 Layout options
               </button>
               <button
                 onClick={() => setPreviewOrientation(previewOrientation === "landscape" ? "portrait" : "landscape")}
-                className={["rounded-full px-2 py-0.5", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition-colors duration-200 hover:bg-slate-200"].join(" ")}
+                className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-teal-50"].join(" ")}
               >
                 {previewOrientation === "landscape" ? "Portrait preview" : "Landscape preview"}
               </button>
               <div className={["rounded-full px-2 py-0.5", offlineMode ? "bg-amber-500/15 text-amber-600" : "bg-emerald-500/12 text-emerald-700"].join(" ")}>
                 {offlineMode ? "Offline" : "Online"}
               </div>
-              <div className={["rounded-full px-2 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-300" : "bg-slate-100 text-slate-600"].join(" ")}>
+              <div className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-300" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)]"].join(" ")}>
                 {deviceTimeLabel}
               </div>
             </div>
@@ -6385,11 +6667,11 @@ function App() {
             <div className="flex items-center gap-2">
               <button
                 onClick={handleLogout}
-                className={`h-6 shrink-0 rounded-md bg-slate-900 px-2 text-[9px] font-semibold text-white shadow-sm ${slatePrimaryCtaInteract}`}
+                className={`h-6 shrink-0 rounded-md bg-[var(--qms-teal-500)] px-2 text-[9px] font-semibold text-[var(--qms-navy-950)] shadow-sm ${slatePrimaryCtaInteract}`}
               >
                 Logout
               </button>
-              <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-900 text-[9px] font-semibold tracking-[0.08em] text-white">
+              <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--qms-teal-500)] text-[9px] font-semibold tracking-[0.08em] text-[var(--qms-navy-950)]">
                 {accountPhotoUrl ? (
                   <img src={accountPhotoUrl} alt={currentUser.name} className="h-full w-full object-cover" />
                 ) : (
@@ -6406,10 +6688,28 @@ function App() {
                 <p className={["truncate text-[8px] leading-3 tracking-[0.08em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
                   {selectedFolder ? "Live company workspace" : "Health &amp; Safety Audit System"}
                 </p>
+                {showSiteSelectorForRole && (
+                <div className="mt-1">
+                  <select
+                    value={selectedSiteId}
+                    onChange={(event) => setSelectedSiteId(event.target.value)}
+                    className={["h-6 max-w-[12rem] rounded-md border-2 px-2 text-[9px] font-semibold", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-200" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)]"].join(" ")}
+                  >
+                    <option value="">All sites</option>
+                    {sites
+                      .filter((site) => site.active)
+                      .map((site) => (
+                        <option key={site.id} value={site.id}>
+                          {site.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                )}
               </div>
             </div>
 
-            <div className={["qms-app-session-bar mt-0.5 hidden items-center justify-between gap-2 rounded-lg px-2 py-0.5 lg:flex", themeMode === "dark" ? "bg-slate-900" : "bg-slate-50"].join(" ")}>
+            <div className={["qms-app-session-bar mt-0.5 hidden items-center justify-between gap-2 rounded-lg border px-2 py-0.5 lg:flex", themeMode === "dark" ? "border-slate-700 bg-slate-900" : "border-[var(--qms-teal-500)] bg-white"].join(" ")}>
               <div className="flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-[10px] leading-4">
                 <p className={["shrink-0 font-semibold", themeMode === "dark" ? "text-slate-100" : "text-slate-900"].join(" ")}>{currentUser.name}</p>
                 <span className={themeMode === "dark" ? "text-slate-500" : "text-slate-400"}>•</span>
@@ -6436,7 +6736,7 @@ function App() {
         </header>
 
         <main className="flex min-h-0 flex-1 overflow-hidden">
-          <aside className={["hidden shrink-0 flex-col border-r px-3 py-4 lg:flex", desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-200 shadow-[inset_-1px_0_0_rgba(15,23,42,0.35)]" : "border-slate-300 bg-slate-100 text-slate-700 shadow-[inset_-1px_0_0_rgba(148,163,184,0.28)]"].join(" ")}>
+          <aside className={["hidden shrink-0 flex-col border-r-[3px] px-3 py-4 lg:flex", desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]", themeMode === "dark" ? "border-[var(--qms-teal-500)] bg-slate-900 text-slate-200" : "border-[var(--qms-teal-500)] bg-slate-100 text-slate-700"].join(" ")}>
             <nav className="flex-1 space-y-2 overflow-y-auto pr-1">
               {visibleNavItems.map((item) => {
                 const selected = screen === item.id || (screen === "complete" && item.id === "audits");
@@ -6448,11 +6748,11 @@ function App() {
                       "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition-colors duration-200 ease-in-out",
                       selected
                         ? themeMode === "dark"
-                          ? "bg-slate-800 text-white hover:bg-slate-700"
-                          : `bg-slate-900 text-white ${slatePrimaryCtaInteract}`
+                          ? "border border-[var(--qms-teal-500)]/40 bg-[rgba(25,227,181,0.12)] text-[var(--qms-teal-400)] hover:bg-[rgba(25,227,181,0.18)]"
+                          : `bg-[var(--qms-teal-500)] text-[var(--qms-navy-950)] ${slatePrimaryCtaInteract}`
                         : themeMode === "dark"
-                          ? "text-slate-300 hover:bg-slate-900/25"
-                          : "text-slate-600 hover:bg-slate-900/25 hover:text-slate-900",
+                          ? "text-slate-300 hover:border hover:border-[var(--qms-teal-500)]/25 hover:bg-slate-800/80"
+                          : "text-slate-700 hover:bg-teal-50 hover:text-teal-950",
                       desktopSidebarCollapsed ? "justify-center" : "",
                     ].join(" ")}
                     title={item.label}
@@ -6466,7 +6766,7 @@ function App() {
             <div className="mt-auto pt-2">
               <button
                 onClick={() => setDesktopSidebarCollapsed((current) => !current)}
-                className={["flex w-full items-center justify-center rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition", desktopSidebarCollapsed ? "border-sky-500/40 bg-sky-500/20 text-sky-100 hover:bg-sky-500/30" : "border-slate-500/40 bg-slate-700/70 text-white hover:bg-slate-600/80"].join(" ")}
+                className={["flex w-full items-center justify-center rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition", desktopSidebarCollapsed ? "border-[var(--qms-teal-500)]/50 bg-[rgba(25,227,181,0.12)] text-[var(--qms-teal-400)] hover:bg-[rgba(25,227,181,0.18)]" : "border-[var(--qms-teal-500)]/45 bg-slate-700 text-white hover:bg-slate-600"].join(" ")}
                 aria-label={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
                 title={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
               >
@@ -6564,13 +6864,17 @@ function App() {
                 onRepairWorkspace={repairWorkspace}
                 onLoadDemoData={handleLoadDemoData}
                 onClearDemoData={handleClearDemoData}
+                roleNavVisibility={roleNavVisibility}
+                onToggleRoleNavVisibility={handleToggleRoleNavVisibility}
+                roleSiteSelectorVisibility={roleSiteSelectorVisibility}
+                onToggleRoleSiteSelectorVisibility={handleToggleRoleSiteSelectorVisibility}
               />
             )}
 
             {screen === "audits" && canAccessAuditsCentre(currentUser.role) && (
               <AuditsScreen
                 currentUser={currentUser}
-                audits={audits}
+                audits={siteScopedAudits}
                 groupedAudits={groupedAudits}
                 drafts={drafts}
                 unsyncedAuditIds={unsyncedSubmittedAuditIds}
@@ -6800,6 +7104,8 @@ function App() {
                 inviteEmailInput={inviteEmailInput}
                 inviteRoleInput={inviteRoleInput}
                 invitedUsers={invitedUsers}
+                sites={sites}
+                selectedSiteId={selectedSiteId}
                 creatableRoles={creatableRoles}
                 onGoogleConnect={handleGoogleConnect}
                 onGoogleDisconnect={handleGoogleDisconnect}
@@ -6867,6 +7173,9 @@ function App() {
                 onResendInvite={handleResendInvite}
                 onDeleteInvite={handleDeleteInvite}
                 onResyncUsers={handleResyncUsers}
+                onSelectSite={setSelectedSiteId}
+                onAddSite={handleAddSite}
+                onArchiveSite={handleArchiveSite}
                 standaloneOnboarding={screen === "onboarding"}
                 scheduleNameInput={scheduleNameInput}
                 scheduleAreaInput={scheduleAreaInput}
@@ -7077,7 +7386,7 @@ function App() {
           <div
             className={[
               "qms-bottom-nav-grid grid gap-2 rounded-[1.75rem] border p-2 shadow-[0_20px_45px_rgba(15,23,42,0.16)] backdrop-blur-xl",
-              themeMode === "dark" ? "border-slate-800 bg-slate-950/92" : "border-white/80 bg-white/92",
+              themeMode === "dark" ? "border-slate-800 bg-slate-950/92" : "border-[var(--qms-teal-500)] bg-white",
             ].join(" ")}
             style={{ gridTemplateColumns: `repeat(${visibleNavItems.length}, minmax(0, 1fr))` }}
           >
@@ -7091,10 +7400,10 @@ function App() {
                   className={[
                     "qms-nav-button group flex h-12 flex-col items-center justify-center rounded-2xl border px-1 text-[10px] font-semibold leading-none transition-all duration-200 sm:text-[11px]",
                     selected
-                        ? `border-slate-900 bg-slate-900 text-white shadow-[0_12px_30px_rgba(15,23,42,0.22)] ${slatePrimaryCtaInteract}`
+                        ? `border-[var(--qms-teal-500)] bg-[var(--qms-teal-500)] text-[var(--qms-navy-950)] shadow-[0_12px_30px_rgba(20,211,166,0.22)] ${slatePrimaryCtaInteract}`
                         : themeMode === "dark"
                         ? "border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-slate-700 hover:bg-slate-900/25 hover:text-slate-100"
-                        : "border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 text-slate-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] hover:border-slate-300 hover:bg-slate-900/25 hover:text-slate-900",
+                        : "border-slate-200 bg-white text-slate-600 hover:border-[var(--qms-teal-500)] hover:bg-teal-50 hover:text-teal-950",
                   ].join(" ")}
                 >
                   <span
@@ -7103,10 +7412,10 @@ function App() {
                       selected ? "bg-white/90" : themeMode === "dark" ? "bg-slate-700 group-hover:bg-slate-500" : "bg-slate-300 group-hover:bg-slate-400",
                     ].join(" ")}
                   />
-                  <span className={["mb-0.5", selected ? "text-white" : themeMode === "dark" ? "text-slate-400 group-hover:text-slate-100" : "text-slate-500 group-hover:text-slate-900"].join(" ")}>
+                  <span className={["mb-0.5", selected ? "text-[var(--qms-navy-950)]" : themeMode === "dark" ? "text-slate-400 group-hover:text-slate-100" : "text-slate-500 group-hover:text-teal-950"].join(" ")}>
                     <AppIcon name={item.icon} className="h-3.5 w-3.5" />
                   </span>
-                  <span className="qms-nav-label max-w-full truncate">{navLabel}</span>
+                  <span className={["qms-nav-label max-w-full truncate", selected ? "text-[var(--qms-navy-950)]" : ""].join(" ")}>{navLabel}</span>
                 </button>
               );
             })}
@@ -7165,6 +7474,10 @@ function DashboardScreen({
   onRepairWorkspace,
   onLoadDemoData,
   onClearDemoData,
+  roleNavVisibility,
+  onToggleRoleNavVisibility,
+  roleSiteSelectorVisibility,
+  onToggleRoleSiteSelectorVisibility,
 }: {
   currentUser: User;
   workspaceName: string;
@@ -7214,6 +7527,10 @@ function DashboardScreen({
   onRepairWorkspace: () => void;
   onLoadDemoData: () => void;
   onClearDemoData: () => void;
+  roleNavVisibility: RoleNavVisibilityMatrix;
+  onToggleRoleNavVisibility: (role: Role, navItemId: NavItemId) => void;
+  roleSiteSelectorVisibility: RoleSiteSelectorVisibility;
+  onToggleRoleSiteSelectorVisibility: (role: Role) => void;
 }) {
   if (currentUser.role === "Auditor") {
     return (
@@ -7272,6 +7589,10 @@ function DashboardScreen({
         onRepairWorkspace={onRepairWorkspace}
         onLoadDemoData={onLoadDemoData}
         onClearDemoData={onClearDemoData}
+        roleNavVisibility={roleNavVisibility}
+        onToggleRoleNavVisibility={onToggleRoleNavVisibility}
+        roleSiteSelectorVisibility={roleSiteSelectorVisibility}
+        onToggleRoleSiteSelectorVisibility={onToggleRoleSiteSelectorVisibility}
       />
     );
   }
@@ -7615,19 +7936,19 @@ function AuditorTaskDashboard({
         <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Today&apos;s tasks</p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">Morning {currentUser.name.split(" ")[0]}</h2>
         <p className="mt-1 text-sm text-slate-500">What do you need to do now?</p>
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-          <MiniMetric label="Outstanding (Red)" value={String(overdueCount)} tone="red" />
-          <MiniMetric label="Due now (Amber)" value={String(dueSoonCount)} tone="amber" />
-          <MiniMetric label="On track (Green)" value={String(onTrackCount)} tone="green" />
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          <MiniMetric label="Outstanding" value={String(overdueCount)} tone="red" />
+          <MiniMetric label="Due now" value={String(dueSoonCount)} tone="amber" />
+          <MiniMetric label="On track" value={String(onTrackCount)} tone="green" />
           <MiniMetric label="Due today" value={String(dueTodayCount)} tone="slate" />
-          <MiniMetric label="Audits in progress" value={String(draftCount)} tone="sky" />
-          <MiniMetric label="Not closed: evidence missing" value={String(evidenceNeededCount)} tone="amber" />
+          <MiniMetric label="In progress" value={String(draftCount)} tone="sky" />
+          <MiniMetric label="Evidence missing" value={String(evidenceNeededCount)} tone="amber" />
         </div>
         <button
           type="button"
           onClick={() => nextAudit && onOpenAudit(nextAudit.id)}
           disabled={!nextAudit}
-          className={`mt-4 h-16 w-full rounded-2xl text-lg font-semibold text-white ${nextAudit ? `bg-slate-900 ${slatePrimaryCtaInteract}` : "cursor-not-allowed bg-slate-300"}`}
+          className={`mt-4 h-16 w-full rounded-2xl text-lg font-semibold ${nextAudit ? `bg-slate-900 text-white ${slatePrimaryCtaInteract}` : "cursor-not-allowed bg-slate-200 text-slate-700"}`}
         >
           {nextAudit ? `Audit Mode: ${primaryLabel}` : "Audit Mode: No Audits Due"}
         </button>
@@ -8128,6 +8449,10 @@ function GodModeDashboard({
   onRepairWorkspace,
   onLoadDemoData,
   onClearDemoData,
+  roleNavVisibility,
+  onToggleRoleNavVisibility,
+  roleSiteSelectorVisibility,
+  onToggleRoleSiteSelectorVisibility,
 }: {
   workspaceValidation: WorkspaceValidation | null;
   selectedFolder: CompanyFolder | null;
@@ -8138,6 +8463,10 @@ function GodModeDashboard({
   onRepairWorkspace: () => void;
   onLoadDemoData: () => void;
   onClearDemoData: () => void;
+  roleNavVisibility: RoleNavVisibilityMatrix;
+  onToggleRoleNavVisibility: (role: Role, navItemId: NavItemId) => void;
+  roleSiteSelectorVisibility: RoleSiteSelectorVisibility;
+  onToggleRoleSiteSelectorVisibility: (role: Role) => void;
 }) {
   const {
     showLayoutOptions,
@@ -8147,7 +8476,7 @@ function GodModeDashboard({
     visibleSectionOrder,
     toggleSection,
     moveSection,
-  } = useDashboardSectionLayout("qms-precast-layout-godmode", ["workspaceHealth", "repairActions", "companySetup"]);
+  } = useDashboardSectionLayout("qms-precast-layout-godmode", ["workspaceHealth", "roleMatrix", "repairActions", "companySetup"]);
 
   const renderSection = (section: string) => {
     if (section === "workspaceHealth") {
@@ -8159,6 +8488,62 @@ function GodModeDashboard({
             <FolderCheckRow label="Master sheet valid" ok={Boolean(workspaceValidation?.folders.companyFolder)} />
             <FolderCheckRow label="Required tabs present" ok={(workspaceValidation?.missingTabs.length || 0) === 0} />
             <FolderCheckRow label="Schema version valid" ok={Boolean(workspaceValidation?.ok)} />
+          </div>
+        </section>
+      );
+    }
+    if (section === "roleMatrix") {
+      const roles: Role[] = ["Master", "Admin", "Manager", "Auditor"];
+      const configurableNavItems = navItems.filter((item) => item.id !== "dashboard" && item.id !== "account");
+      return (
+        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <SectionHeader icon="checklist" eyebrow="Profile access" title="Role visibility matrix" subtitle="Choose which tabs each role can see in their profile." />
+          <div className="mt-3 space-y-3">
+            {roles.map((role) => (
+              <div key={role} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-sm font-semibold text-slate-900">{getRoleDisplayName(role)}</p>
+                  <p className="text-xs text-slate-500">Dashboard and Account are always visible.</p>
+                </div>
+                <div className="mb-2">
+                  <button
+                    type="button"
+                    onClick={() => onToggleRoleSiteSelectorVisibility(role)}
+                    className={[
+                      "rounded-full border px-3 py-1 text-xs font-semibold transition",
+                      roleSiteSelectorVisibility[role] ? "border-emerald-300 bg-emerald-100 text-emerald-800" : "border-slate-300 bg-white text-slate-600",
+                    ].join(" ")}
+                  >
+                    Site selector
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {configurableNavItems.map((item) => {
+                    const baselineVisible = canRoleAccessNavItem(role, item.id);
+                    const enabled = baselineVisible && (roleNavVisibility[role]?.[item.id] ?? false);
+                    return (
+                      <button
+                        key={`${role}-${item.id}`}
+                        type="button"
+                        onClick={() => onToggleRoleNavVisibility(role, item.id)}
+                        disabled={!baselineVisible}
+                        className={[
+                          "rounded-full border px-3 py-1 text-xs font-semibold transition",
+                          !baselineVisible
+                            ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                            : enabled
+                              ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+                              : "border-slate-300 bg-white text-slate-600",
+                        ].join(" ")}
+                        title={baselineVisible ? `Toggle ${item.label}` : `${item.label} is blocked by baseline role permissions`}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       );
@@ -8192,12 +8577,12 @@ function GodModeDashboard({
       );
     }
     return (
-      <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+      <section key={section} className="rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-[0_10px_24px_rgba(2,6,23,0.35)]">
         <SectionHeader icon="chart" eyebrow="Company setup" title="Company setup status" subtitle="Provisioning completeness snapshot." />
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Users created</p><p className="text-lg font-semibold text-slate-900">{reportUsersCount}</p></div>
-          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Schedules active</p><p className="text-lg font-semibold text-slate-900">{activeSchedulesCount}</p></div>
-          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Templates present</p><p className="text-lg font-semibold text-slate-900">{templatesCount}</p></div>
+          <div className="rounded-xl border border-[rgba(25,227,181,0.45)] bg-[rgba(187,247,208,0.92)] px-3 py-2"><p className="text-xs text-emerald-800">Users created</p><p className="text-lg font-semibold text-emerald-950">{reportUsersCount}</p></div>
+          <div className="rounded-xl border border-[rgba(25,227,181,0.45)] bg-[rgba(187,247,208,0.92)] px-3 py-2"><p className="text-xs text-emerald-800">Schedules active</p><p className="text-lg font-semibold text-emerald-950">{activeSchedulesCount}</p></div>
+          <div className="rounded-xl border border-[rgba(25,227,181,0.45)] bg-[rgba(187,247,208,0.92)] px-3 py-2"><p className="text-xs text-emerald-800">Templates present</p><p className="text-lg font-semibold text-emerald-950">{templatesCount}</p></div>
         </div>
       </section>
     );
@@ -8535,23 +8920,35 @@ function ActionsScreen({
         </div>
       </section>
 
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+      <section className="rounded-[1.75rem] border border-slate-700 bg-slate-900 p-4">
         <div className="grid gap-3 sm:grid-cols-3">
-          <select value={actionFilter} onChange={(event) => onFilterChange(event.target.value as "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
+          <select
+            value={actionFilter}
+            onChange={(event) => onFilterChange(event.target.value as "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity")}
+            className="h-12 rounded-2xl border border-[rgba(25,227,181,0.45)] bg-slate-950 px-4 text-sm text-white outline-none focus:border-[var(--qms-teal-500)]"
+          >
             <option value="Open">Open</option>
             <option value="Overdue">Overdue</option>
             <option value="Awaiting Verification">Awaiting Verification</option>
             <option value="Closed">Closed</option>
             <option value="Severity">All by severity</option>
           </select>
-          <select value={actionSeverityFilter} onChange={(event) => onSeverityFilterChange(event.target.value as RiskLevel | "All")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
+          <select
+            value={actionSeverityFilter}
+            onChange={(event) => onSeverityFilterChange(event.target.value as RiskLevel | "All")}
+            className="h-12 rounded-2xl border border-[rgba(25,227,181,0.45)] bg-slate-950 px-4 text-sm text-white outline-none focus:border-[var(--qms-teal-500)]"
+          >
             <option value="All">All severities</option>
             <option value="Critical">Critical</option>
             <option value="High">High</option>
             <option value="Medium">Medium</option>
             <option value="Low">Low</option>
           </select>
-          <select value={actionNcFilter} onChange={(event) => onNcFilterChange(event.target.value)} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
+          <select
+            value={actionNcFilter}
+            onChange={(event) => onNcFilterChange(event.target.value)}
+            className="h-12 rounded-2xl border border-[rgba(25,227,181,0.45)] bg-slate-950 px-4 text-sm text-white outline-none focus:border-[var(--qms-teal-500)]"
+          >
             <option value="All">All non-conformance refs</option>
             {availableNonConformanceIds.map((reference) => (
               <option key={reference} value={reference}>
@@ -9716,7 +10113,7 @@ function AccountSettingsScreen({
 
       <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
         <p className="text-sm font-semibold text-slate-900">Appearance</p>
-        <p className="mt-1 text-sm text-slate-500">Choose how BertAudit looks on this tablet.</p>
+        <p className="mt-1 text-sm text-slate-500">Choose how {companyName} looks on this tablet.</p>
         <div className="mt-4 grid grid-cols-2 gap-3">
           {(["light", "dark"] as ThemeMode[]).map((mode) => {
             const selected = themeMode === mode;
@@ -10300,6 +10697,8 @@ function AdminScreen({
   inviteEmailInput,
   inviteRoleInput,
   invitedUsers,
+  sites,
+  selectedSiteId,
   creatableRoles,
   notificationsEnabled,
   companySheetSync,
@@ -10389,6 +10788,9 @@ function AdminScreen({
   onResendInvite,
   onDeleteInvite,
   onResyncUsers,
+  onSelectSite,
+  onAddSite,
+  onArchiveSite,
   standaloneOnboarding = false,
 }: {
   currentUser: User;
@@ -10408,6 +10810,8 @@ function AdminScreen({
   inviteEmailInput: string;
   inviteRoleInput: Role;
   invitedUsers: UserInvite[];
+  sites: Site[];
+  selectedSiteId: string;
   creatableRoles: Role[];
   notificationsEnabled: boolean;
   companySheetSync: CompanySheetSyncStatus | null;
@@ -10497,6 +10901,9 @@ function AdminScreen({
   onResendInvite: (invite: UserInvite) => void;
   onDeleteInvite: (invite: UserInvite) => void;
   onResyncUsers: () => void;
+  onSelectSite: (siteId: string) => void;
+  onAddSite: () => void;
+  onArchiveSite: (siteId: string) => void;
   standaloneOnboarding?: boolean;
 }) {
   const adminOnly = !canAccessAdmin(currentUser.role);
@@ -10507,11 +10914,23 @@ function AdminScreen({
     invitedUsers.length === 0;
   const [adminView, setAdminView] = useState<"overview" | "onboarding">(standaloneOnboarding ? "onboarding" : "overview");
   const [showAdvancedOnboardingActions, setShowAdvancedOnboardingActions] = useState(false);
+  const [pendingAdminScrollTarget, setPendingAdminScrollTarget] = useState<string | null>(null);
   const onboardingMode = standaloneOnboarding || (canAccessOnboarding(currentUser.role) && adminView === "onboarding");
+  const godModeFullVisibility = currentUser.role === "Master";
+  useEffect(() => {
+    if (!pendingAdminScrollTarget) {
+      return;
+    }
+    const targetElement = document.getElementById(pendingAdminScrollTarget);
+    if (targetElement) {
+      targetElement.scrollIntoView({ behavior: "smooth", block: "start" });
+      setPendingAdminScrollTarget(null);
+    }
+  }, [pendingAdminScrollTarget, onboardingMode, adminView, godModeFullVisibility]);
 
   return (
     <div className="space-y-4">
-      {!onboardingMode && (
+      {(!onboardingMode || godModeFullVisibility) && (
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
         <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div>
@@ -10529,16 +10948,15 @@ function AdminScreen({
 
         <div className="grid gap-3 md:grid-cols-3">
           {[
-            { key: "overview", icon: "user", title: "User Management", subtitle: "Invite users and manage roles" },
-            { key: "overview", icon: "checklist", title: "Audit Templates", subtitle: "Build and manage audit form templates" },
-            { key: "overview", icon: "sync", title: "Maintenance", subtitle: "Sync queue tools, data export, and reset" },
+            { key: "onboarding", targetId: "admin-user-management", icon: "user", title: "User Management", subtitle: "Invite users and manage roles" },
+            { key: "overview", targetId: "admin-audit-templates", icon: "checklist", title: "Audit Templates", subtitle: "Build and manage audit form templates" },
+            { key: "onboarding", targetId: "admin-maintenance", icon: "sync", title: "Maintenance", subtitle: "Sync queue tools, data export, and reset" },
           ].map((card) => (
             <button
               key={card.title}
               onClick={() => {
-                if (card.key === "onboarding") {
-                  setAdminView("onboarding");
-                }
+                setAdminView(card.key === "onboarding" ? "onboarding" : "overview");
+                setPendingAdminScrollTarget(card.targetId);
               }}
               className="flex min-h-[76px] items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-slate-300 hover:bg-white"
             >
@@ -10596,7 +11014,7 @@ function AdminScreen({
         </section>
       )}
 
-      {canAccessOnboarding(currentUser.role) && onboardingMode && (
+      {canAccessOnboarding(currentUser.role) && (onboardingMode || godModeFullVisibility) && (
         <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
           {!standaloneOnboarding && (
             <div className="mb-3">
@@ -10892,7 +11310,7 @@ function AdminScreen({
 
       {onboardingMode && (
         <>
-          <section className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-sm">
+          <section id="admin-user-management" className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-sm">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">God Mode</p>
@@ -10955,6 +11373,61 @@ function AdminScreen({
             </div>
 
             <div className="space-y-4">
+              <div className="rounded-[1.5rem] border border-slate-800 bg-slate-900 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Site access</p>
+                    <p className="text-sm text-slate-300">Select a site context or add a new site for this company.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onAddSite}
+                    className="h-10 rounded-xl border border-slate-700 bg-slate-950 px-3 text-xs font-semibold text-slate-200"
+                  >
+                    Add site
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => onSelectSite("")}
+                    className={[
+                      "w-full rounded-xl border px-3 py-2 text-left text-sm",
+                      selectedSiteId === ""
+                        ? "border-[var(--qms-teal-500)] bg-[rgba(25,227,181,0.14)] text-white"
+                        : "border-slate-800 bg-slate-950 text-slate-300",
+                    ].join(" ")}
+                  >
+                    All sites
+                  </button>
+                  {sites
+                    .filter((site) => site.active)
+                    .map((site) => (
+                      <div key={site.id} className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onSelectSite(site.id)}
+                          className={[
+                            "flex-1 rounded-xl border px-3 py-2 text-left text-sm",
+                            selectedSiteId === site.id
+                              ? "border-[var(--qms-teal-500)] bg-[rgba(25,227,181,0.14)] text-white"
+                              : "border-slate-800 bg-slate-950 text-slate-300",
+                          ].join(" ")}
+                        >
+                          {site.name}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onArchiveSite(site.id)}
+                          className="rounded-xl border border-rose-300 bg-rose-50 px-2 py-2 text-xs font-semibold text-rose-700"
+                        >
+                          Archive
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
               <div className="rounded-[1.5rem] border border-slate-800 bg-slate-900 p-4">
                 <div className="grid gap-3">
                   <div>
@@ -11055,7 +11528,7 @@ function AdminScreen({
 
           {onboardingMode && (
             <>
-              <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+              <section id="admin-maintenance" className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader
             icon="spark"
@@ -11206,7 +11679,7 @@ function AdminScreen({
             </>
           )}
 
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+      <section id="admin-audit-templates" className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader
             icon="clipboard"
@@ -11397,31 +11870,31 @@ function MiniMetric({
 }) {
   const toneClasses: Record<NonNullable<typeof tone>, { shell: string; icon: string; label: string; value: string }> = {
     slate: {
-      shell: "border-slate-200/80 bg-gradient-to-b from-white to-slate-50",
+      shell: "border-slate-200 bg-white",
       icon: "text-slate-600",
-      label: "text-slate-400",
+      label: "text-slate-500",
       value: "text-slate-900",
     },
     red: {
-      shell: "border-rose-200 bg-gradient-to-b from-rose-50 to-white",
+      shell: "border-rose-200 bg-white",
       icon: "text-rose-600",
       label: "text-rose-500",
       value: "text-rose-900",
     },
     amber: {
-      shell: "border-amber-200 bg-gradient-to-b from-amber-50 to-white",
+      shell: "border-amber-200 bg-white",
       icon: "text-amber-600",
       label: "text-amber-600",
       value: "text-amber-900",
     },
     green: {
-      shell: "border-emerald-200 bg-gradient-to-b from-emerald-50 to-white",
+      shell: "border-emerald-200 bg-white",
       icon: "text-emerald-600",
       label: "text-emerald-600",
       value: "text-emerald-900",
     },
     sky: {
-      shell: "border-sky-200 bg-gradient-to-b from-sky-50 to-white",
+      shell: "border-sky-200 bg-white",
       icon: "text-sky-600",
       label: "text-sky-600",
       value: "text-sky-900",
@@ -11429,16 +11902,16 @@ function MiniMetric({
   };
   const classes = toneClasses[tone];
   return (
-    <div className={`rounded-[1.5rem] border p-4 shadow-[0_14px_30px_rgba(15,23,42,0.07)] ${classes.shell}`}>
+    <div className={`rounded-[1.5rem] border p-3 ${classes.shell}`}>
       <div className="flex items-center gap-2">
         {icon ? (
           <span className={classes.icon}>
             <AppIcon name={icon} className="h-4 w-4" />
           </span>
         ) : null}
-        <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${classes.label}`}>{label}</p>
+        <p className={`text-[11px] font-semibold leading-tight tracking-[0.08em] ${classes.label}`}>{label}</p>
       </div>
-      <p className={`mt-3 text-2xl font-semibold tracking-tight ${classes.value}`}>{value}</p>
+      <p className={`mt-2 text-2xl font-semibold tracking-tight ${classes.value}`}>{value}</p>
     </div>
   );
 }

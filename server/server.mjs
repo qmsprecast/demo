@@ -30,8 +30,9 @@ const requiredEnv = {
   SMTP_USER: process.env.SMTP_USER || "",
   SMTP_PASS: process.env.SMTP_PASS || "",
   SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || process.env.SMTP_FROM || "",
-  SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || "BertAudit",
+  SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || process.env.APP_BRAND_NAME || "Audit App",
 };
+const APP_BRAND_NAME = (process.env.APP_BRAND_NAME || "Audit App").trim();
 
 const scopes = [
   "openid",
@@ -445,7 +446,7 @@ function sendCallbackPage(res, options) {
       <div class="pill">${success ? "Google connected" : "Connection issue"}</div>
       <h1>${title}</h1>
       <p>${message}</p>
-      <p style="margin-top:16px;"><a href="${redirectUrl}">Return to BertAudit</a></p>
+      <p style="margin-top:16px;"><a href="${redirectUrl}">Return to ${APP_BRAND_NAME}</a></p>
     </div>
   </body>
 </html>`);
@@ -564,9 +565,9 @@ async function verifySmtpTransport() {
 }
 
 function buildOnboardingInviteMailto({ toEmail, inviteRole, invitedBy, onboardingFormUrl }) {
-  const subject = `BertAudit ${inviteRole} onboarding`;
+  const subject = `${APP_BRAND_NAME} ${inviteRole} onboarding`;
   const body = [
-    `You have been invited to BertAudit as ${inviteRole}.`,
+    `You have been invited to ${APP_BRAND_NAME} as ${inviteRole}.`,
     "",
     `Invited by: ${invitedBy}`,
     "",
@@ -603,7 +604,7 @@ async function sendOnboardingInviteEmail({
   ];
 
   const textBody = [
-    `You have been invited to BertAudit as ${inviteRole}.`,
+    `You have been invited to ${APP_BRAND_NAME} as ${inviteRole}.`,
     "",
     `Invited by: ${invitedBy}`,
     "",
@@ -619,7 +620,7 @@ async function sendOnboardingInviteEmail({
   ].join("\n");
 
   const htmlBody = `
-    <p>You have been invited to BertAudit as <strong>${inviteRole}</strong>.</p>
+    <p>You have been invited to ${APP_BRAND_NAME} as <strong>${inviteRole}</strong>.</p>
     <p><strong>Invited by:</strong> ${invitedBy}</p>
     <p>Complete your onboarding form:</p>
     <p><a href="${onboardingFormUrl}">${onboardingFormUrl}</a></p>
@@ -638,7 +639,7 @@ async function sendOnboardingInviteEmail({
   await transporter.sendMail({
     from,
     to: toEmail,
-    subject: `BertAudit ${inviteRole} onboarding`,
+    subject: `${APP_BRAND_NAME} ${inviteRole} onboarding`,
     text: textBody,
     html: htmlBody,
   });
@@ -1665,7 +1666,7 @@ async function writeCompanyUsers(auth, spreadsheetId, companyFolderId, users) {
       String(user.id || user["User ID"] || "").trim() ||
       `invite-${email.replace(/[^a-z0-9]+/gi, "-")}-${role.toLowerCase()}`;
     const fullName = String(user.name || user["Full Name"] || email).trim() || email;
-    const createdBy = String(user.invitedBy || user["Created By"] || "BertAudit").trim() || "BertAudit";
+    const createdBy = String(user.invitedBy || user["Created By"] || APP_BRAND_NAME).trim() || APP_BRAND_NAME;
     const senderEmail = String(user.senderEmail || user["Updated By"] || "").trim();
     const createdAt = String(user.sentAt || user["Created At"] || timestamp).trim() || timestamp;
     const updatedAt = String(user.updatedAt || user["Updated At"] || timestamp).trim() || timestamp;
@@ -2531,7 +2532,7 @@ app.post("/api/google-sheet-by-id/:sheetId/repair", async (req, res) => {
 app.post("/api/onboarding/invite", async (req, res) => {
   const toEmail = String(req.body?.email || "").trim().toLowerCase();
   const inviteRole = String(req.body?.role || "").trim();
-  const invitedBy = String(req.body?.invitedBy || "BertAudit").trim();
+  const invitedBy = String(req.body?.invitedBy || APP_BRAND_NAME).trim();
   const onboardingFormId = String(req.body?.onboardingFormId || "").trim();
 
   if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
@@ -2716,7 +2717,7 @@ app.get("/auth/google/callback", async (req, res) => {
     if ((!signedState || signedState !== state) && !localDevBypass) {
       return sendCallbackPage(res, {
         title: "Google connection could not be completed",
-        message: "The sign-in state could not be verified. Please start the connection again from BertAudit.",
+        message: `The sign-in state could not be verified. Please start the connection again from ${APP_BRAND_NAME}.`,
         success: false,
       });
     }
@@ -2743,7 +2744,7 @@ app.get("/auth/google/callback", async (req, res) => {
     res.clearCookie("qms_google_state");
     return sendCallbackPage(res, {
       title: "Google connection completed",
-      message: "Your Google Drive root folder is now linked. Returning to BertAudit now.",
+      message: `Your Google Drive root folder is now linked. Returning to ${APP_BRAND_NAME} now.`,
       success: true,
       redirectUrl: `${requiredEnv.FRONTEND_URL.replace(/\/$/, "")}/?google=connected`,
     });
