@@ -165,6 +165,9 @@ type Site = {
   active: boolean;
 };
 
+/** Normalized user email -> site ids they may access. Empty or missing entry means no restriction (all sites). */
+type UserSiteAssignments = Record<string, string[]>;
+
 type OnboardingSource = {
   configured: boolean;
   formId: string;
@@ -1795,6 +1798,56 @@ function createSiteId(name: string) {
   return normalized || `site-${Date.now()}`;
 }
 
+function resolveUserSiteAssignmentKey(user: User, invitedUsers: UserInvite[]): string {
+  const invite = invitedUsers.find((inv) => normalizeIdentity(inv.email.split("@")[0]) === normalizeIdentity(user.username));
+  if (invite) return normalizeIdentity(invite.email);
+  if (user.name.includes("@")) return normalizeIdentity(user.name);
+  return normalizeIdentity(`${user.username}@qmsprecast.co.uk`);
+}
+
+function getUserAssignedSiteIds(
+  role: Role,
+  user: User | null,
+  invitedUsers: UserInvite[],
+  userSiteAssignments: UserSiteAssignments,
+): Set<string> | null {
+  if (!user) return null;
+  if (role === "Master" || role === "Admin") return null;
+  const key = resolveUserSiteAssignmentKey(user, invitedUsers);
+  const ids = userSiteAssignments[key];
+  if (!ids || ids.length === 0) return null;
+  return new Set(ids);
+}
+
+function filterByAssignedSites<T extends { siteArea?: string }>(
+  items: T[],
+  allowedSiteIds: Set<string> | null,
+  sites: Site[],
+): T[] {
+  if (!allowedSiteIds) return items;
+  const allowedNames = new Set(
+    sites.filter((s) => allowedSiteIds.has(s.id) && s.active).map((s) => normalizeIdentity(s.name)),
+  );
+  if (allowedNames.size === 0) return [];
+  return items.filter((item) => {
+    const area = normalizeIdentity(item.siteArea || "");
+    return area && allowedNames.has(area);
+  });
+}
+
+function filterNonConformancesByAssignedSites(
+  records: NonConformanceRecord[],
+  allowedSiteIds: Set<string> | null,
+  sites: Site[],
+): NonConformanceRecord[] {
+  if (!allowedSiteIds) return records;
+  const allowedNames = new Set(
+    sites.filter((s) => allowedSiteIds.has(s.id) && s.active).map((s) => normalizeIdentity(s.name)),
+  );
+  if (allowedNames.size === 0) return [];
+  return records.filter((r) => allowedNames.has(normalizeIdentity(r.site)));
+}
+
 function deriveSitesFromWorkspace(audits: Audit[], schedules: ScheduleItem[], managedSchedules: ManagedSchedule[]) {
   const names = new Set<string>();
   audits.forEach((audit) => {
@@ -2356,6 +2409,7 @@ function readStoredWorkspaceState() {
       managerAlerts?: ManagerAlert[];
       roleNavVisibility?: RoleNavVisibilityMatrix;
       roleSiteSelectorVisibility?: RoleSiteSelectorVisibility;
+      userSiteAssignments?: UserSiteAssignments;
     };
   } catch {
     return null;
@@ -2410,6 +2464,7 @@ function getWorkspaceBootstrap() {
       managerAlerts: [] as ManagerAlert[],
       roleNavVisibility: buildDefaultRoleNavVisibilityMatrix(),
       roleSiteSelectorVisibility: buildDefaultRoleSiteSelectorVisibility(),
+      userSiteAssignments: {} as UserSiteAssignments,
     };
   }
 
@@ -2435,6 +2490,7 @@ function getWorkspaceBootstrap() {
     managerAlerts: stored?.managerAlerts ?? [],
     roleNavVisibility: stored?.roleNavVisibility ?? buildDefaultRoleNavVisibilityMatrix(),
     roleSiteSelectorVisibility: stored?.roleSiteSelectorVisibility ?? buildDefaultRoleSiteSelectorVisibility(),
+    userSiteAssignments: stored?.userSiteAssignments ?? {},
   };
 }
 
@@ -2695,6 +2751,9 @@ function App() {
   const [roleSiteSelectorVisibility, setRoleSiteSelectorVisibility] = useState<RoleSiteSelectorVisibility>(
     storedWorkspaceState?.roleSiteSelectorVisibility || buildDefaultRoleSiteSelectorVisibility(),
   );
+  const [userSiteAssignments, setUserSiteAssignments] = useState<UserSiteAssignments>(
+    storedWorkspaceState?.userSiteAssignments ?? {},
+  );
   const [actionFilter, setActionFilter] = useState<"Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity">("Open");
   const [actionSeverityFilter, setActionSeverityFilter] = useState<RiskLevel | "All">("All");
   const [actionNcFilter, setActionNcFilter] = useState<string>("All");
@@ -2715,23 +2774,57 @@ function App() {
     [sites, selectedSiteId],
   );
 
+  const currentUserAssignedSiteIds = useMemo(() => {
+    if (!currentUser) return null;
+    return getUserAssignedSiteIds(currentUser.role, currentUser, invitedUsers, userSiteAssignments);
+  }, [currentUser, invitedUsers, userSiteAssignments]);
+
+  const assignmentFilteredAudits = useMemo(
+    () => filterByAssignedSites(audits, currentUserAssignedSiteIds, sites),
+    [audits, currentUserAssignedSiteIds, sites],
+  );
+  const assignmentFilteredActions = useMemo(
+    () => filterByAssignedSites(actions, currentUserAssignedSiteIds, sites),
+    [actions, currentUserAssignedSiteIds, sites],
+  );
+  const assignmentFilteredSchedules = useMemo(
+    () => filterByAssignedSites(schedules, currentUserAssignedSiteIds, sites),
+    [schedules, currentUserAssignedSiteIds, sites],
+  );
+  const assignmentFilteredNonConformances = useMemo(
+    () => filterNonConformancesByAssignedSites(nonConformances, currentUserAssignedSiteIds, sites),
+    [nonConformances, currentUserAssignedSiteIds, sites],
+  );
+  const assignmentFilteredHistory = useMemo(() => {
+    if (!currentUserAssignedSiteIds) return history;
+    const allowedNames = new Set(
+      sites.filter((s) => currentUserAssignedSiteIds.has(s.id) && s.active).map((s) => normalizeIdentity(s.name)),
+    );
+    if (allowedNames.size === 0) return [];
+    return history.filter((entry) => {
+      const audit = audits.find((a) => a.id === entry.auditId);
+      if (!audit) return true;
+      return allowedNames.has(normalizeIdentity(audit.siteArea));
+    });
+  }, [history, audits, currentUserAssignedSiteIds, sites]);
+
   const siteScopedAudits = useMemo(() => {
-    if (!selectedSite) return audits;
+    if (!selectedSite) return assignmentFilteredAudits;
     const selectedName = normalizeIdentity(selectedSite.name);
-    return audits.filter((audit) => normalizeIdentity(audit.siteArea) === selectedName);
-  }, [audits, selectedSite]);
+    return assignmentFilteredAudits.filter((audit) => normalizeIdentity(audit.siteArea) === selectedName);
+  }, [assignmentFilteredAudits, selectedSite]);
 
   const siteScopedActions = useMemo(() => {
-    if (!selectedSite) return actions;
+    if (!selectedSite) return assignmentFilteredActions;
     const selectedName = normalizeIdentity(selectedSite.name);
-    return actions.filter((action) => !action.siteArea || normalizeIdentity(action.siteArea) === selectedName);
-  }, [actions, selectedSite]);
+    return assignmentFilteredActions.filter((action) => !action.siteArea || normalizeIdentity(action.siteArea) === selectedName);
+  }, [assignmentFilteredActions, selectedSite]);
 
   const siteScopedSchedules = useMemo(() => {
-    if (!selectedSite) return schedules;
+    if (!selectedSite) return assignmentFilteredSchedules;
     const selectedName = normalizeIdentity(selectedSite.name);
-    return schedules.filter((schedule) => normalizeIdentity(schedule.siteArea) === selectedName);
-  }, [schedules, selectedSite]);
+    return assignmentFilteredSchedules.filter((schedule) => normalizeIdentity(schedule.siteArea) === selectedName);
+  }, [assignmentFilteredSchedules, selectedSite]);
 
   const getStoredProfilePhoto = (user: User | null) => {
     if (!user) return "";
