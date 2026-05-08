@@ -5417,11 +5417,9 @@ function App() {
       return;
     }
     const key = normalizeIdentity(email);
-    let addedSite = false;
     setUserSiteAssignments((current) => {
       const prev = current[key] ?? [];
       const has = prev.includes(siteId);
-      addedSite = !has;
       const nextIds = has ? prev.filter((id) => id !== siteId) : [...prev, siteId];
       const next = { ...current };
       if (nextIds.length === 0) {
@@ -5431,11 +5429,7 @@ function App() {
       }
       return next;
     });
-    pushToast(
-      "Site assignment updated",
-      addedSite ? "That site is now required for this user when restricted." : "Updated site access for this user.",
-      "neutral",
-    );
+    pushToast("Site assignment updated", "Workspace site access for that user was saved on this device.", "neutral");
   };
 
   const handleVerifyOnboarding = () => {
@@ -7035,7 +7029,7 @@ function App() {
             {screen === "nonConformance" && canAccessActions(currentUser.role) && (
               <NonConformanceScreen
                 currentUser={currentUser}
-                nonConformances={nonConformances}
+                nonConformances={assignmentFilteredNonConformances}
                 canViewCompletedReports={canAccessCompletedNcrReports(currentUser.role)}
                 onSaveProgress={(ncrId, payload) => {
                   setNonConformances((current) =>
@@ -7234,6 +7228,9 @@ function App() {
                 invitedUsers={invitedUsers}
                 sites={sites}
                 selectedSiteId={selectedSiteId}
+                reportUsers={companyReportUsers}
+                userSiteAssignments={userSiteAssignments}
+                onToggleUserSiteAssignment={handleToggleUserSiteAssignment}
                 creatableRoles={creatableRoles}
                 onGoogleConnect={handleGoogleConnect}
                 onGoogleDisconnect={handleGoogleDisconnect}
@@ -9869,6 +9866,10 @@ function SchedulesScreen({
   const startDateError = validationAttempted && !startDate;
   const auditorsError = validationAttempted && selectedAuditors.length === 0;
 
+  /** Brand teal fields — avoids OS dark form styling on pale backgrounds (unreadable text). */
+  const scheduleBrandField =
+    "border border-[rgba(25,227,181,0.5)] bg-[var(--qms-teal-500)] text-[var(--qms-navy-950)] shadow-[0_10px_26px_rgba(20,211,166,0.22)] outline-none transition focus:border-[var(--qms-navy-850)]";
+
   return (
     <div className="space-y-4">
       <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
@@ -9885,7 +9886,10 @@ function SchedulesScreen({
               </p>
             </div>
           </div>
-          <button onClick={onOpenNew} className={`h-12 rounded-2xl bg-white px-5 text-sm font-semibold text-slate-900 ${slatePrimaryCtaInteract}`}>
+          <button
+            onClick={onOpenNew}
+            className={`h-12 rounded-2xl px-5 text-sm font-semibold ${scheduleBrandField} ${slatePrimaryCtaInteract}`}
+          >
             Add new schedule
           </button>
         </div>
@@ -9904,7 +9908,7 @@ function SchedulesScreen({
             <select
               value={filter}
               onChange={(event) => onFilterChange(event.target.value as ScheduleListFilter)}
-              className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+              className={`h-12 w-full rounded-2xl px-4 text-sm ${scheduleBrandField}`}
             >
               <option value="Live">Live</option>
               <option value="Archived">Archived</option>
@@ -9917,7 +9921,7 @@ function SchedulesScreen({
             <EmptyPanel title="No schedules in this view" text="Add a new schedule or switch the filter to see archived revisions." />
           ) : (
             schedules.map((schedule) => (
-              <div key={schedule.id} className="rounded-[1.4rem] border border-slate-200/70 bg-white px-4 py-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+              <div key={schedule.id} className="rounded-[1.4rem] border border-[rgba(25,227,181,0.35)] bg-[rgba(25,227,181,0.1)] px-4 py-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-slate-900">{schedule.scheduleName}</p>
@@ -9977,8 +9981,9 @@ function SchedulesScreen({
                 value={scheduleName}
                 onChange={(event) => onScheduleNameChange(event.target.value)}
                 className={[
-                  "h-12 w-full rounded-2xl border bg-white px-4 text-sm text-slate-900 outline-none transition",
-                  nameError ? "border-rose-300" : "border-slate-200 focus:border-slate-400",
+                  "h-12 w-full rounded-2xl px-4 text-sm outline-none transition",
+                  scheduleBrandField,
+                  nameError ? "border-rose-400 ring-1 ring-rose-400" : "",
                 ].join(" ")}
                 placeholder="Enter the schedule name"
               />
@@ -9994,7 +9999,9 @@ function SchedulesScreen({
                       key={audit.id}
                       className={[
                         "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
-                        selected ? "border-slate-900 bg-white" : "border-slate-200 bg-white",
+                        selected
+                          ? "border-[rgba(25,227,181,0.55)] bg-[rgba(25,227,181,0.18)]"
+                          : "border-[rgba(25,227,181,0.28)] bg-[rgba(25,227,181,0.08)]",
                       ].join(" ")}
                     >
                       <div className="flex items-center gap-3">
@@ -10018,7 +10025,7 @@ function SchedulesScreen({
             {scheduleAudits.map((audit) => {
               const auditError = validationAttempted && audit.days.length === 0;
               return (
-                <div key={audit.id} className="rounded-[1.5rem] border border-slate-200 bg-white p-4">
+                <div key={audit.id} className="rounded-[1.5rem] border border-[rgba(25,227,181,0.35)] bg-[rgba(25,227,181,0.08)] p-4">
                   <p className="text-sm font-semibold text-slate-900">{audit.auditName}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {scheduleDayOptions.map((day) => {
@@ -10047,7 +10054,7 @@ function SchedulesScreen({
                     <select
                       value={audit.frequency}
                       onChange={(event) => onAuditFieldChange(audit.auditId, "frequency", event.target.value)}
-                      className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-900 outline-none"
+                      className={`h-12 rounded-2xl px-4 text-sm ${scheduleBrandField}`}
                     >
                       {scheduleFrequencyOptions.map((frequency) => (
                         <option key={frequency} value={frequency}>{frequency}</option>
@@ -10056,7 +10063,7 @@ function SchedulesScreen({
                     <select
                       value={audit.liveTime}
                       onChange={(event) => onAuditFieldChange(audit.auditId, "liveTime", event.target.value)}
-                      className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-900 outline-none"
+                      className={`h-12 rounded-2xl px-4 text-sm ${scheduleBrandField}`}
                     >
                       {scheduleTimeOptions.map((time) => (
                         <option key={time} value={time}>{time}</option>
@@ -10065,7 +10072,7 @@ function SchedulesScreen({
                     <select
                       value={String(audit.completionHours)}
                       onChange={(event) => onAuditFieldChange(audit.auditId, "completionHours", event.target.value)}
-                      className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-900 outline-none"
+                      className={`h-12 rounded-2xl px-4 text-sm ${scheduleBrandField}`}
                     >
                       {scheduleDurationOptions.map((hours) => (
                         <option key={hours} value={hours}>{hours} hours to complete</option>
@@ -10084,8 +10091,9 @@ function SchedulesScreen({
                   value={startDate}
                   onChange={(event) => onStartDateChange(event.target.value)}
                   className={[
-                    "h-12 w-full rounded-2xl border bg-white px-4 text-sm text-slate-900 outline-none transition",
-                    startDateError ? "border-rose-300" : "border-slate-200 focus:border-slate-400",
+                    "h-12 w-full rounded-2xl px-4 text-sm outline-none transition",
+                    scheduleBrandField,
+                    startDateError ? "border-rose-400 ring-1 ring-rose-400" : "",
                   ].join(" ")}
                 />
               </div>
@@ -10116,10 +10124,10 @@ function SchedulesScreen({
                   }}
                   disabled={continuous}
                   className={[
-                    "h-12 w-full rounded-2xl border px-4 text-sm outline-none transition",
+                    "h-12 w-full rounded-2xl px-4 text-sm outline-none transition",
                     continuous
                       ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                      : "border-slate-200 bg-white text-slate-900 focus:border-slate-400",
+                      : scheduleBrandField,
                   ].join(" ")}
                 />
               </div>
@@ -10135,7 +10143,9 @@ function SchedulesScreen({
                       key={auditor}
                       className={[
                         "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
-                        selected ? "border-slate-900 bg-white" : "border-slate-200 bg-white",
+                        selected
+                          ? "border-[rgba(25,227,181,0.55)] bg-[rgba(25,227,181,0.18)]"
+                          : "border-[rgba(25,227,181,0.28)] bg-[rgba(25,227,181,0.08)]",
                       ].join(" ")}
                     >
                       <div className="flex items-center gap-3">
@@ -10827,6 +10837,9 @@ function AdminScreen({
   invitedUsers,
   sites,
   selectedSiteId,
+  reportUsers,
+  userSiteAssignments,
+  onToggleUserSiteAssignment,
   creatableRoles,
   notificationsEnabled,
   companySheetSync,
@@ -10940,6 +10953,9 @@ function AdminScreen({
   invitedUsers: UserInvite[];
   sites: Site[];
   selectedSiteId: string;
+  reportUsers: CompanyReportUser[];
+  userSiteAssignments: UserSiteAssignments;
+  onToggleUserSiteAssignment: (email: string, siteId: string) => void;
   creatableRoles: Role[];
   notificationsEnabled: boolean;
   companySheetSync: CompanySheetSyncStatus | null;
@@ -11553,6 +11569,49 @@ function AdminScreen({
                         </button>
                       </div>
                     ))}
+                </div>
+              </div>
+
+              <div className="rounded-[1.5rem] border border-slate-800 bg-slate-900 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Assign users to sites</p>
+                <p className="mt-1 text-sm text-slate-300">
+                  For Managers and Auditors: leave all boxes unchecked to allow every active site. Check one or more sites to restrict their workspace to only those sites.
+                </p>
+                <div className="mt-4 space-y-4">
+                  {reportUsers
+                    .filter((user) => user.role !== "Master")
+                    .map((user) => {
+                      const assignmentKey = normalizeIdentity(user.email);
+                      const assignedIds = userSiteAssignments[assignmentKey] ?? [];
+                      const activeSites = sites.filter((site) => site.active);
+                      return (
+                        <div key={user.email} className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+                          <div className="flex flex-wrap items-baseline justify-between gap-2">
+                            <p className="text-sm font-semibold text-white">{user.email}</p>
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{user.role}</span>
+                          </div>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            {activeSites.map((site) => {
+                              const checked = assignedIds.includes(site.id);
+                              return (
+                                <label
+                                  key={`${user.email}-${site.id}`}
+                                  className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-2 py-2 text-sm text-slate-200"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => onToggleUserSiteAssignment(user.email, site.id)}
+                                    className="h-4 w-4 shrink-0 rounded border-slate-600"
+                                  />
+                                  <span className="min-w-0 truncate">{site.name}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
                 </div>
               </div>
 
