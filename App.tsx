@@ -5411,6 +5411,33 @@ function App() {
     pushToast("Site archived", `${site.name} has been archived.`, "success");
   };
 
+  const handleToggleUserSiteAssignment = (email: string, siteId: string) => {
+    if (!canAccessAdmin(currentUser?.role || "Auditor")) {
+      pushToast("Access restricted", "Only Admin and God Mode can change site assignments.", "warning");
+      return;
+    }
+    const key = normalizeIdentity(email);
+    let addedSite = false;
+    setUserSiteAssignments((current) => {
+      const prev = current[key] ?? [];
+      const has = prev.includes(siteId);
+      addedSite = !has;
+      const nextIds = has ? prev.filter((id) => id !== siteId) : [...prev, siteId];
+      const next = { ...current };
+      if (nextIds.length === 0) {
+        delete next[key];
+      } else {
+        next[key] = nextIds;
+      }
+      return next;
+    });
+    pushToast(
+      "Site assignment updated",
+      addedSite ? "That site is now required for this user when restricted." : "Updated site access for this user.",
+      "neutral",
+    );
+  };
+
   const handleVerifyOnboarding = () => {
     if (!selectedFolder) {
       pushToast("Link required", "Link a company folder before verifying onboarding.", "warning");
@@ -6799,13 +6826,11 @@ function App() {
                     className={["h-6 max-w-[12rem] rounded-md border-2 px-2 text-[9px] font-semibold", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-200" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)]"].join(" ")}
                   >
                     <option value="">All sites</option>
-                    {sites
-                      .filter((site) => site.active)
-                      .map((site) => (
-                        <option key={site.id} value={site.id}>
-                          {site.name}
-                        </option>
-                      ))}
+                    {headerSelectableSites.map((site) => (
+                      <option key={site.id} value={site.id}>
+                        {site.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 )}
@@ -6941,7 +6966,7 @@ function App() {
                 pendingSyncCount={pendingSyncCount}
                 failedSyncCount={failedSyncCount}
                 assignedAudits={assignedAudits}
-                history={history}
+                history={assignmentFilteredHistory}
                 drafts={drafts}
                 companySheetSync={companySheetSync}
                 auditCompletionRate={auditCompletionRate}
