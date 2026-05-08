@@ -2808,6 +2808,12 @@ function App() {
     });
   }, [history, audits, currentUserAssignedSiteIds, sites]);
 
+  const headerSelectableSites = useMemo(() => {
+    const active = sites.filter((site) => site.active);
+    if (!currentUserAssignedSiteIds) return active;
+    return active.filter((site) => currentUserAssignedSiteIds.has(site.id));
+  }, [sites, currentUserAssignedSiteIds]);
+
   const siteScopedAudits = useMemo(() => {
     if (!selectedSite) return assignmentFilteredAudits;
     const selectedName = normalizeIdentity(selectedSite.name);
@@ -3525,6 +3531,7 @@ function App() {
         managerAlerts,
         roleNavVisibility,
         roleSiteSelectorVisibility,
+        userSiteAssignments,
       }),
     );
   }, [
@@ -3549,6 +3556,7 @@ function App() {
     managerAlerts,
     roleNavVisibility,
     roleSiteSelectorVisibility,
+    userSiteAssignments,
   ]);
 
   useEffect(() => {
@@ -3582,10 +3590,12 @@ function App() {
   }, [audits, schedules, managedSchedules]);
 
   useEffect(() => {
-    if (selectedSiteId && !sites.some((site) => site.id === selectedSiteId && site.active)) {
-      setSelectedSiteId("");
+    if (!selectedSiteId) return;
+    const allowedIds = new Set(headerSelectableSites.map((site) => site.id));
+    if (!allowedIds.has(selectedSiteId)) {
+      setSelectedSiteId(headerSelectableSites[0]?.id ?? "");
     }
-  }, [selectedSiteId, sites]);
+  }, [selectedSiteId, headerSelectableSites]);
 
   useEffect(() => {
     window.localStorage.setItem(themeStorageKey, themeMode);
