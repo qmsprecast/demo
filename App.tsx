@@ -11,11 +11,7 @@ type ScheduleFrequency =
   | "Daily"
   | "Weekly"
   | "Bi-Weekly"
-  | "Monthly"
-  | "Bi-Monthly"
-  | "3 Monthly"
-  | "6 Monthly"
-  | "12 Monthly";
+  | "Monthly";
 type ScheduleScope = "Company schedule" | "Personal schedule";
 type OverdueAlertTiming = "At due time" | "30 minutes overdue" | "1 hour overdue" | "2 hours overdue";
 type CompletionCheckTiming = "30 minutes after send" | "1 hour after send" | "At due time" | "2 hours after due";
@@ -42,6 +38,7 @@ type UserInvite = {
   email: string;
   role: Role;
   invitedBy: string;
+  senderEmail?: string;
   sentAt: string;
   status: "Invite sent";
   mailtoUrl?: string;
@@ -514,8 +511,6 @@ type ManagerAlert = {
 type IssuePromptState = {
   question: AuditQuestion;
   answer: Exclude<Answer, "pass">;
-  actionPrompts: string[];
-  solved: boolean | null;
 };
 
 type AuditCompletionSummaryState = {
@@ -529,7 +524,7 @@ type AuditCompletionSummaryState = {
   syncLabel: string;
 };
 
-const companyName = "QMS Precast";
+const companyName = "BertAudit";
 const CURRENT_SCHEMA_VERSION = "2.0.0";
 const REQUIRED_WORKSPACE_TABS = ["Onboarding", "Users", "Schedule", "Actions", "Notes", "Config"] as const;
 const ACTION_DUE_DAYS_BY_SEVERITY: Record<RiskLevel, number> = {
@@ -539,13 +534,16 @@ const ACTION_DUE_DAYS_BY_SEVERITY: Record<RiskLevel, number> = {
   Low: 14,
 };
 
+const GOD_MODE_USERNAME = (import.meta.env.VITE_GODMODE_USERNAME || "master").trim().toLowerCase();
+const GOD_MODE_PASSWORD = import.meta.env.VITE_GODMODE_PASSWORD || "demo";
+
 const users: User[] = [
-  { username: "master", password: "demo", role: "Master", name: "System Setup" },
-  { username: "admin", password: "demo", role: "Admin", name: "Andy Hall" },
-  { username: "manager", password: "demo", role: "Manager", name: "James Cole" },
-  { username: "tom", password: "demo", role: "Auditor", name: "Tom Blake" },
-  { username: "sarah", password: "demo", role: "Auditor", name: "Sarah Evans" },
+  { username: GOD_MODE_USERNAME, password: GOD_MODE_PASSWORD, role: "Master", name: "System Setup" },
 ];
+
+const DEFAULT_MANAGER_NAME = users.find((user) => user.role === "Manager")?.name || "Unassigned";
+const DEFAULT_AUDITOR_NAME = users.find((user) => user.role === "Auditor")?.name || "Unassigned";
+const DEFAULT_ESCALATION_NAME = users.find((user) => user.role === "Master")?.name || "System Setup";
 
 const initialAudits: Audit[] = [];
 
@@ -563,10 +561,6 @@ const scheduleFrequencyOptions: ScheduleFrequency[] = [
   "Weekly",
   "Bi-Weekly",
   "Monthly",
-  "Bi-Monthly",
-  "3 Monthly",
-  "6 Monthly",
-  "12 Monthly",
 ];
 const scheduleDurationOptions = [1, 2, 4, 8, 12, 24, 48];
 const scheduleTimeOptions = Array.from({ length: 48 }, (_, index) => {
@@ -613,9 +607,9 @@ const navItems: { id: Exclude<Screen, "complete">; label: string; icon: string }
   { id: "audits", label: "Audits", icon: "clipboard" },
   { id: "actions", label: "Actions", icon: "warningTriangle" },
   { id: "nonConformance", label: "Non-Conformance", icon: "checklist" },
+  { id: "schedules", label: "Schedules", icon: "clock" },
   { id: "reports", label: "Report creator", icon: "chart" },
   { id: "sync", label: "Sync Centre", icon: "sync" },
-  { id: "schedules", label: "Schedules", icon: "clock" },
   { id: "admin", label: "Control", icon: "shield" },
   { id: "onboarding", label: "Onboarding", icon: "spark" },
   { id: "account", label: "Account settings", icon: "user" },
@@ -1117,6 +1111,15 @@ function getWorkspaceInitials(name: string) {
 
 function buildAuditAccessOverrideKey(email: string, auditId: string) {
   return `${email}::${auditId}`;
+}
+
+function buildOnboardingFormViewUrl(formId: string) {
+  const clean = formId.trim();
+  if (!clean) return "";
+  if (clean.startsWith("1FAIpQL")) {
+    return `https://docs.google.com/forms/d/e/${clean}/viewform`;
+  }
+  return `https://docs.google.com/forms/d/${clean}/viewform`;
 }
 
 const reportTemplates: {
@@ -1714,7 +1717,7 @@ function buildDemoPrecastWorkspace(): {
 
   const companySheetSync: CompanySheetSyncStatus = {
     sheetId: "demo-master-sheet",
-    sheetName: "QMS Precast Master Sheet",
+    sheetName: "BertAudit Master Sheet",
     tabs: ["Onboarding", "Users", "Schedule", "Actions", "Notes", "Config"],
     usersCount: 5,
     schedulesCount: 4,
@@ -2117,6 +2120,16 @@ function formatNcrReference(sequence: number) {
 function computeScheduleHealthState(schedule: ManagedSchedule): ScheduleHealthState {
   if (schedule.lifecycle === "Archived") {
     return "Paused";
+  }
+  if (schedule.healthState === "Paused") {
+    if (schedule.nextDueAt) {
+      const resumeAt = new Date(schedule.nextDueAt).getTime();
+      if (Number.isFinite(resumeAt) && resumeAt > Date.now()) {
+        return "Paused";
+      }
+    } else {
+      return "Paused";
+    }
   }
   if ((schedule.missedAuditCount || 0) > 0) {
     return "Failing";
@@ -2531,14 +2544,14 @@ function App() {
   const [templateDraftQuestions, setTemplateDraftQuestions] = useState<DraftTemplateQuestion[]>([]);
   const [scheduleNameInput, setScheduleNameInput] = useState("");
   const [scheduleAreaInput, setScheduleAreaInput] = useState("");
-  const [scheduleOwnerInput, setScheduleOwnerInput] = useState(users[1].name);
+  const [scheduleOwnerInput, setScheduleOwnerInput] = useState(DEFAULT_MANAGER_NAME);
   const [scheduleScopeInput, setScheduleScopeInput] = useState<ScheduleScope>("Company schedule");
-  const [schedulePersonalAssigneeInput, setSchedulePersonalAssigneeInput] = useState(users[2].name);
+  const [schedulePersonalAssigneeInput, setSchedulePersonalAssigneeInput] = useState(DEFAULT_AUDITOR_NAME);
   const [scheduleFrequencyInput, setScheduleFrequencyInput] = useState<ScheduleFrequency>("Weekly");
   const [scheduleSendTimeInput, setScheduleSendTimeInput] = useState("08:00");
-  const [scheduleRecipientsInput, setScheduleRecipientsInput] = useState(users[2].name);
-  const [scheduleOverdueAlertRecipientsInput, setScheduleOverdueAlertRecipientsInput] = useState(users[1].name);
-  const [scheduleEscalationContactInput, setScheduleEscalationContactInput] = useState(users[0].name);
+  const [scheduleRecipientsInput, setScheduleRecipientsInput] = useState(DEFAULT_AUDITOR_NAME);
+  const [scheduleOverdueAlertRecipientsInput, setScheduleOverdueAlertRecipientsInput] = useState(DEFAULT_MANAGER_NAME);
+  const [scheduleEscalationContactInput, setScheduleEscalationContactInput] = useState(DEFAULT_ESCALATION_NAME);
   const [scheduleOverdueAlertTimingInput, setScheduleOverdueAlertTimingInput] =
     useState<OverdueAlertTiming>("At due time");
   const [scheduleCompletionCheckTimingInput, setScheduleCompletionCheckTimingInput] =
@@ -2566,7 +2579,7 @@ function App() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [companySheetSync, setCompanySheetSync] = useState<CompanySheetSyncStatus | null>(storedWorkspaceState?.companySheetSync || null);
   const [selectedReportTemplate, setSelectedReportTemplate] = useState<ReportTemplateType>("Executive summary");
-  const [reportTitleInput, setReportTitleInput] = useState("QMS Precast Executive Summary");
+  const [reportTitleInput, setReportTitleInput] = useState("BertAudit Executive Summary");
   const [reportRecipients, setReportRecipients] = useState<string[]>([]);
   const [selectedReportSections, setSelectedReportSections] = useState<ReportSectionKey[]>(
     reportTemplateDefaults["Executive summary"],
@@ -2770,15 +2783,6 @@ function App() {
     [visibleActions],
   );
 
-  const assignedAudits = useMemo(() => {
-    if (!currentUser) {
-      return audits.filter((audit) => !isAuditCompleted(audit));
-    }
-    if (canAccessAdmin(currentUser.role) || currentUser.role === "Manager") {
-      return audits.filter((audit) => !isAuditCompleted(audit));
-    }
-    return audits.filter((audit) => audit.owner === currentUser.name && !isAuditCompleted(audit));
-  }, [audits, currentUser]);
   const demoModeActive = useMemo(
     () =>
       audits.some((audit) => audit.id.startsWith("audit-demo-")) ||
@@ -2888,6 +2892,32 @@ function App() {
     return merged.filter((user, index, list) => list.findIndex((item) => item.email === user.email) === index);
   }, [invitedUsers]);
 
+  const onboardingPasswordByEmail = useMemo(() => {
+    const lookup = new Map<string, string>();
+    onboardingRecords.forEach((record) => {
+      const email = normalizeIdentity(record.contactEmail);
+      const password = extractByKeys(record.raw, ["password", "passcode", "pin", "login"]);
+      if (email && password) {
+        lookup.set(email, password);
+      }
+    });
+    return lookup;
+  }, [onboardingRecords]);
+
+  const loginUsers = useMemo(() => {
+    const invitedLoginUsers = invitedUsers.map((invite) => ({
+      username: invite.email.split("@")[0].toLowerCase(),
+      password: onboardingPasswordByEmail.get(normalizeIdentity(invite.email)) || "demo",
+      role: invite.role,
+      name: invite.email,
+    }));
+    const merged = [...users, ...invitedLoginUsers];
+    return merged.filter(
+      (user, index, list) =>
+        list.findIndex((item) => item.username === user.username && item.role === user.role) === index,
+    );
+  }, [invitedUsers, onboardingPasswordByEmail]);
+
   const availableScheduleAudits = useMemo(() => {
     const templateOptions = templates
       .filter((template) => template.active)
@@ -2896,6 +2926,65 @@ function App() {
     const merged = [...templateOptions, ...auditOptions];
     return merged.filter((item, index, list) => list.findIndex((entry) => entry.name === item.name) === index);
   }, [templates, audits]);
+
+  const currentUserAuditAccess = useMemo(() => {
+    if (!currentUser) {
+      return { allowedAuditIds: new Set<string>(), allowedAuditNames: new Set<string>() };
+    }
+    const normalizedName = normalizeIdentity(currentUser.name);
+    const normalizedUsername = normalizeIdentity(currentUser.username);
+    const normalizedDefaultEmail = normalizeIdentity(`${currentUser.username}@qmsprecast.co.uk`);
+    const matchingEmails = new Set(
+      companyReportUsers
+        .filter((user) => {
+          const userName = normalizeIdentity(user.name);
+          const userEmail = normalizeIdentity(user.email);
+          const userEmailLocalPart = normalizeIdentity(user.email.split("@")[0]);
+          const userUsername = normalizeIdentity(user.username || "");
+          return (
+            userName === normalizedName ||
+            userEmail === normalizedDefaultEmail ||
+            userEmailLocalPart === normalizedUsername ||
+            userUsername === normalizedUsername
+          );
+        })
+        .map((user) => normalizeIdentity(user.email)),
+    );
+    matchingEmails.add(normalizedDefaultEmail);
+
+    const allowedAuditIds = new Set<string>();
+    Object.entries(auditAccessOverrides).forEach(([key, access]) => {
+      const [email, auditId] = key.split("::");
+      if (!email || !auditId) return;
+      if (access === "No access") return;
+      if (!matchingEmails.has(normalizeIdentity(email))) return;
+      allowedAuditIds.add(auditId);
+    });
+
+    const allowedAuditNames = new Set<string>();
+    availableScheduleAudits.forEach((option) => {
+      if (allowedAuditIds.has(option.id)) {
+        allowedAuditNames.add(option.name);
+      }
+    });
+    return { allowedAuditIds, allowedAuditNames };
+  }, [currentUser, companyReportUsers, auditAccessOverrides, availableScheduleAudits]);
+
+  const assignedAudits = useMemo(() => {
+    if (!currentUser) {
+      return audits.filter((audit) => !isAuditCompleted(audit));
+    }
+    if (canAccessAdmin(currentUser.role) || currentUser.role === "Manager") {
+      return audits.filter((audit) => !isAuditCompleted(audit));
+    }
+    return audits.filter((audit) => {
+      if (isAuditCompleted(audit)) return false;
+      if (audit.owner === currentUser.name) return true;
+      if (currentUserAuditAccess.allowedAuditIds.has(audit.id)) return true;
+      if (currentUserAuditAccess.allowedAuditNames.has(audit.name)) return true;
+      return false;
+    });
+  }, [audits, currentUser, currentUserAuditAccess]);
 
   const availableScheduleAuditors = useMemo(() => {
     const seeded = users.filter((user) => user.role === "Auditor").map((user) => user.name);
@@ -3142,7 +3231,7 @@ function App() {
 
     try {
       const parsed = JSON.parse(storedUser) as User;
-      const matchedUser = users.find(
+      const matchedUser = loginUsers.find(
         (user) =>
           user.username === parsed.username &&
           user.role === parsed.role &&
@@ -3159,7 +3248,7 @@ function App() {
     } catch {
       window.localStorage.removeItem(userStorageKey);
     }
-  }, []);
+  }, [loginUsers]);
 
   useEffect(() => {
     const storedQueue = window.localStorage.getItem(offlineQueueStorageKey);
@@ -3313,7 +3402,7 @@ function App() {
           noteMap: submission.notes,
           evidenceMap: submission.evidence,
           submittedBy: submission.submittedBy,
-          submittedByUser: users.find((item) => item.name === submission.submittedBy) || users[1],
+          submittedByUser: users.find((item) => item.name === submission.submittedBy) || users[0],
           completedAt: submission.queuedAt,
         });
         updateSyncItemStatus(submission.audit.id, "Synced");
@@ -3665,7 +3754,7 @@ function App() {
     setNotificationsEnabled(granted);
     pushToast(
       granted ? "Notifications enabled" : "Notifications blocked",
-      granted ? "QMS Precast can now send live browser alerts." : "Enable browser notifications to receive live alerts.",
+      granted ? "BertAudit can now send live browser alerts." : "Enable browser notifications to receive live alerts.",
       granted ? "success" : "warning",
     );
   };
@@ -3804,9 +3893,16 @@ function App() {
     }).format(new Date());
 
   const handleLogin = () => {
-    const match = users.find(
-      (user) => user.username === username.trim().toLowerCase() && user.password === password,
-    );
+    const loginIdentity = username.trim().toLowerCase();
+    const match = loginUsers.find((user) => {
+      if (user.password !== password) {
+        return false;
+      }
+      if (user.username === loginIdentity) {
+        return true;
+      }
+      return `${user.username}@qmsprecast.co.uk` === loginIdentity;
+    });
     if (!match) {
       pushToast("Sign in failed", "Please check your username and password.", "warning");
       return;
@@ -3859,6 +3955,9 @@ function App() {
       return;
     }
 
+    let inviteDelivery: "smtp" | "manual" = "smtp";
+    let inviteMailtoUrl = "";
+    let inviteSenderEmail = "";
     try {
       const response = await fetch("/api/onboarding/invite", {
         method: "POST",
@@ -3872,11 +3971,14 @@ function App() {
           onboardingFormId: onboardingSource.formId,
         }),
       });
-      const payload = (await response.json()) as { ok?: boolean; error?: string };
+      const payload = (await response.json()) as { ok?: boolean; error?: string; delivery?: "smtp" | "manual"; mailtoUrl?: string; senderEmail?: string };
 
       if (!response.ok || !payload.ok) {
         throw new Error(payload.error || "Unable to send onboarding invite email.");
       }
+      inviteDelivery = payload.delivery || "smtp";
+      inviteMailtoUrl = payload.mailtoUrl || "";
+      inviteSenderEmail = payload.senderEmail || "";
     } catch (error) {
       pushToast(
         "Invite send failed",
@@ -3886,20 +3988,171 @@ function App() {
       return;
     }
 
-    setInvitedUsers((current) => [
-      {
-        id: `invite-${Date.now()}`,
-        email: trimmedEmail,
-        role: inviteRole,
-        invitedBy: currentUser.name,
-        sentAt: formatStamp(),
-        status: "Invite sent",
-      },
-      ...current,
-    ]);
+    const createdInvite: UserInvite = {
+      id: `invite-${Date.now()}`,
+      email: trimmedEmail,
+      role: inviteRole,
+      invitedBy: currentUser.name,
+      senderEmail: inviteSenderEmail || undefined,
+      sentAt: formatStamp(),
+      status: "Invite sent",
+      mailtoUrl: inviteMailtoUrl || undefined,
+    };
+    const nextInvitedUsers = [createdInvite, ...invitedUsers];
+    setInvitedUsers(nextInvitedUsers);
+    if (selectedFolder?.id) {
+      try {
+        await persistUsers(selectedFolder.id, nextInvitedUsers);
+      } catch (error) {
+        pushToast(
+          "Users tab not updated",
+          error instanceof Error ? error.message : "Invite sent, but the Users tab could not be updated yet.",
+          "warning",
+        );
+      }
+    }
     setInviteEmailInput("");
-    pushToast("Onboarding link sent", `${inviteRole} invite sent to ${trimmedEmail}.`, "success");
+    pushToast(
+      inviteDelivery === "manual" ? "Invite draft ready" : "Onboarding link sent",
+      inviteDelivery === "manual"
+        ? `SMTP is not configured. Open email draft for ${trimmedEmail}.`
+        : `${inviteRole} invite sent to ${trimmedEmail}.`,
+      "success",
+    );
     triggerNotification("User onboarding invite", `${trimmedEmail} has been invited as ${inviteRole}.`);
+  };
+
+  const handleResendInvite = async (invite: UserInvite) => {
+    if (!currentUser) return;
+    if (!onboardingSource?.formId) {
+      pushToast("Onboarding form unavailable", "Configure or reconnect Google so the onboarding form can be sent.", "warning");
+      return;
+    }
+
+    let inviteDelivery: "smtp" | "manual" = "smtp";
+    let inviteMailtoUrl = invite.mailtoUrl || "";
+    let inviteSenderEmail = invite.senderEmail || "";
+    try {
+      const response = await fetch("/api/onboarding/invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: invite.email,
+          role: invite.role,
+          invitedBy: currentUser.name,
+          onboardingFormId: onboardingSource.formId,
+        }),
+      });
+      const payload = (await response.json()) as { ok?: boolean; error?: string; delivery?: "smtp" | "manual"; mailtoUrl?: string; senderEmail?: string };
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "Unable to resend onboarding invite email.");
+      }
+      inviteDelivery = payload.delivery || "smtp";
+      inviteMailtoUrl = payload.mailtoUrl || inviteMailtoUrl;
+      inviteSenderEmail = payload.senderEmail || inviteSenderEmail;
+    } catch (error) {
+      pushToast(
+        "Resend failed",
+        error instanceof Error ? error.message : "Unable to resend onboarding invite email.",
+        "warning",
+      );
+      return;
+    }
+
+    const resentAt = formatStamp();
+    const nextInvitedUsers = invitedUsers.map((item) =>
+      item.id === invite.id
+        ? {
+            ...item,
+            sentAt: resentAt,
+            invitedBy: currentUser.name,
+            senderEmail: inviteSenderEmail || undefined,
+            mailtoUrl: inviteMailtoUrl || undefined,
+          }
+        : item,
+    );
+    setInvitedUsers(nextInvitedUsers);
+    if (selectedFolder?.id) {
+      try {
+        await persistUsers(selectedFolder.id, nextInvitedUsers);
+      } catch (error) {
+        pushToast(
+          "Users tab not updated",
+          error instanceof Error ? error.message : "Invite resent, but the Users tab could not be updated yet.",
+          "warning",
+        );
+      }
+    }
+    pushToast(
+      inviteDelivery === "manual" ? "Invite draft ready" : "Invite resent",
+      inviteDelivery === "manual"
+        ? `SMTP is not configured. Open email draft for ${invite.email}.`
+        : `Onboarding link resent to ${invite.email}.`,
+      "success",
+    );
+  };
+
+  const handleDeleteInvite = (invite: UserInvite) => {
+    setInvitedUsers((current) => current.filter((item) => item.id !== invite.id));
+    pushToast("Invite removed", `${invite.email} has been removed from sent invites.`, "success");
+  };
+
+  const handleResyncUsers = async () => {
+    if (!googleConnected) {
+      pushToast("Google not connected", "Connect Google before re-syncing users.", "warning");
+      return;
+    }
+
+    const companyFolderId = selectedFolder?.id || extractGoogleResourceId(folderIdInput);
+    if (!companyFolderId) {
+      pushToast("Company folder required", "Select a company folder before re-syncing users.", "warning");
+      return;
+    }
+
+    try {
+      const manualMasterSheetId = extractGoogleResourceId(masterSheetInput) || companySheetSync?.sheetId || "";
+      const payload = manualMasterSheetId
+        ? await loadCompanySheetById(manualMasterSheetId, companyFolderId, { silent: true })
+        : await loadCompanySheet(companyFolderId, { silent: true });
+
+      if (!payload) {
+        throw new Error("Unable to load the company sheet.");
+      }
+
+      const syncedUsers = payload.data.Users?.length ?? 0;
+      pushToast("Users re-synced", `${syncedUsers} user row${syncedUsers === 1 ? "" : "s"} pulled from the company sheet.`, "success");
+    } catch (error) {
+      pushToast(
+        "Resync failed",
+        error instanceof Error ? error.message : "Unable to re-sync users from the company sheet.",
+        "warning",
+      );
+    }
+  };
+
+  const persistUsers = async (companyFolderId: string, nextUsers: UserInvite[]) => {
+    const sheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput);
+    if (!sheetId) {
+      throw new Error("Company master sheet link is required before saving users.");
+    }
+
+    const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/users`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        companyFolderId,
+        users: nextUsers,
+      }),
+    });
+
+    const payload = (await response.json()) as SaveSchedulesResponse;
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || "Unable to save users.");
+    }
   };
 
   const persistActions = async (companyFolderId: string, nextActions: ActionItem[]) => {
@@ -4362,7 +4615,7 @@ function App() {
       setSignatureSignedAt("");
       setScreen("dashboard");
       pushToast("Queued offline", `${activeAudit.name} has been saved and will sync when the tablet reconnects.`, "warning");
-      triggerNotification("QMS Precast", `${activeAudit.name} has been queued offline for sync.`);
+      triggerNotification("BertAudit", `${activeAudit.name} has been queued offline for sync.`);
       notifySelectedManagersForNonCompliance(activeAudit, currentUser.name, nonComplianceCount, true);
       return;
     }
@@ -4516,12 +4769,10 @@ function App() {
     setIssuePrompt({
       question,
       answer,
-      actionPrompts: question.answerPrompts?.[answer] || [],
-      solved: null,
     });
   };
 
-  const handleAuditModeSaveIssue = ({ noteValue, escalate }: { noteValue: string; escalate?: boolean }) => {
+  const handleAuditModeSaveIssue = ({ noteValue }: { noteValue: string; escalate?: boolean }) => {
     if (!activeAudit || !issuePrompt) return;
     if (!noteValue.trim()) {
       pushToast("Note required", "Describe what was found before continuing.", "warning");
@@ -4536,7 +4787,6 @@ function App() {
       [issuePrompt.question.id]: noteValue,
     }));
     const mustCreateAction =
-      Boolean(escalate) ||
       issuePrompt.question.autoActionRequired ||
       issuePrompt.question.riskLevel === "Critical" ||
       issuePrompt.question.riskLevel === "High" ||
@@ -4907,7 +5157,7 @@ function App() {
         dueLabel: getDueLabel(index === 0 ? 1 : 24),
         dueHours: index === 0 ? 1 : 24,
         priority: index === 0 ? "High" : "Medium",
-        owner: scheduleOwnerInput || users[1].name,
+        owner: scheduleOwnerInput || DEFAULT_MANAGER_NAME,
         templateVersion: template.source,
         status: getAuditTrafficStatus(index === 0 ? 1 : 24),
         lastCompletedAt: "Not yet completed",
@@ -4948,13 +5198,13 @@ function App() {
         "Onboarding form unavailable",
         googleConnected
           ? "The onboarding form has not been discovered yet. Refresh the onboarding source or reconnect Google."
-          : "Reconnect Google first so QMS Precast can find the onboarding form link.",
+          : "Reconnect Google first so BertAudit can find the onboarding form link.",
         "warning",
       );
       return;
     }
 
-    window.location.href = `https://docs.google.com/forms/d/${onboardingSource.formId}/viewform`;
+    window.location.href = buildOnboardingFormViewUrl(onboardingSource.formId);
   };
 
   const handleApplyOnboardingRecord = () => {
@@ -4966,13 +5216,13 @@ function App() {
     setFolderNameInput(
       normalizeFolderName(activeOnboardingRecord.companyName || activeOnboardingRecord.companyFolderReference),
     );
-    setScheduleRecipientsInput(activeOnboardingRecord.auditRecipients || users[2].name);
+    setScheduleRecipientsInput(activeOnboardingRecord.auditRecipients || DEFAULT_AUDITOR_NAME);
     setScheduleOverdueAlertRecipientsInput(
-      activeOnboardingRecord.overdueAlertRecipients || activeOnboardingRecord.reportingContact || users[1].name,
+      activeOnboardingRecord.overdueAlertRecipients || activeOnboardingRecord.reportingContact || DEFAULT_MANAGER_NAME,
     );
-    setScheduleEscalationContactInput(activeOnboardingRecord.reportingContact || users[0].name);
-    setScheduleOwnerInput(activeOnboardingRecord.mainContact || users[1].name);
-    setSchedulePersonalAssigneeInput(activeOnboardingRecord.mainContact || users[2].name);
+    setScheduleEscalationContactInput(activeOnboardingRecord.reportingContact || DEFAULT_ESCALATION_NAME);
+    setScheduleOwnerInput(activeOnboardingRecord.mainContact || DEFAULT_MANAGER_NAME);
+    setSchedulePersonalAssigneeInput(activeOnboardingRecord.mainContact || DEFAULT_AUDITOR_NAME);
     setSyncState("Onboarding submission applied");
     pushToast(
       "Submission applied",
@@ -5122,7 +5372,7 @@ function App() {
           dueLabel: getDueLabel(24),
           dueHours: 24,
           priority: "Medium",
-          owner: scheduleOwnerInput || users[1].name,
+          owner: scheduleOwnerInput || DEFAULT_MANAGER_NAME,
           templateVersion: "Built in app",
           status: getAuditTrafficStatus(24),
           lastCompletedAt: "Not yet completed",
@@ -5228,7 +5478,7 @@ function App() {
         dueLabel: getDueLabel(24),
         dueHours: 24,
         priority: "Medium",
-        owner: scheduleOwnerInput || users[1].name,
+        owner: scheduleOwnerInput || DEFAULT_MANAGER_NAME,
         templateVersion: toggledTemplate.source,
         status: getAuditTrafficStatus(24),
         lastCompletedAt: "Not yet completed",
@@ -5416,7 +5666,7 @@ function App() {
         title: reportDefinition.title,
         type: "Text audit pack",
         createdAt: timestamp,
-        createdBy: currentUser?.name || "QMS Precast",
+        createdBy: currentUser?.name || "BertAudit",
         visibleTo: reportRecipients,
         template: selectedReportTemplate,
       },
@@ -5462,7 +5712,7 @@ function App() {
         title: reportDefinition.title,
         type: "PDF report",
         createdAt: timestamp,
-        createdBy: currentUser?.name || "QMS Precast",
+        createdBy: currentUser?.name || "BertAudit",
         visibleTo: reportRecipients,
         template: selectedReportTemplate,
       },
@@ -5555,14 +5805,14 @@ function App() {
     setSchedules((current) => [newSchedule, ...current]);
     setScheduleNameInput("");
     setScheduleAreaInput("");
-    setScheduleOwnerInput(users[1].name);
+    setScheduleOwnerInput(DEFAULT_MANAGER_NAME);
     setScheduleScopeInput("Company schedule");
-    setSchedulePersonalAssigneeInput(users[2].name);
+    setSchedulePersonalAssigneeInput(DEFAULT_AUDITOR_NAME);
     setScheduleFrequencyInput("Weekly");
     setScheduleSendTimeInput("08:00");
-    setScheduleRecipientsInput(users[2].name);
-    setScheduleOverdueAlertRecipientsInput(users[1].name);
-    setScheduleEscalationContactInput(users[0].name);
+    setScheduleRecipientsInput(DEFAULT_AUDITOR_NAME);
+    setScheduleOverdueAlertRecipientsInput(DEFAULT_MANAGER_NAME);
+    setScheduleEscalationContactInput(DEFAULT_ESCALATION_NAME);
     setScheduleOverdueAlertTimingInput("At due time");
     setScheduleCompletionCheckTimingInput("At due time");
     setScheduleNextDueHoursInput("24");
@@ -5785,6 +6035,95 @@ function App() {
     setScheduleEditorOpen(true);
   };
 
+  const handleDeleteSchedule = async (scheduleId: string) => {
+    const schedule = managedSchedules.find((item) => item.id === scheduleId);
+    if (!schedule) return;
+    const confirmed = window.confirm(`Delete "${schedule.scheduleName}" (${schedule.versionLabel})? This cannot be undone.`);
+    if (!confirmed) return;
+
+    const nextManagedSchedules = managedSchedules.filter((item) => item.id !== scheduleId);
+    try {
+      if (selectedFolder?.id) {
+        await persistManagedSchedules(selectedFolder.id, nextManagedSchedules);
+      }
+      setManagedSchedules(nextManagedSchedules);
+      if (editingScheduleId === scheduleId) {
+        resetManagedScheduleDraft();
+      }
+      pushToast("Schedule deleted", `${schedule.scheduleName} has been removed.`, "success");
+    } catch (error) {
+      pushToast(
+        "Delete failed",
+        error instanceof Error ? error.message : "Unable to delete the schedule from the company master sheet.",
+        "warning",
+      );
+    }
+  };
+
+  const handlePauseSchedule = async (scheduleId: string) => {
+    const schedule = managedSchedules.find((item) => item.id === scheduleId);
+    if (!schedule) return;
+    const input = window.prompt(`Pause "${schedule.scheduleName}" for how many days?`, "7");
+    if (input === null) return;
+    const days = Number(input.trim());
+    if (!Number.isFinite(days) || days <= 0) {
+      pushToast("Invalid duration", "Enter a number of days greater than 0.", "warning");
+      return;
+    }
+    const pausedUntil = addDaysIso(Math.round(days));
+    const nextManagedSchedules = managedSchedules.map((item) =>
+      item.id === scheduleId
+        ? {
+            ...item,
+            healthState: "Paused" as ScheduleHealthState,
+            nextDueAt: pausedUntil,
+            updatedAt: formatStamp(),
+          }
+        : item,
+    );
+    try {
+      if (selectedFolder?.id) {
+        await persistManagedSchedules(selectedFolder.id, nextManagedSchedules);
+      }
+      setManagedSchedules(nextManagedSchedules);
+      pushToast("Schedule paused", `${schedule.scheduleName} paused until ${pausedUntil}.`, "success");
+    } catch (error) {
+      pushToast(
+        "Pause failed",
+        error instanceof Error ? error.message : "Unable to pause the schedule in the company master sheet.",
+        "warning",
+      );
+    }
+  };
+
+  const handleResumeSchedule = async (scheduleId: string) => {
+    const schedule = managedSchedules.find((item) => item.id === scheduleId);
+    if (!schedule) return;
+    const nextManagedSchedules = managedSchedules.map((item) =>
+      item.id === scheduleId
+        ? {
+            ...item,
+            healthState: undefined,
+            nextDueAt: "",
+            updatedAt: formatStamp(),
+          }
+        : item,
+    );
+    try {
+      if (selectedFolder?.id) {
+        await persistManagedSchedules(selectedFolder.id, nextManagedSchedules);
+      }
+      setManagedSchedules(nextManagedSchedules);
+      pushToast("Schedule resumed", `${schedule.scheduleName} is active again.`, "success");
+    } catch (error) {
+      pushToast(
+        "Resume failed",
+        error instanceof Error ? error.message : "Unable to resume the schedule in the company master sheet.",
+        "warning",
+      );
+    }
+  };
+
   const persistManagedSchedules = async (companyFolderId: string, nextSchedules: ManagedSchedule[]) => {
     const sheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput);
     if (!sheetId) {
@@ -5872,7 +6211,7 @@ function App() {
             <div
               data-qms-theme={themeMode}
               className={[
-                "qms-login-shell qms-login-card flex flex-col justify-center rounded-[2.2rem] border p-6 backdrop-blur",
+                "qms-login-shell qms-login-card flex flex-col justify-start overflow-y-auto rounded-[2.2rem] border px-6 pb-6 pt-12 backdrop-blur",
                 themeMode === "dark"
                   ? "border-slate-800/80 bg-slate-950/80 shadow-[0_32px_90px_rgba(2,6,23,0.58)]"
                   : "border-white/70 bg-white/90 shadow-[0_32px_90px_rgba(15,23,42,0.14)]",
@@ -5941,7 +6280,7 @@ function App() {
               <div className="qms-login-access mt-6">
                 <div className="space-y-4">
                   <div>
-                    <label className={["mb-2 block text-sm font-medium", themeMode === "dark" ? "text-slate-300" : "text-slate-700"].join(" ")}>Username</label>
+                    <label className={["mb-2 block text-sm font-medium", themeMode === "dark" ? "text-slate-300" : "text-slate-700"].join(" ")}>Username or email</label>
                     <input
                       value={username}
                       onChange={(event) => setUsername(event.target.value)}
@@ -5951,7 +6290,7 @@ function App() {
                           ? "border-slate-700 bg-slate-900 text-slate-100 focus:border-sky-400 focus:bg-slate-950"
                           : "border-slate-200 bg-slate-50 text-slate-900 focus:border-slate-400 focus:bg-white",
                       ].join(" ")}
-                      placeholder="Enter username"
+                      placeholder="Enter username or email"
                     />
                   </div>
                   <div>
@@ -5983,36 +6322,6 @@ function App() {
                   Sign in
                 </button>
 
-                <div className={["mt-6 rounded-[1.5rem] border p-4", themeMode === "dark" ? "border-slate-800 bg-slate-900/80" : "border-slate-200 bg-slate-50"].join(" ")}>
-                  <p className={["text-sm font-semibold", themeMode === "dark" ? "text-slate-100" : "text-slate-800"].join(" ")}>Approved demo access</p>
-                  <div className="mt-3 grid gap-3">
-                    {users.map((user) => (
-                      <div
-                        key={user.username}
-                        className={[
-                          "flex items-center justify-between rounded-2xl border px-4 py-3",
-                          themeMode === "dark" ? "border-slate-800 bg-slate-950" : "border-white bg-white",
-                        ].join(" ")}
-                      >
-                        <div>
-                          <p className={["text-sm font-semibold", themeMode === "dark" ? "text-slate-100" : "text-slate-900"].join(" ")}>{getRoleDisplayName(user.role)}</p>
-                          <p className={["text-xs", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
-                            {user.username} / {user.password}
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => {
-                            setUsername(user.username);
-                            setPassword(user.password);
-                          }}
-                          className={["rounded-xl px-3 py-2 text-xs font-semibold", themeMode === "dark" ? `bg-slate-900 text-slate-200 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-700 transition hover:bg-slate-200"].join(" ")}
-                        >
-                          Use
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
               </div>
             </div>
             </div>
@@ -6115,7 +6424,7 @@ function App() {
               <div className="flex shrink-0 items-center gap-1.5">
                 {demoModeActive && (
                   <div className="rounded-full bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
-                    Demo
+                    Demo mode active
                   </div>
                 )}
                 <div className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
@@ -6456,6 +6765,9 @@ function App() {
                 onSave={handleSaveManagedSchedule}
                 onCancel={resetManagedScheduleDraft}
                 onReactivate={handleReactivateSchedule}
+                onDelete={handleDeleteSchedule}
+                onPause={handlePauseSchedule}
+                onResume={handleResumeSchedule}
               />
             )}
 
@@ -6552,6 +6864,9 @@ function App() {
                 onInviteEmailChange={setInviteEmailInput}
                 onInviteRoleChange={setInviteRoleInput}
                 onInviteUser={handleInviteUser}
+                onResendInvite={handleResendInvite}
+                onDeleteInvite={handleDeleteInvite}
+                onResyncUsers={handleResyncUsers}
                 standaloneOnboarding={screen === "onboarding"}
                 scheduleNameInput={scheduleNameInput}
                 scheduleAreaInput={scheduleAreaInput}
@@ -6659,6 +6974,30 @@ function App() {
                   <IssueFoundPrompt
                     issue={issuePrompt}
                     existingNote={notes[issuePrompt.question.id] || ""}
+                    evidenceCount={evidence[issuePrompt.question.id]?.length ?? 0}
+                    assignedToName={activeAudit.owner}
+                    offlineMode={offlineMode}
+                    onAddPhoto={(files) => {
+                      const fileCount = files.length;
+                      if (!fileCount) return;
+                      const questionId = issuePrompt.question.id;
+                      setEvidenceDebugLabel(`Selected: ${Array.from(files).map((file) => file.name).join(", ")}`);
+                      const nextItems = Array.from(files).map((file) => ({
+                        id: `${questionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        name: file.name,
+                        previewUrl: URL.createObjectURL(file),
+                        addedAt: formatStamp(),
+                      }));
+                      setEvidence((current) => ({
+                        ...current,
+                        [questionId]: [...(current[questionId] ?? []), ...nextItems],
+                      }));
+                      pushToast(
+                        "Evidence attached",
+                        `${fileCount} file${fileCount === 1 ? "" : "s"} added to this finding.`,
+                        "success",
+                      );
+                    }}
                     onSave={handleAuditModeSaveIssue}
                     onCancel={() => setIssuePrompt(null)}
                   />
@@ -8100,11 +8439,23 @@ function AuditsScreen({
         <MiniMetric label="In progress" value={String(Object.keys(drafts).length)} />
       </section>
 
-      {audits.length === 0 && (
-        <EmptyPanel
-          title="No audit templates live"
-          text="This blank version is ready for setup. Connect Google in Admin, select the company folder you want, verify the onboarding form, audit forms, and response sheet, then sync."
-        />
+      {currentUser.role !== "Auditor" && (
+        <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+          <SectionHeader
+            icon="user"
+            eyebrow="Access control"
+            title="Audit access matrix"
+            subtitle="Manage exactly which users can access each audit."
+          />
+          <div className="mt-4">
+            <AccessMatrixTable
+              auditAccessMatrix={auditAccessMatrix}
+              auditScheduleMatrix={auditScheduleMatrix}
+              userProfilePhotos={userProfilePhotos}
+              onToggleAuditAccess={onToggleAuditAccess}
+            />
+          </div>
+        </section>
       )}
 
       <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red} status="red" onOpenAudit={onOpenAudit} expanded drafts={drafts} unsyncedAuditIds={unsyncedAuditIds} />
@@ -8129,23 +8480,11 @@ function AuditsScreen({
         unsyncedAuditIds={unsyncedAuditIds}
       />
 
-      {currentUser.role !== "Auditor" && (
-        <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-          <SectionHeader
-            icon="user"
-            eyebrow="Access control"
-            title="Audit access matrix"
-            subtitle="Manage exactly which users can access each audit."
-          />
-          <div className="mt-4">
-            <AccessMatrixTable
-              auditAccessMatrix={auditAccessMatrix}
-              auditScheduleMatrix={auditScheduleMatrix}
-              userProfilePhotos={userProfilePhotos}
-              onToggleAuditAccess={onToggleAuditAccess}
-            />
-          </div>
-        </section>
+      {audits.length === 0 && (
+        <EmptyPanel
+          title="No audit templates live"
+          text="This blank version is ready for setup. Connect Google in Admin, select the company folder you want, verify the onboarding form, audit forms, and response sheet, then sync."
+        />
       )}
     </div>
   );
@@ -8963,6 +9302,9 @@ function SchedulesScreen({
   onSave,
   onCancel,
   onReactivate,
+  onDelete,
+  onPause,
+  onResume,
 }: {
   selectedFolder: CompanyFolder | null;
   schedules: ManagedSchedule[];
@@ -8993,6 +9335,9 @@ function SchedulesScreen({
   onSave: () => void;
   onCancel: () => void;
   onReactivate: (scheduleId: string) => void;
+  onDelete: (scheduleId: string) => void;
+  onPause: (scheduleId: string) => void;
+  onResume: (scheduleId: string) => void;
 }) {
   const nameError = validationAttempted && !scheduleName.trim();
   const auditsError = validationAttempted && scheduleAudits.length === 0;
@@ -9055,6 +9400,9 @@ function SchedulesScreen({
                       <MetaPill icon="spark" label={`${schedule.lifecycle} rev ${schedule.versionLabel}`} />
                       <MetaPill icon="clipboard" label={`${schedule.audits.length} audits`} />
                       <MetaPill icon="user" label={`${schedule.auditors.length} auditors`} />
+                      {computeScheduleHealthState(schedule) === "Paused" && schedule.nextDueAt && (
+                        <MetaPill icon="clock" label={`Paused until ${schedule.nextDueAt}`} />
+                      )}
                     </div>
                     <p className="mt-2 text-xs text-slate-500">
                       Start {schedule.startDate} {schedule.endDate ? `• End ${schedule.endDate}` : "• No end date"}
@@ -9064,6 +9412,18 @@ function SchedulesScreen({
                     <button onClick={() => onOpenSchedule(schedule.id)} className={`rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
                       Edit
                     </button>
+                    <button onClick={() => onDelete(schedule.id)} className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+                      Delete
+                    </button>
+                    {computeScheduleHealthState(schedule) === "Paused" ? (
+                      <button onClick={() => onResume(schedule.id)} className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                        Resume
+                      </button>
+                    ) : (
+                      <button onClick={() => onPause(schedule.id)} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                        Pause
+                      </button>
+                    )}
                     {schedule.lifecycle === "Archived" && (
                       <button onClick={() => onReactivate(schedule.id)} className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
                         Reactivate
@@ -9356,7 +9716,7 @@ function AccountSettingsScreen({
 
       <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
         <p className="text-sm font-semibold text-slate-900">Appearance</p>
-        <p className="mt-1 text-sm text-slate-500">Choose how QMS Precast looks on this tablet.</p>
+        <p className="mt-1 text-sm text-slate-500">Choose how BertAudit looks on this tablet.</p>
         <div className="mt-4 grid grid-cols-2 gap-3">
           {(["light", "dark"] as ThemeMode[]).map((mode) => {
             const selected = themeMode === mode;
@@ -9614,16 +9974,32 @@ function AuditModeScreen({
 function IssueFoundPrompt({
   issue,
   existingNote,
+  evidenceCount,
+  assignedToName,
+  offlineMode,
+  onAddPhoto,
   onSave,
   onCancel,
 }: {
   issue: IssuePromptState;
   existingNote: string;
+  evidenceCount: number;
+  assignedToName: string;
+  offlineMode: boolean;
+  onAddPhoto: (files: FileList) => void;
   onSave: ({ noteValue, escalate }: { noteValue: string; escalate?: boolean }) => void;
   onCancel: () => void;
 }) {
   const [noteValue, setNoteValue] = useState(existingNote);
   const severity = issue.question.riskLevel || (issue.answer === "fail" ? "Critical" : "High");
+  const requiresPhoto = Boolean(issue.question.requiresPhotoEvidence);
+  const willCreateAction =
+    issue.question.autoActionRequired ||
+    severity === "Critical" ||
+    severity === "High" ||
+    issue.answer === "fail";
+  const actionTitle = `Resolve failed check: ${issue.question.text}`;
+  const actionDueDate = addDaysIso(ACTION_DUE_DAYS_BY_SEVERITY[severity]);
 
   useEffect(() => {
     setNoteValue(existingNote);
@@ -9635,12 +10011,42 @@ function IssueFoundPrompt({
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-600">Issue found</p>
         <p className="mt-2 text-sm font-semibold text-slate-900">{issue.question.text}</p>
         <p className="mt-1 text-xs text-slate-500">Answer: {issue.answer.toUpperCase()} • Risk: {severity}</p>
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          <p>Photo evidence: {requiresPhoto ? "Required" : "Optional but encouraged"}</p>
+          <p>Corrective action: {willCreateAction ? "Will be created" : "Not required"}</p>
+        </div>
+        {willCreateAction && (
+          <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+            <p className="font-semibold">Corrective action preview</p>
+            <p className="mt-1">Title: {actionTitle}</p>
+            <p>Severity: {severity}</p>
+            <p>Due date: {actionDueDate}</p>
+            <p>Assigned to: {assignedToName || "Unassigned"}</p>
+          </div>
+        )}
         <textarea
           value={noteValue}
           onChange={(event) => setNoteValue(event.target.value)}
           placeholder="Describe what was found"
           className="mt-3 min-h-[7rem] w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none"
         />
+        <div className="mt-3 flex items-center gap-2">
+          <label className={`inline-flex h-11 cursor-pointer items-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+            Add photo
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => {
+                if (event.target.files?.length) {
+                  onAddPhoto(event.target.files);
+                  event.target.value = "";
+                }
+              }}
+            />
+          </label>
+          <p className="text-xs text-slate-500">{evidenceCount} photo(s) attached</p>
+        </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <button type="button" onClick={() => onSave({ noteValue, escalate: false })} className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
             Save issue and continue
@@ -9649,6 +10055,7 @@ function IssueFoundPrompt({
             Change answer
           </button>
         </div>
+        {offlineMode && <p className="mt-3 text-xs font-medium text-amber-700">Saved on this tablet. It will sync when online.</p>}
       </div>
     </div>
   );
@@ -9979,6 +10386,9 @@ function AdminScreen({
   onInviteEmailChange,
   onInviteRoleChange,
   onInviteUser,
+  onResendInvite,
+  onDeleteInvite,
+  onResyncUsers,
   standaloneOnboarding = false,
 }: {
   currentUser: User;
@@ -10084,6 +10494,9 @@ function AdminScreen({
   onInviteEmailChange: (value: string) => void;
   onInviteRoleChange: (value: Role) => void;
   onInviteUser: () => void;
+  onResendInvite: (invite: UserInvite) => void;
+  onDeleteInvite: (invite: UserInvite) => void;
+  onResyncUsers: () => void;
   standaloneOnboarding?: boolean;
 }) {
   const adminOnly = !canAccessAdmin(currentUser.role);
@@ -10093,6 +10506,7 @@ function AdminScreen({
     (companySheetSync?.usersCount ?? 0) === 0 &&
     invitedUsers.length === 0;
   const [adminView, setAdminView] = useState<"overview" | "onboarding">(standaloneOnboarding ? "onboarding" : "overview");
+  const [showAdvancedOnboardingActions, setShowAdvancedOnboardingActions] = useState(false);
   const onboardingMode = standaloneOnboarding || (canAccessOnboarding(currentUser.role) && adminView === "onboarding");
 
   return (
@@ -10166,16 +10580,16 @@ function AdminScreen({
       )}
 
       {masterOnly && (
-        <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+        <section className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.24)]">
           <SectionHeader
             icon="shield"
             eyebrow="Platform control"
             title="God Mode only"
             subtitle="Company provisioning, Google connection, and live app population are restricted to platform control."
           />
-          <div className="rounded-[1.5rem] bg-slate-50 p-4">
-            <p className="text-sm font-semibold text-slate-900">Platform setup is managed in God Mode</p>
-            <p className="mt-2 text-sm leading-6 text-slate-500">
+          <div className="rounded-[1.5rem] bg-slate-900 p-4">
+            <p className="text-sm font-semibold text-white">Platform setup is managed in God Mode</p>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
               Google connection, company folder linking, and app population are only available from the God Mode account.
             </p>
           </div>
@@ -10301,61 +10715,7 @@ function AdminScreen({
                 </div>
               </div>
             )}
-            <div className="mt-4 flex flex-wrap gap-3">
-              <button
-                onClick={!googleConnected ? onGoogleConnect : onAddFolder}
-                disabled={adminOnly || !backendConfigured || googleStatusLoading}
-                className={[
-                  "h-12 rounded-2xl px-5 text-sm font-semibold transition",
-                  adminOnly || !backendConfigured || googleStatusLoading
-                    ? "bg-white/10 text-slate-400"
-                    : "bg-white text-slate-900 shadow-[0_14px_28px_rgba(15,23,42,0.18)] active:scale-[0.99]",
-                ].join(" ")}
-              >
-                {googleStatusLoading
-                  ? "Checking Google Drive..."
-                  : !googleConnected
-                    ? "Connect Google Drive"
-                    : "Start onboarding setup"}
-              </button>
-              {selectedFolder && (
-                <a
-                  href={`https://drive.google.com/drive/folders/${selectedFolder.id}`}
-                  className="inline-flex h-12 items-center rounded-2xl border border-white/20 px-5 text-sm font-semibold text-white transition hover:bg-white/10"
-                >
-                  Open folder in Google Drive
-                </a>
-              )}
-              {googleConnected && (
-                <button
-                  onClick={onGoogleDisconnect}
-                  disabled={adminOnly}
-                  className={[
-                    "h-12 rounded-2xl px-5 text-sm font-semibold transition",
-                    adminOnly
-                      ? "bg-white/10 text-slate-400"
-                      : "border border-white/20 bg-transparent text-white hover:bg-white/10",
-                  ].join(" ")}
-                >
-                  Disconnect Google
-                </button>
-              )}
-              <button
-                onClick={onSyncForms}
-                disabled={adminOnly || !backendConfigured || !selectedFolder || folderInspectionLoading}
-                className={[
-                  "h-12 rounded-2xl px-5 text-sm font-semibold transition",
-                  adminOnly || !backendConfigured || !selectedFolder || folderInspectionLoading
-                    ? "bg-white/10 text-slate-400"
-                    : "bg-emerald-400 text-slate-950 shadow-[0_14px_28px_rgba(16,185,129,0.22)] active:scale-[0.99]",
-                ].join(" ")}
-              >
-                {folderInspectionLoading
-                  ? "Checking links..."
-                  : syncState === "Synced"
-                    ? "Populate app again"
-                    : "Populate app"}
-              </button>
+            <div className="mt-4 space-y-3">
               <button
                 onClick={onOneClickGoogleOnboarding}
                 disabled={adminOnly || !backendConfigured || folderInspectionLoading}
@@ -10368,6 +10728,73 @@ function AdminScreen({
               >
                 Run onboarding (one click)
               </button>
+              <div className="flex flex-wrap items-center gap-3">
+                {googleConnected && (
+                  <button
+                    onClick={onGoogleDisconnect}
+                    disabled={adminOnly}
+                    className={[
+                      "h-11 rounded-2xl px-4 text-sm font-semibold transition",
+                      adminOnly
+                        ? "bg-white/10 text-slate-400"
+                        : "border border-white/20 bg-transparent text-white hover:bg-white/10",
+                    ].join(" ")}
+                  >
+                    Disconnect Google
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedOnboardingActions((current) => !current)}
+                  className="h-11 rounded-2xl border border-white/20 px-4 text-sm font-semibold text-white transition hover:bg-white/10"
+                >
+                  {showAdvancedOnboardingActions ? "Hide advanced" : "Show advanced"}
+                </button>
+              </div>
+              {showAdvancedOnboardingActions && (
+                <div className="flex flex-wrap gap-3 rounded-2xl border border-white/10 bg-slate-950/20 p-3">
+                  <button
+                    onClick={!googleConnected ? onGoogleConnect : onAddFolder}
+                    disabled={adminOnly || !backendConfigured || googleStatusLoading}
+                    className={[
+                      "h-12 rounded-2xl px-5 text-sm font-semibold transition",
+                      adminOnly || !backendConfigured || googleStatusLoading
+                        ? "bg-white/10 text-slate-400"
+                        : "bg-white text-slate-900 shadow-[0_14px_28px_rgba(15,23,42,0.18)] active:scale-[0.99]",
+                    ].join(" ")}
+                  >
+                    {googleStatusLoading
+                      ? "Checking Google Drive..."
+                      : !googleConnected
+                        ? "Connect Google Drive"
+                        : "Start onboarding setup"}
+                  </button>
+                  {selectedFolder && (
+                    <a
+                      href={`https://drive.google.com/drive/folders/${selectedFolder.id}`}
+                      className="inline-flex h-12 items-center rounded-2xl border border-white/20 px-5 text-sm font-semibold text-white transition hover:bg-white/10"
+                    >
+                      Open folder in Google Drive
+                    </a>
+                  )}
+                  <button
+                    onClick={onSyncForms}
+                    disabled={adminOnly || !backendConfigured || !selectedFolder || folderInspectionLoading}
+                    className={[
+                      "h-12 rounded-2xl px-5 text-sm font-semibold transition",
+                      adminOnly || !backendConfigured || !selectedFolder || folderInspectionLoading
+                        ? "bg-white/10 text-slate-400"
+                        : "bg-emerald-400 text-slate-950 shadow-[0_14px_28px_rgba(16,185,129,0.22)] active:scale-[0.99]",
+                    ].join(" ")}
+                  >
+                    {folderInspectionLoading
+                      ? "Checking links..."
+                      : syncState === "Synced"
+                        ? "Populate app again"
+                        : "Populate app"}
+                  </button>
+                </div>
+              )}
             </div>
             {(folderInspection || selectedFolder) && (
               <div className="mt-4 rounded-[1.25rem] border border-white/10 bg-slate-950/20 p-4">
@@ -10463,8 +10890,169 @@ function AdminScreen({
         </section>
       )}
 
-      {!standaloneOnboarding && (
+      {onboardingMode && (
         <>
+          <section className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-sm">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">God Mode</p>
+                <h3 className="mt-1 text-base font-semibold text-white">Company setup</h3>
+                <p className="text-sm text-slate-300">
+                  Use this section for one-time company provisioning before inviting users.
+                </p>
+              </div>
+              <div className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 ring-1 ring-slate-700">
+                {syncState === "Synced" ? "Company live" : "Setup in progress"}
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 1</p>
+                <p className="mt-1 text-sm font-semibold text-white">Platform & Google</p>
+                <p className="mt-1 text-xs text-slate-300">
+                  {backendConfigured && googleConnected ? "Connected" : "Connect Google Drive from onboarding controls."}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 2</p>
+                <p className="mt-1 text-sm font-semibold text-white">Link company workspace</p>
+                <p className="mt-1 text-xs text-slate-300">
+                  {selectedFolder ? `${selectedFolder.name} linked` : "Link the company folder and master sheet."}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 3</p>
+                <p className="mt-1 text-sm font-semibold text-white">Populate app</p>
+                <p className="mt-1 text-xs text-slate-300">
+                  {syncState === "Synced" ? "App has been populated from company sheet." : "Run onboarding (one click)."}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 4</p>
+                <p className="mt-1 text-sm font-semibold text-white">Validate readiness</p>
+                <p className="mt-1 text-xs text-slate-300">
+                  {folderInspection?.blockingItems.length ? "Resolve blocking items shown below." : "Ready for user invites."}
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-semibold text-white">User management</h3>
+                <p className="text-sm text-slate-300">
+                  {currentUser.role === "Master"
+                    ? "God Mode can create Admin, Manager, and Auditor users."
+                    : currentUser.role === "Admin"
+                      ? "Admins can create Admin, Manager, and Auditor users."
+                      : "User creation is not available on this account."}
+                </p>
+              </div>
+              <div className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 ring-1 ring-slate-700">
+                {getRoleDisplayName(currentUser.role)}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded-[1.5rem] border border-slate-800 bg-slate-900 p-4">
+                <div className="grid gap-3">
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">User email</label>
+                    <input
+                      value={inviteEmailInput}
+                      onChange={(event) => onInviteEmailChange(event.target.value)}
+                      placeholder="name@company.com"
+                      className="h-12 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 text-sm text-white outline-none transition focus:border-sky-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Role to create</label>
+                    {godModeFirstUserInvite ? (
+                      <div className="h-12 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 text-sm font-semibold leading-[3rem] text-slate-200">
+                        Admin (first company user)
+                      </div>
+                    ) : (
+                      <select
+                        value={inviteRoleInput}
+                        onChange={(event) => onInviteRoleChange(event.target.value as Role)}
+                        className="h-12 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 text-sm text-white outline-none transition focus:border-sky-400"
+                      >
+                        {creatableRoles.map((role) => (
+                          <option key={role} value={role}>
+                            {role}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {creatableRoles.map((role) => (
+                    <MiniPill key={role} label={`Can create ${role}`} active />
+                  ))}
+                </div>
+                <button
+                  onClick={onInviteUser}
+                  className={`mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white active:scale-[0.99] ${slatePrimaryCtaInteract}`}
+                >
+                  Send onboarding link
+                </button>
+                <button
+                  onClick={onResyncUsers}
+                  className="mt-2 h-11 w-full rounded-2xl border border-slate-700 bg-slate-950 text-sm font-semibold text-slate-200 transition hover:bg-slate-900"
+                >
+                  Re-sync users from company sheet
+                </button>
+              </div>
+
+              {invitedUsers.length === 0 ? (
+                <EmptyPanel
+                  title="No user invites sent yet"
+                  text="Use this area to send onboarding links for the roles you are allowed to create."
+                />
+              ) : (
+                <div className="space-y-3">
+                  {invitedUsers.slice(0, 5).map((invite) => (
+                    <div key={invite.id} className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-white">{invite.email}</p>
+                        <p className="truncate text-xs text-slate-300">
+                          {invite.role} • sent by {invite.invitedBy} • {invite.sentAt}
+                        </p>
+                        {invite.senderEmail && <p className="truncate text-xs text-slate-300">From {invite.senderEmail}</p>}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {invite.mailtoUrl && (
+                          <a href={invite.mailtoUrl} className={`inline-flex items-center justify-center rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white no-underline ${slatePrimaryCtaInteract}`}>
+                            Open email
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => onResendInvite(invite)}
+                          className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                        >
+                          Resend
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteInvite(invite)}
+                          className="inline-flex items-center justify-center rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700"
+                        >
+                          Delete
+                        </button>
+                        <div className="rounded-full bg-emerald-500/12 px-3 py-1 text-xs font-semibold text-emerald-700">
+                          {invite.status}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
           {onboardingMode && (
             <>
               <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
@@ -10747,100 +11335,6 @@ function AdminScreen({
         </div>
       </section>
 
-          <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h3 className="text-base font-semibold text-slate-900">User management</h3>
-            <p className="text-sm text-slate-500">
-              {currentUser.role === "Master"
-                ? "God Mode can create Admin, Manager, and Auditor users."
-                : currentUser.role === "Admin"
-                  ? "Admins can create Admin, Manager, and Auditor users."
-                  : "User creation is not available on this account."}
-            </p>
-          </div>
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-            {getRoleDisplayName(currentUser.role)}
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-            <div className="grid gap-3">
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">User email</label>
-                <input
-                  value={inviteEmailInput}
-                  onChange={(event) => onInviteEmailChange(event.target.value)}
-                  placeholder="name@company.com"
-                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Role to create</label>
-                {godModeFirstUserInvite ? (
-                  <div className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 text-sm font-semibold leading-[3rem] text-slate-700">
-                    Admin (first company user)
-                  </div>
-                ) : (
-                  <select
-                    value={inviteRoleInput}
-                    onChange={(event) => onInviteRoleChange(event.target.value as Role)}
-                    className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-                  >
-                    {creatableRoles.map((role) => (
-                      <option key={role} value={role}>
-                        {role}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {creatableRoles.map((role) => (
-                <MiniPill key={role} label={`Can create ${role}`} active />
-              ))}
-            </div>
-            <button
-              onClick={onInviteUser}
-              className={`mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white active:scale-[0.99] ${slatePrimaryCtaInteract}`}
-            >
-              Send onboarding link
-            </button>
-          </div>
-
-          {invitedUsers.length === 0 ? (
-            <EmptyPanel
-              title="No user invites sent yet"
-              text="Use this area to send onboarding links for the roles you are allowed to create."
-            />
-          ) : (
-            <div className="space-y-3">
-              {invitedUsers.slice(0, 5).map((invite) => (
-                <div key={invite.id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{invite.email}</p>
-                    <p className="truncate text-xs text-slate-500">
-                      {invite.role} • sent by {invite.invitedBy} • {invite.sentAt}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {invite.mailtoUrl && (
-                      <a href={invite.mailtoUrl} className={`inline-flex items-center justify-center rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white no-underline ${slatePrimaryCtaInteract}`}>
-                        Open email
-                      </a>
-                    )}
-                    <div className="rounded-full bg-emerald-500/12 px-3 py-1 text-xs font-semibold text-emerald-700">
-                      {invite.status}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-          </section>
         </>
       )}
     </div>

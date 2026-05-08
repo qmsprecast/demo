@@ -22,13 +22,15 @@ const requiredEnv = {
   GOOGLE_SHARED_DRIVE_ID: process.env.GOOGLE_SHARED_DRIVE_ID || "",
   GOOGLE_ONBOARDING_FORM_ID: process.env.GOOGLE_ONBOARDING_FORM_ID || "",
   GOOGLE_ONBOARDING_SHEET_ID: process.env.GOOGLE_ONBOARDING_SHEET_ID || "",
+  FRONTEND_URL: process.env.FRONTEND_URL || "http://127.0.0.1:5180",
   SESSION_SECRET: process.env.SESSION_SECRET || "qms-local-dev-secret",
   SMTP_HOST: process.env.SMTP_HOST || "",
   SMTP_PORT: process.env.SMTP_PORT || "",
+  SMTP_SECURE: process.env.SMTP_SECURE || "false",
   SMTP_USER: process.env.SMTP_USER || "",
   SMTP_PASS: process.env.SMTP_PASS || "",
-  SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || "",
-  SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || "QMS Precast",
+  SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || process.env.SMTP_FROM || "",
+  SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || "BertAudit",
 };
 
 const scopes = [
@@ -443,7 +445,7 @@ function sendCallbackPage(res, options) {
       <div class="pill">${success ? "Google connected" : "Connection issue"}</div>
       <h1>${title}</h1>
       <p>${message}</p>
-      <p style="margin-top:16px;"><a href="${redirectUrl}">Return to QMS Precast</a></p>
+      <p style="margin-top:16px;"><a href="${redirectUrl}">Return to BertAudit</a></p>
     </div>
   </body>
 </html>`);
@@ -463,6 +465,15 @@ function safeLower(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function buildOnboardingFormViewUrl(formId) {
+  const clean = String(formId || "").trim();
+  if (!clean) return "";
+  if (clean.startsWith("1FAIpQL")) {
+    return `https://docs.google.com/forms/d/e/${clean}/viewform`;
+  }
+  return `https://docs.google.com/forms/d/${clean}/viewform`;
+}
+
 function emailConfigured() {
   return Boolean(
     requiredEnv.SMTP_HOST &&
@@ -471,6 +482,98 @@ function emailConfigured() {
       requiredEnv.SMTP_PASS &&
       requiredEnv.SMTP_FROM_EMAIL,
   );
+}
+
+function parseBooleanEnv(value, fallback = false) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return fallback;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
+}
+
+function smtpConfigSummary() {
+  const port = Number(requiredEnv.SMTP_PORT || 0);
+  const secure = parseBooleanEnv(requiredEnv.SMTP_SECURE, port === 465);
+  return {
+    host: requiredEnv.SMTP_HOST || "",
+    port,
+    secure,
+    user: requiredEnv.SMTP_USER || "",
+    from: requiredEnv.SMTP_FROM_EMAIL || "",
+  };
+}
+
+function smtpCredentialDiagnostics() {
+  const pass = String(requiredEnv.SMTP_PASS || "");
+  return {
+    passwordProvided: pass.length > 0,
+    passwordLength: pass.length,
+    userLooksEmail: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requiredEnv.SMTP_USER || ""),
+    fromLooksEmail: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requiredEnv.SMTP_FROM_EMAIL || ""),
+    userMatchesFrom:
+      safeLower(requiredEnv.SMTP_USER || "") === safeLower(requiredEnv.SMTP_FROM_EMAIL || ""),
+  };
+}
+
+function createSmtpTransport() {
+  const config = smtpConfigSummary();
+  return nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    requireTLS: config.port === 587,
+    auth: {
+      user: requiredEnv.SMTP_USER,
+      pass: requiredEnv.SMTP_PASS,
+    },
+  });
+}
+
+let smtpVerificationState = {
+  checkedAt: "",
+  ok: false,
+  error: "Not checked",
+};
+
+async function verifySmtpTransport() {
+  if (!emailConfigured()) {
+    smtpVerificationState = {
+      checkedAt: new Date().toISOString(),
+      ok: false,
+      error: "SMTP is not configured.",
+    };
+    return smtpVerificationState;
+  }
+  try {
+    const transporter = createSmtpTransport();
+    await transporter.verify();
+    smtpVerificationState = {
+      checkedAt: new Date().toISOString(),
+      ok: true,
+      error: "",
+    };
+  } catch (error) {
+    smtpVerificationState = {
+      checkedAt: new Date().toISOString(),
+      ok: false,
+      error: error instanceof Error ? error.message : "SMTP verification failed.",
+    };
+  }
+  return smtpVerificationState;
+}
+
+function buildOnboardingInviteMailto({ toEmail, inviteRole, invitedBy, onboardingFormUrl }) {
+  const subject = `BertAudit ${inviteRole} onboarding`;
+  const body = [
+    `You have been invited to BertAudit as ${inviteRole}.`,
+    "",
+    `Invited by: ${invitedBy}`,
+    "",
+    "Complete your onboarding form:",
+    onboardingFormUrl,
+  ].join("\n");
+  return `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 async function sendOnboardingInviteEmail({
@@ -483,17 +586,7 @@ async function sendOnboardingInviteEmail({
     throw new Error("SMTP is not configured. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM_EMAIL.");
   }
 
-  const port = Number(requiredEnv.SMTP_PORT);
-  const secure = port === 465;
-  const transporter = nodemailer.createTransport({
-    host: requiredEnv.SMTP_HOST,
-    port,
-    secure,
-    auth: {
-      user: requiredEnv.SMTP_USER,
-      pass: requiredEnv.SMTP_PASS,
-    },
-  });
+  const transporter = createSmtpTransport();
 
   const lineManagerRule =
     inviteRole === "Admin"
@@ -510,7 +603,7 @@ async function sendOnboardingInviteEmail({
   ];
 
   const textBody = [
-    `You have been invited to QMS Precast as ${inviteRole}.`,
+    `You have been invited to BertAudit as ${inviteRole}.`,
     "",
     `Invited by: ${invitedBy}`,
     "",
@@ -526,7 +619,7 @@ async function sendOnboardingInviteEmail({
   ].join("\n");
 
   const htmlBody = `
-    <p>You have been invited to QMS Precast as <strong>${inviteRole}</strong>.</p>
+    <p>You have been invited to BertAudit as <strong>${inviteRole}</strong>.</p>
     <p><strong>Invited by:</strong> ${invitedBy}</p>
     <p>Complete your onboarding form:</p>
     <p><a href="${onboardingFormUrl}">${onboardingFormUrl}</a></p>
@@ -545,7 +638,7 @@ async function sendOnboardingInviteEmail({
   await transporter.sendMail({
     from,
     to: toEmail,
-    subject: `QMS Precast ${inviteRole} onboarding`,
+    subject: `BertAudit ${inviteRole} onboarding`,
     text: textBody,
     html: htmlBody,
   });
@@ -565,17 +658,7 @@ async function sendManagerNonComplianceAlertEmail({
     throw new Error("At least one manager recipient is required.");
   }
 
-  const port = Number(requiredEnv.SMTP_PORT);
-  const secure = port === 465;
-  const transporter = nodemailer.createTransport({
-    host: requiredEnv.SMTP_HOST,
-    port,
-    secure,
-    auth: {
-      user: requiredEnv.SMTP_USER,
-      pass: requiredEnv.SMTP_PASS,
-    },
-  });
+  const transporter = createSmtpTransport();
 
   const syncLine = queuedForSync
     ? "Submission status: queued offline and will sync once the device reconnects."
@@ -627,17 +710,7 @@ async function sendNcrEscalationEmail({
   if (!emailConfigured()) {
     throw new Error("SMTP is not configured. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM_EMAIL.");
   }
-  const port = Number(requiredEnv.SMTP_PORT);
-  const secure = port === 465;
-  const transporter = nodemailer.createTransport({
-    host: requiredEnv.SMTP_HOST,
-    port,
-    secure,
-    auth: {
-      user: requiredEnv.SMTP_USER,
-      pass: requiredEnv.SMTP_PASS,
-    },
-  });
+  const transporter = createSmtpTransport();
 
   const subject = `[${ncrReference}] Non-Conformance Raised`;
   const textBody = [
@@ -774,7 +847,34 @@ async function discoverOnboardingSource(auth) {
     null;
 
   if (!masterControl) {
-    return resolved;
+    const fallbackSearch = await drive.files.list({
+      corpora: "drive",
+      driveId: requiredEnv.GOOGLE_SHARED_DRIVE_ID,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      q: "trashed = false and (mimeType = 'application/vnd.google-apps.form' or mimeType = 'application/vnd.google-apps.spreadsheet')",
+      fields: "files(id,name,mimeType)",
+      pageSize: 200,
+      orderBy: "name_natural",
+    });
+    const fallbackFiles = fallbackSearch.data.files || [];
+    const onboardingForm = fallbackFiles.find(
+      (file) =>
+        file.mimeType === "application/vnd.google-apps.form" &&
+        safeLower(file.name).includes("onboarding"),
+    );
+    const onboardingSheet = fallbackFiles.find(
+      (file) =>
+        file.mimeType === "application/vnd.google-apps.spreadsheet" &&
+        safeLower(file.name).includes("onboarding"),
+    );
+    return {
+      formId: resolved.formId || onboardingForm?.id || "",
+      formName: onboardingForm?.name || resolved.formName,
+      sheetId: resolved.sheetId || onboardingSheet?.id || "",
+      sheetName: onboardingSheet?.name || resolved.sheetName,
+      configured: Boolean(resolved.formId || resolved.sheetId || onboardingForm || onboardingSheet),
+    };
   }
 
   const contents = await drive.files.list({
@@ -1548,6 +1648,49 @@ async function writeCompanySchedules(auth, spreadsheetId, companyFolderId, sched
   return { ok: true, written: nextRows.length, existing: existingRecords.length };
 }
 
+async function writeCompanyUsers(auth, spreadsheetId, companyFolderId, users) {
+  await ensureTabsAndColumns(auth, spreadsheetId, { companyId: companyFolderId });
+  const rows = toObjectArray(users);
+  const timestamp = new Date().toISOString();
+  let written = 0;
+
+  for (const user of rows) {
+    const email = String(user.email || user.Email || "").trim().toLowerCase();
+    const role = String(user.role || user.Role || "").trim();
+    if (!email || !role) {
+      continue;
+    }
+
+    const userId =
+      String(user.id || user["User ID"] || "").trim() ||
+      `invite-${email.replace(/[^a-z0-9]+/gi, "-")}-${role.toLowerCase()}`;
+    const fullName = String(user.name || user["Full Name"] || email).trim() || email;
+    const createdBy = String(user.invitedBy || user["Created By"] || "BertAudit").trim() || "BertAudit";
+    const senderEmail = String(user.senderEmail || user["Updated By"] || "").trim();
+    const createdAt = String(user.sentAt || user["Created At"] || timestamp).trim() || timestamp;
+    const updatedAt = String(user.updatedAt || user["Updated At"] || timestamp).trim() || timestamp;
+
+    await updateRowById(auth, spreadsheetId, "Users", "User ID", userId, {
+      "Company ID": companyFolderId,
+      "Full Name": fullName,
+      Email: email,
+      Role: role,
+      "Created At": createdAt,
+      "Updated At": updatedAt,
+      "Created By": createdBy,
+      "Updated By": senderEmail || createdBy,
+      "Sync Status": String(user.syncStatus || "Synced"),
+      "Sync Attempts": Number(user.syncAttempts || 0),
+      "Last Sync Error": String(user.lastSyncError || ""),
+      "Remote Row ID": String(user.remoteRowId || ""),
+      "Schema Version": String(user.schemaVersion || CURRENT_SCHEMA_VERSION),
+    });
+    written += 1;
+  }
+
+  return { ok: true, written };
+}
+
 async function writeCompanyActions(auth, spreadsheetId, companyFolderId, actions) {
   const sheets = google.sheets({ version: "v4", auth });
   await ensureTabsAndColumns(auth, spreadsheetId, { companyId: companyFolderId });
@@ -1872,11 +2015,11 @@ app.get("/api/google/status", async (_req, res) => {
 
   let companies = [];
   let onboardingSource = {
-    configured: false,
-    formId: "",
-    formName: "",
-    sheetId: "",
-    sheetName: "",
+    configured: Boolean(requiredEnv.GOOGLE_ONBOARDING_FORM_ID || requiredEnv.GOOGLE_ONBOARDING_SHEET_ID),
+    formId: requiredEnv.GOOGLE_ONBOARDING_FORM_ID || "",
+    formName: requiredEnv.GOOGLE_ONBOARDING_FORM_ID ? "QMS Company Onboarding Form" : "",
+    sheetId: requiredEnv.GOOGLE_ONBOARDING_SHEET_ID || "",
+    sheetName: requiredEnv.GOOGLE_ONBOARDING_SHEET_ID ? "QMS Company Onboarding Responses" : "",
   };
 
   if (authed && envConfigured()) {
@@ -2067,6 +2210,37 @@ app.post("/api/google-sheet-by-id/:sheetId/schedules", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: error instanceof Error ? error.message : "Unable to save schedules to the company master sheet.",
+    });
+  }
+});
+
+app.post("/api/google-sheet-by-id/:sheetId/users", async (req, res) => {
+  const authed = getAuthedClient();
+
+  if (!envConfigured() || !authed) {
+    return res.status(401).json({
+      ok: false,
+      error: "Google connection is required before saving users.",
+    });
+  }
+
+  const companyFolderId = String(req.body?.companyFolderId || "").trim();
+  const users = toObjectArray(req.body?.users);
+
+  if (!companyFolderId) {
+    return res.status(400).json({
+      ok: false,
+      error: "Company folder ID is required before saving users.",
+    });
+  }
+
+  try {
+    const payload = await writeCompanyUsers(authed, req.params.sheetId, companyFolderId, users);
+    return res.json(payload);
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to save users to the company master sheet.",
     });
   }
 });
@@ -2357,7 +2531,7 @@ app.post("/api/google-sheet-by-id/:sheetId/repair", async (req, res) => {
 app.post("/api/onboarding/invite", async (req, res) => {
   const toEmail = String(req.body?.email || "").trim().toLowerCase();
   const inviteRole = String(req.body?.role || "").trim();
-  const invitedBy = String(req.body?.invitedBy || "QMS Precast").trim();
+  const invitedBy = String(req.body?.invitedBy || "BertAudit").trim();
   const onboardingFormId = String(req.body?.onboardingFormId || "").trim();
 
   if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
@@ -2371,7 +2545,22 @@ app.post("/api/onboarding/invite", async (req, res) => {
   }
 
   try {
-    const onboardingFormUrl = `https://docs.google.com/forms/d/${onboardingFormId}/viewform`;
+    const onboardingFormUrl = buildOnboardingFormViewUrl(onboardingFormId);
+    const manualFallback = () => ({
+      ok: true,
+      delivery: "manual",
+      senderEmail: requiredEnv.SMTP_FROM_EMAIL || "",
+      onboardingUrl: onboardingFormUrl,
+      mailtoUrl: buildOnboardingInviteMailto({
+        toEmail,
+        inviteRole,
+        invitedBy,
+        onboardingFormUrl,
+      }),
+    });
+    if (!emailConfigured()) {
+      return res.json(manualFallback());
+    }
     await sendOnboardingInviteEmail({
       toEmail,
       inviteRole,
@@ -2379,13 +2568,43 @@ app.post("/api/onboarding/invite", async (req, res) => {
       onboardingFormUrl,
     });
 
-    return res.json({ ok: true });
+    return res.json({ ok: true, delivery: "smtp", senderEmail: requiredEnv.SMTP_FROM_EMAIL || "" });
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
+    console.warn("[smtp] invite send failed; using manual fallback", {
+      ...smtpConfigSummary(),
+      ...smtpCredentialDiagnostics(),
       error: error instanceof Error ? error.message : "Unable to send onboarding invite email.",
     });
+    const onboardingFormUrl = buildOnboardingFormViewUrl(onboardingFormId);
+    return res.json({
+      ok: true,
+      delivery: "manual",
+      senderEmail: requiredEnv.SMTP_FROM_EMAIL || "",
+      onboardingUrl: onboardingFormUrl,
+      mailtoUrl: buildOnboardingInviteMailto({
+        toEmail,
+        inviteRole,
+        invitedBy,
+        onboardingFormUrl,
+      }),
+    });
   }
+});
+
+app.get("/api/invites/smtp/status", async (_req, res) => {
+  const config = smtpConfigSummary();
+  const diagnostics = smtpCredentialDiagnostics();
+  const verification = await verifySmtpTransport();
+  return res.json({
+    ok: verification.ok,
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    from: config.from,
+    secure: config.secure,
+    verification,
+    diagnostics,
+  });
 });
 
 app.post("/api/manager/non-compliance-alert", async (req, res) => {
@@ -2497,7 +2716,7 @@ app.get("/auth/google/callback", async (req, res) => {
     if ((!signedState || signedState !== state) && !localDevBypass) {
       return sendCallbackPage(res, {
         title: "Google connection could not be completed",
-        message: "The sign-in state could not be verified. Please start the connection again from QMS Precast.",
+        message: "The sign-in state could not be verified. Please start the connection again from BertAudit.",
         success: false,
       });
     }
@@ -2524,9 +2743,9 @@ app.get("/auth/google/callback", async (req, res) => {
     res.clearCookie("qms_google_state");
     return sendCallbackPage(res, {
       title: "Google connection completed",
-      message: "Your Google Drive root folder is now linked. Returning to QMS Precast now.",
+      message: "Your Google Drive root folder is now linked. Returning to BertAudit now.",
       success: true,
-      redirectUrl: "http://127.0.0.1:4173/?google=connected",
+      redirectUrl: `${requiredEnv.FRONTEND_URL.replace(/\/$/, "")}/?google=connected`,
     });
   } catch (error) {
     console.error("Google OAuth callback failed:", error);
@@ -2564,4 +2783,16 @@ app.get("/api/health", (_req, res) => {
 
 app.listen(port, () => {
   console.log(`QMS backend listening on http://127.0.0.1:${port}`);
+  const config = smtpConfigSummary();
+  console.log("[smtp] config", {
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    user: config.user,
+    from: config.from,
+    ...smtpCredentialDiagnostics(),
+  });
+  void verifySmtpTransport().then((result) => {
+    console.log("[smtp] verify", result);
+  });
 });
