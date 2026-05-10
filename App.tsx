@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 type Role = "Master" | "Admin" | "Manager" | "Auditor";
 type AuditStatus = "green" | "amber" | "red";
@@ -15,7 +15,7 @@ type ScheduleFrequency =
 type ScheduleScope = "Company schedule" | "Personal schedule";
 type OverdueAlertTiming = "At due time" | "30 minutes overdue" | "1 hour overdue" | "2 hours overdue";
 type CompletionCheckTiming = "30 minutes after send" | "1 hour after send" | "At due time" | "2 hours after due";
-type Screen = "dashboard" | "audits" | "actions" | "nonConformance" | "reports" | "sync" | "schedules" | "admin" | "onboarding" | "account" | "complete";
+type Screen = "dashboard" | "audits" | "actions" | "nonConformance" | "incidents" | "reports" | "sync" | "schedules" | "admin" | "onboarding" | "account" | "complete";
 type NavItemId = Exclude<Screen, "complete">;
 type ThemeMode = "light" | "dark";
 type ReportTemplateType = "Executive summary" | "Overdue audit pack" | "Corrective action pack" | "Evidence pack" | "Full report";
@@ -523,6 +523,74 @@ type ManagerAlert = {
   readBy: string[];
 };
 
+type IncidentStatus = "Open" | "Under Investigation" | "Closed";
+type IncidentPriority = "Normal" | "High";
+type IncidentType = "Accident" | "Near Miss" | "Dangerous Occurrence" | "Property Damage" | "Environmental";
+type IncidentSeverity =
+  | "Minor"
+  | "Medical Treatment"
+  | "Lost Time Injury"
+  | "Major Incident"
+  | "Fatality";
+
+type IncidentEvidenceItem = {
+  id: string;
+  name: string;
+  mimeType: string;
+  previewUrl: string;
+  addedAt: string;
+};
+
+type IncidentRecord = {
+  id: string;
+  incidentId: string;
+  status: IncidentStatus;
+  priority: IncidentPriority;
+  incidentType: IncidentType;
+  severity: IncidentSeverity;
+  incidentDate: string;
+  incidentTime: string;
+  reporterName: string;
+  reporterEmail: string;
+  department: string;
+  location: string;
+  description: string;
+  immediateAction: string;
+  injured: boolean;
+  injuryDetails: string;
+  contributingFactors: string;
+  witnesses: string;
+  evidenceUrls: IncidentEvidenceItem[];
+  assignedTo: string;
+  investigationNotes: string;
+  rootCause: string;
+  correctiveActions: string;
+  preventiveActions: string;
+  actionOwner: string;
+  dueDate: string;
+  completionDate: string;
+  riddorRequired: boolean;
+  closedBy: string;
+  closedAt: string;
+  notificationStatus: string;
+  statusHistory: { at: string; from: IncidentStatus | ""; to: IncidentStatus; by: string; note: string }[];
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+};
+
+type IncidentCorrectiveAction = {
+  id: string;
+  incidentId: string;
+  description: string;
+  owner: string;
+  dueDate: string;
+  status: "Open" | "In Progress" | "Complete";
+  completedAt: string;
+  completedBy: string;
+};
+
 type IssuePromptState = {
   question: AuditQuestion;
   answer: Exclude<Answer, "pass">;
@@ -577,6 +645,8 @@ const initialSyncQueue: SyncQueueItem[] = [];
 const initialSchedules: ScheduleItem[] = [];
 const initialTemplates: AuditTemplate[] = [];
 const initialNonConformances: NonConformanceRecord[] = [];
+const initialIncidents: IncidentRecord[] = [];
+const initialIncidentActions: IncidentCorrectiveAction[] = [];
 const amberThresholdHours = 2;
 const scheduleDayOptions: ScheduleDay[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const scheduleFrequencyOptions: ScheduleFrequency[] = [
@@ -630,6 +700,7 @@ const navItems: { id: NavItemId; label: string; icon: string }[] = [
   { id: "audits", label: "Audits", icon: "clipboard" },
   { id: "actions", label: "Actions", icon: "warningTriangle" },
   { id: "nonConformance", label: "Non-Conformance", icon: "checklist" },
+  { id: "incidents", label: "Incident reporting", icon: "camera" },
   { id: "schedules", label: "Schedules", icon: "clock" },
   { id: "reports", label: "Report creator", icon: "chart" },
   { id: "sync", label: "Sync Centre", icon: "sync" },
@@ -641,6 +712,7 @@ const navItems: { id: NavItemId; label: string; icon: string }[] = [
 const compactNavLabels: Partial<Record<Exclude<Screen, "complete">, string>> = {
   actions: "Actions",
   nonConformance: "NCR",
+  incidents: "Incidents",
   reports: "Reports",
   sync: "Sync",
   account: "Settings",
@@ -648,6 +720,14 @@ const compactNavLabels: Partial<Record<Exclude<Screen, "complete">, string>> = {
 
 /** Transitions only — hover uses shell-wide 15% contrasting overlay (.qms-app-shell / .qms-login-shell). */
 const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
+
+/** Teal-filled fields — matches schedule editor; avoids washed-out OS styling on pale backgrounds in dark theme. */
+const brandTealFormField =
+  "border border-[rgba(25,227,181,0.5)] bg-[var(--qms-teal-500)] text-[var(--qms-navy-950)] shadow-[0_10px_26px_rgba(20,211,166,0.22)] outline-none transition focus:border-[var(--qms-navy-850)]";
+
+/** Slate surface + teal outline for dropdowns and secondary inputs on navy (filters, assignees, file inputs). */
+const brandDarkFormControl =
+  "border border-[rgba(25,227,181,0.45)] bg-slate-950 text-slate-100 outline-none focus:border-[var(--qms-teal-500)]";
 const qmsDarkShellGradient =
   "bg-[radial-gradient(circle_at_top,var(--qms-shell-dark-radial),_transparent_35%),linear-gradient(180deg,var(--qms-shell-dark-start)_0%,var(--qms-shell-dark-mid)_45%,var(--qms-shell-dark-end)_100%)]";
 const qmsLightShellGradient =
@@ -670,16 +750,16 @@ const appMotionStyles = `
     padding-top: 0.75rem;
     padding-left: 0.85rem;
     padding-right: 0.85rem;
-    padding-bottom: 6.5rem;
+    padding-bottom: 6rem;
   }
 
   /* Compact fit pass: reduce chunky spacing while keeping readability. */
   .qms-screen-stage .space-y-4 > * + * {
-    margin-top: 0.75rem;
+    margin-top: 0.65rem;
   }
 
   .qms-screen-stage .space-y-3 > * + * {
-    margin-top: 0.6rem;
+    margin-top: 0.5rem;
   }
 
   .qms-screen-stage [class*="rounded-[1.75rem]"] {
@@ -687,11 +767,143 @@ const appMotionStyles = `
   }
 
   .qms-screen-stage section[class*="rounded-[1.75rem]"] {
-    padding: 0.9rem !important;
+    padding: 0.82rem !important;
   }
 
   .qms-screen-stage section[class*="rounded-[1.6rem]"] {
-    padding: 0.8rem !important;
+    padding: 0.72rem !important;
+  }
+
+  /* Global aesthetic normalization (workflow-safe): cards, controls, and small actions. */
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage section {
+    border-color: rgba(148, 163, 184, 0.28);
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage section {
+    border-color: rgba(148, 163, 184, 0.2);
+    box-shadow: 0 12px 30px rgba(2, 6, 23, 0.3);
+  }
+
+  .qms-screen-stage input,
+  .qms-screen-stage select,
+  .qms-screen-stage textarea {
+    border-radius: 0.95rem;
+  }
+
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage input,
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage select,
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage textarea {
+    border-color: rgba(148, 163, 184, 0.35);
+    background-color: rgba(255, 255, 255, 0.82);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage input,
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage select,
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage textarea {
+    border-color: rgba(148, 163, 184, 0.32);
+    background-color: rgba(2, 6, 23, 0.72);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  .qms-screen-stage button {
+    border-radius: 0.9rem;
+  }
+
+  .qms-screen-stage .rounded-2xl {
+    border-radius: 1rem;
+  }
+
+  .qms-screen-stage input,
+  .qms-screen-stage select,
+  .qms-screen-stage textarea,
+  .qms-screen-stage button {
+    min-height: 2.5rem;
+  }
+
+  .qms-screen-stage .h-14 {
+    height: 3.15rem !important;
+  }
+
+  .qms-screen-stage .h-12 {
+    height: 2.85rem !important;
+  }
+
+  .qms-screen-stage .h-11 {
+    height: 2.65rem !important;
+  }
+
+  .qms-screen-stage .h-10 {
+    height: 2.45rem !important;
+  }
+
+  .qms-screen-stage [class*="px-5"] {
+    padding-left: 1.1rem !important;
+    padding-right: 1.1rem !important;
+  }
+
+  .qms-screen-stage [class*="py-5"] {
+    padding-top: 1.05rem !important;
+    padding-bottom: 1.05rem !important;
+  }
+
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage button {
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage button {
+    box-shadow: 0 8px 20px rgba(2, 6, 23, 0.28);
+  }
+
+  /* Typography rhythm pass (aesthetic only): clearer hierarchy, tighter enterprise feel. */
+  .qms-screen-stage h1 {
+    font-size: clamp(1.55rem, 2.1vw, 1.95rem);
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+  }
+
+  .qms-screen-stage h2 {
+    font-size: clamp(1.25rem, 1.65vw, 1.55rem);
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+
+  .qms-screen-stage h3 {
+    font-size: clamp(1.06rem, 1.25vw, 1.24rem);
+    line-height: 1.28;
+    letter-spacing: -0.005em;
+  }
+
+  .qms-screen-stage p,
+  .qms-screen-stage li {
+    line-height: 1.5;
+  }
+
+  .qms-screen-stage p {
+    font-size: clamp(0.88rem, 0.9vw, 0.96rem);
+  }
+
+  .qms-screen-stage label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .qms-screen-stage small,
+  .qms-screen-stage .text-xs {
+    letter-spacing: 0.025em;
+  }
+
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage h1,
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage h2,
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage h3 {
+    color: rgb(15 23 42);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage h1,
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage h2,
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage h3 {
+    color: rgb(241 245 249);
   }
 
   .qms-app-shell button:not(:disabled),
@@ -713,6 +925,15 @@ const appMotionStyles = `
   .qms-app-shell[data-qms-theme="dark"] button:enabled:hover,
   .qms-login-shell[data-qms-theme="dark"] button:enabled:hover {
     box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-dark);
+  }
+
+  /* Dark theme: slate rows must not hover to white (would clash with light body copy colours). */
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage .hover\\:bg-white:hover {
+    background-color: rgb(30 41 59) !important;
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage .hover\\:border-slate-300:hover {
+    border-color: rgb(71 85 105) !important;
   }
 
   .qms-app-shell[data-qms-theme="light"] button:enabled:active,
@@ -843,7 +1064,7 @@ const appMotionStyles = `
   .qms-force-landscape .qms-screen-stage {
     padding-left: 1.25rem;
     padding-right: 1.25rem;
-    padding-bottom: 7.25rem;
+    padding-bottom: 6.75rem;
   }
 
   .qms-force-landscape .qms-bottom-nav {
@@ -905,7 +1126,7 @@ const appMotionStyles = `
     .qms-screen-stage {
       padding-left: 1.25rem;
       padding-right: 1.25rem;
-      padding-bottom: 7.25rem;
+      padding-bottom: 6.75rem;
     }
 
     .qms-bottom-nav {
@@ -1931,6 +2152,14 @@ function canAccessAuditsCentre(role: Role) {
   return role !== "Auditor";
 }
 
+function canSubmitIncidents(role: Role) {
+  return role === "Master" || role === "Admin" || role === "Manager" || role === "Auditor";
+}
+
+function canInvestigateIncidents(role: Role) {
+  return role === "Master" || role === "Admin" || role === "Manager";
+}
+
 function canEditLegalName(role: Role) {
   return role === "Master" || role === "Admin";
 }
@@ -1940,7 +2169,7 @@ function canRoleAccessNavItem(role: Role, itemId: NavItemId) {
   if (itemId === "onboarding") return role === "Master" ? false : canAccessOnboarding(role);
   if (itemId === "schedules") return canAccessSchedules(role);
   if (itemId === "reports") return canAccessReports(role);
-  if (itemId === "actions" || itemId === "nonConformance") return canAccessActions(role);
+  if (itemId === "actions" || itemId === "nonConformance" || itemId === "incidents") return canAccessActions(role);
   if (itemId === "audits") return canAccessAuditsCentre(role);
   return true;
 }
@@ -2373,6 +2602,7 @@ function readStoredFolderLinks() {
       auditFormsFolderInput?: string;
       masterSheetInput?: string;
       evidenceFolderInput?: string;
+      healthSafetyFolderInput?: string;
       exportsFolderInput?: string;
       adminNotesFolderInput?: string;
     };
@@ -2405,6 +2635,8 @@ function readStoredWorkspaceState() {
       companySheetSync?: CompanySheetSyncStatus | null;
       reportInbox?: ReportItem[];
       syncQueue?: SyncQueueItem[];
+      incidents?: IncidentRecord[];
+      incidentActions?: IncidentCorrectiveAction[];
       auditAccessOverrides?: AuditAccessOverrideMap;
       managerAlerts?: ManagerAlert[];
       roleNavVisibility?: RoleNavVisibilityMatrix;
@@ -2460,6 +2692,8 @@ function getWorkspaceBootstrap() {
       companySheetSync: demo.companySheetSync,
       reportInbox: [] as ReportItem[],
       syncQueue: demo.syncQueue,
+      incidents: [] as IncidentRecord[],
+      incidentActions: [] as IncidentCorrectiveAction[],
       auditAccessOverrides: {} as AuditAccessOverrideMap,
       managerAlerts: [] as ManagerAlert[],
       roleNavVisibility: buildDefaultRoleNavVisibilityMatrix(),
@@ -2486,6 +2720,8 @@ function getWorkspaceBootstrap() {
     companySheetSync: stored?.companySheetSync ?? null,
     reportInbox: stored?.reportInbox ?? [],
     syncQueue: stored?.syncQueue ?? initialSyncQueue,
+    incidents: stored?.incidents ?? initialIncidents,
+    incidentActions: stored?.incidentActions ?? initialIncidentActions,
     auditAccessOverrides: stored?.auditAccessOverrides ?? {},
     managerAlerts: stored?.managerAlerts ?? [],
     roleNavVisibility: stored?.roleNavVisibility ?? buildDefaultRoleNavVisibilityMatrix(),
@@ -2621,6 +2857,149 @@ function useDashboardSectionLayout(storageKey: string, defaultOrder: string[]) {
   };
 }
 
+function DataFlowBackground({ className = "", showBase = true }: { className?: string; showBase?: boolean }) {
+  return (
+    <div className={`pointer-events-none absolute inset-0 overflow-hidden ${showBase ? "bg-[#020817]" : ""} ${className}`.trim()}>
+      {showBase && <div className="absolute inset-0 bg-[#020817]" />}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_58%_42%,rgba(110,231,183,0.12),transparent_14%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_22%_48%,rgba(16,185,129,0.08),transparent_30%)]" />
+      <svg
+        className="absolute left-1/2 top-1/3 h-full w-[120%] -translate-x-1/2 opacity-50"
+        viewBox="0 0 1600 900"
+        preserveAspectRatio="xMidYMid slice"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient id="heroStrand" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#34d399" stopOpacity="0" />
+            <stop offset="18%" stopColor="#34d399" stopOpacity="0.55" />
+            <stop offset="50%" stopColor="#d1fae5" stopOpacity="1" />
+            <stop offset="76%" stopColor="#34d399" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#34d399" stopOpacity="0" />
+          </linearGradient>
+          <radialGradient id="coreLight" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#ecfdf5" stopOpacity="1" />
+            <stop offset="35%" stopColor="#86efac" stopOpacity="0.65" />
+            <stop offset="100%" stopColor="#86efac" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+
+        <ellipse
+          cx="980"
+          cy="350"
+          rx="230"
+          ry="48"
+          fill="url(#coreLight)"
+          opacity="0.95"
+          stroke="#a3e635"
+          strokeOpacity="0.45"
+          strokeWidth="1.2"
+        />
+
+        {Array.from({ length: 210 }).map((_, index) => {
+          const t = index / 209;
+          const startY = 20 + t * 650 + Math.sin(index * 0.3) * 22;
+          const gatherY = 350 + (t - 0.5) * 18;
+          const endY = 110 + t * 470;
+          const swingA = Math.sin(index * 0.16) * 220;
+          const swingB = Math.cos(index * 0.21) * 120;
+          const width = index % 18 === 0 ? 1.5 : index % 3 === 0 ? 0.95 : 0.55;
+          const opacity = index % 7 === 0 ? 0.85 : 0.34;
+
+          return (
+            <path
+              key={`strand-${index}`}
+              d={`M-80 ${startY}
+                  C 180 ${startY + swingA},
+                    460 ${gatherY + swingB},
+                    820 ${gatherY}
+                  S 1120 ${gatherY + (t - 0.5) * 10},
+                    1480 ${endY}`}
+              stroke="url(#heroStrand)"
+              strokeWidth={width}
+              fill="none"
+              opacity={opacity}
+            />
+          );
+        })}
+
+        {Array.from({ length: 1400 }).map((_, index) => {
+          const cluster = index % 4 === 0;
+          const x = cluster ? 10 + (index % 80) * 14 : 1130 + (index % 34) * 14;
+          const y = cluster
+            ? 20 + Math.floor(index / 80) * 22 + Math.sin(index * 0.6) * 10
+            : 25 + Math.floor(index / 34) * 16;
+
+          if (cluster) {
+            return (
+              <text
+                key={`particle-${index}`}
+                x={x}
+                y={y}
+                fill="#6ee7b7"
+                opacity={0.04 + (index % 8) * 0.012}
+                fontSize={index % 20 === 0 ? "10" : "7"}
+                fontFamily="monospace"
+              >
+                {index % 2 === 0 ? "1" : "0"}
+              </text>
+            );
+          }
+
+          return (
+            <circle
+              key={`particle-${index}`}
+              cx={x}
+              cy={y}
+              r={0.45}
+              fill="#6ee7b7"
+              opacity="0.07"
+              stroke="#a3e635"
+              strokeOpacity="0.4"
+              strokeWidth="0.35"
+            />
+          );
+        })}
+
+        {Array.from({ length: 1600 }).map((_, index) => {
+          const col = index % 50;
+          const row = Math.floor(index / 50);
+          const x = 1080 + col * 11;
+          const y = 20 + row * 14;
+
+          return (
+            <text
+              key={`binary-${index}`}
+              x={x}
+              y={y}
+              fill="#4ade80"
+              opacity={Math.max(0.03, 0.46 - col * 0.008)}
+              fontSize="8"
+              fontFamily="monospace"
+            >
+              {index % 4 === 0 ? "01" : index % 4 === 1 ? "10" : index % 4 === 2 ? "11" : "00"}
+            </text>
+          );
+        })}
+
+        {Array.from({ length: 90 }).map((_, index) => {
+          const y = 120 + index * 6;
+          return (
+            <path
+              key={`output-${index}`}
+              d={`M1000 ${y} C 1120 ${y}, 1260 ${y + Math.sin(index) * 12}, 1480 ${y}`}
+              stroke="#6ee7b7"
+              strokeWidth="0.5"
+              fill="none"
+              opacity="0.22"
+            />
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function App() {
   const actionsPersistReadyRef = useRef(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("light");
@@ -2647,6 +3026,7 @@ function App() {
   );
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [accountNameInput, setAccountNameInput] = useState("");
   const [accountNicknameInput, setAccountNicknameInput] = useState("");
   const [accountPhotoUrl, setAccountPhotoUrl] = useState("");
@@ -2656,6 +3036,8 @@ function App() {
   const [history, setHistory] = useState<HistoryEntry[]>(storedWorkspaceState?.history || initialHistory);
   const [actions, setActions] = useState<ActionItem[]>(storedWorkspaceState?.actions || initialActions);
   const [nonConformances, setNonConformances] = useState<NonConformanceRecord[]>(storedWorkspaceState?.nonConformances || initialNonConformances);
+  const [incidents, setIncidents] = useState<IncidentRecord[]>(storedWorkspaceState?.incidents || initialIncidents);
+  const [incidentActions, setIncidentActions] = useState<IncidentCorrectiveAction[]>(storedWorkspaceState?.incidentActions || initialIncidentActions);
   const [schedules, setSchedules] = useState<ScheduleItem[]>(storedWorkspaceState?.schedules || initialSchedules);
   const [sites, setSites] = useState<Site[]>(storedWorkspaceState?.sites || deriveSitesFromWorkspace(storedWorkspaceState?.audits || initialAudits, storedWorkspaceState?.schedules || initialSchedules, storedWorkspaceState?.managedSchedules || []));
   const [selectedSiteId, setSelectedSiteId] = useState<string>(storedWorkspaceState?.selectedSiteId || "");
@@ -2692,6 +3074,7 @@ function App() {
   const [auditFormsFolderInput, setAuditFormsFolderInput] = useState(storedFolderLinks?.auditFormsFolderInput || "");
   const [masterSheetInput, setMasterSheetInput] = useState(storedFolderLinks?.masterSheetInput || "");
   const [evidenceFolderInput, setEvidenceFolderInput] = useState(storedFolderLinks?.evidenceFolderInput || "");
+  const [healthSafetyFolderInput, setHealthSafetyFolderInput] = useState(storedFolderLinks?.healthSafetyFolderInput || "");
   const [exportsFolderInput, setExportsFolderInput] = useState(storedFolderLinks?.exportsFolderInput || "");
   const [adminNotesFolderInput, setAdminNotesFolderInput] = useState(storedFolderLinks?.adminNotesFolderInput || "");
   const [templateNameInput, setTemplateNameInput] = useState("");
@@ -3492,6 +3875,7 @@ function App() {
         auditFormsFolderInput,
         masterSheetInput,
         evidenceFolderInput,
+        healthSafetyFolderInput,
         exportsFolderInput,
         adminNotesFolderInput,
       }),
@@ -3502,6 +3886,7 @@ function App() {
     auditFormsFolderInput,
     masterSheetInput,
     evidenceFolderInput,
+    healthSafetyFolderInput,
     exportsFolderInput,
     adminNotesFolderInput,
   ]);
@@ -3514,6 +3899,8 @@ function App() {
         history,
         actions,
         nonConformances,
+        incidents,
+        incidentActions,
         schedules,
         templates,
         drafts,
@@ -3539,6 +3926,8 @@ function App() {
     history,
     actions,
     nonConformances,
+    incidents,
+    incidentActions,
     schedules,
     templates,
     drafts,
@@ -3600,6 +3989,182 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(themeStorageKey, themeMode);
   }, [themeMode]);
+
+  const incidentEscalationSeverities: IncidentSeverity[] = ["Lost Time Injury", "Major Incident", "Fatality"];
+
+  const generateIncidentNumber = (incidentDate: string) => {
+    const year = (incidentDate || new Date().toISOString().slice(0, 10)).slice(0, 4) || String(new Date().getFullYear());
+    const existingNumbers = incidents
+      .map((item) => item.incidentId)
+      .filter((value) => value.startsWith(`INC-${year}-`))
+      .map((value) => Number(value.split("-")[2] || 0))
+      .filter((value) => Number.isFinite(value));
+    const next = (existingNumbers.length ? Math.max(...existingNumbers) : 0) + 1;
+    return `INC-${year}-${String(next).padStart(3, "0")}`;
+  };
+
+  const sendIncidentNotification = async (incident: IncidentRecord) => {
+    const response = await fetch("/api/incidents/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        incidentId: incident.incidentId,
+        incidentType: incident.incidentType,
+        severity: incident.severity,
+        reporter: incident.reporterName,
+        department: incident.department,
+        location: incident.location,
+        status: incident.status,
+        incidentDate: incident.incidentDate,
+        incidentTime: incident.incidentTime,
+        priority: incident.priority,
+        escalated: incident.priority === "High",
+        viewLink: `${window.location.origin}/?screen=incidents&id=${encodeURIComponent(incident.id)}`,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok === false) {
+      throw new Error(result.error || "Incident notification could not be sent.");
+    }
+  };
+
+  const submitIncidentReport = async (payload: {
+    incidentType: IncidentType;
+    severity: IncidentSeverity;
+    incidentDate: string;
+    incidentTime: string;
+    reporterName: string;
+    reporterEmail: string;
+    department: string;
+    location: string;
+    description: string;
+    immediateAction: string;
+    injured: boolean;
+    injuryDetails: string;
+    contributingFactors: string;
+    witnesses: string;
+    evidenceUrls: IncidentEvidenceItem[];
+  }) => {
+    if (!currentUser) {
+      throw new Error("You must be signed in to submit incidents.");
+    }
+    if (!payload.incidentType || !payload.severity || !payload.incidentDate || !payload.reporterName || !payload.department || !payload.location || !payload.description) {
+      throw new Error("Complete all required incident fields before submitting.");
+    }
+    if (payload.injured && !payload.injuryDetails.trim()) {
+      throw new Error("Injury details are required when an injury is reported.");
+    }
+
+    const now = new Date().toISOString();
+    const incidentId = generateIncidentNumber(payload.incidentDate);
+    const highPriority = incidentEscalationSeverities.includes(payload.severity);
+    const assignedTo = highPriority
+      ? users.find((user) => user.role === "Master")?.name || "System Setup"
+      : users.find((user) => user.role === "Manager")?.name || "Unassigned";
+
+    const incident: IncidentRecord = {
+      id: `incident-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      incidentId,
+      status: "Open",
+      priority: highPriority ? "High" : "Normal",
+      incidentType: payload.incidentType,
+      severity: payload.severity,
+      incidentDate: payload.incidentDate,
+      incidentTime: payload.incidentTime,
+      reporterName: payload.reporterName,
+      reporterEmail: payload.reporterEmail,
+      department: payload.department,
+      location: payload.location,
+      description: payload.description,
+      immediateAction: payload.immediateAction,
+      injured: payload.injured,
+      injuryDetails: payload.injuryDetails,
+      contributingFactors: payload.contributingFactors,
+      witnesses: payload.witnesses,
+      evidenceUrls: payload.evidenceUrls,
+      assignedTo,
+      investigationNotes: "",
+      rootCause: "",
+      correctiveActions: "",
+      preventiveActions: "",
+      actionOwner: "",
+      dueDate: "",
+      completionDate: "",
+      riddorRequired: false,
+      closedBy: "",
+      closedAt: "",
+      notificationStatus: "Pending",
+      statusHistory: [{ at: now, from: "", to: "Open", by: currentUser.name, note: "Incident submitted" }],
+      createdAt: now,
+      createdBy: currentUser.name,
+      updatedAt: now,
+      updatedBy: currentUser.name,
+    };
+
+    setIncidents((current) => [incident, ...current]);
+
+    try {
+      await sendIncidentNotification(incident);
+      setIncidents((current) => current.map((item) => (item.id === incident.id ? { ...item, notificationStatus: highPriority ? "Escalated notification sent" : "Notification sent" } : item)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Notification failed.";
+      setIncidents((current) => current.map((item) => (item.id === incident.id ? { ...item, notificationStatus: `Failed: ${message}` } : item)));
+      pushToast("Notification failed", message, "warning");
+    }
+
+    return incident;
+  };
+
+  const updateIncidentRecord = (incidentId: string, patch: Partial<IncidentRecord>, options?: { statusNote?: string }) => {
+    if (!currentUser) return;
+    const at = new Date().toISOString();
+    setIncidents((current) =>
+      current.map((item) => {
+        if (item.id !== incidentId) return item;
+        const nextStatus = (patch.status || item.status) as IncidentStatus;
+        const statusChanged = nextStatus !== item.status;
+        const nextHistory = statusChanged
+          ? [...item.statusHistory, { at, from: item.status, to: nextStatus, by: currentUser.name, note: options?.statusNote || `Status changed to ${nextStatus}` }]
+          : item.statusHistory;
+        return { ...item, ...patch, statusHistory: nextHistory, updatedAt: at, updatedBy: currentUser.name };
+      }),
+    );
+  };
+
+  const addIncidentCorrectiveAction = (incidentId: string, payload: { description: string; owner: string; dueDate: string }) => {
+    if (!currentUser) return;
+    if (!payload.description.trim() || !payload.owner.trim()) {
+      throw new Error("Corrective action description and owner are required.");
+    }
+    setIncidentActions((current) => [
+      {
+        id: `incident-action-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        incidentId,
+        description: payload.description.trim(),
+        owner: payload.owner.trim(),
+        dueDate: payload.dueDate,
+        status: "Open",
+        completedAt: "",
+        completedBy: "",
+      },
+      ...current,
+    ]);
+  };
+
+  const updateIncidentCorrectiveAction = (actionId: string, patch: Partial<IncidentCorrectiveAction>) => {
+    if (!currentUser) return;
+    setIncidentActions((current) =>
+      current.map((item) => {
+        if (item.id !== actionId) return item;
+        const next = { ...item, ...patch };
+        if (next.status === "Complete" && !next.completedAt) {
+          next.completedAt = new Date().toISOString();
+          next.completedBy = currentUser.name;
+        }
+        return next;
+      }),
+    );
+  };
 
   useEffect(() => {
     window.localStorage.setItem(previewOrientationStorageKey, previewOrientation);
@@ -3717,6 +4282,7 @@ function App() {
       auditFormsFolderInput.trim() ||
       masterSheetInput.trim() ||
       evidenceFolderInput.trim() ||
+      healthSafetyFolderInput.trim() ||
       exportsFolderInput.trim() ||
       adminNotesFolderInput.trim()
     ) {
@@ -3733,6 +4299,7 @@ function App() {
     auditFormsFolderInput,
     masterSheetInput,
     evidenceFolderInput,
+    healthSafetyFolderInput,
     exportsFolderInput,
     adminNotesFolderInput,
   ]);
@@ -4051,6 +4618,7 @@ function App() {
           companyFolderId,
           auditFormsFolderId: extractGoogleResourceId(auditFormsFolderInput),
           evidenceFolderId: extractGoogleResourceId(evidenceFolderInput),
+          healthSafetyFolderId: extractGoogleResourceId(healthSafetyFolderInput),
           exportsFolderId: extractGoogleResourceId(exportsFolderInput),
           adminNotesFolderId: extractGoogleResourceId(adminNotesFolderInput),
         }),
@@ -4089,6 +4657,7 @@ function App() {
           companyFolderId,
           auditFormsFolderId: extractGoogleResourceId(auditFormsFolderInput),
           evidenceFolderId: extractGoogleResourceId(evidenceFolderInput),
+          healthSafetyFolderId: extractGoogleResourceId(healthSafetyFolderInput),
           exportsFolderId: extractGoogleResourceId(exportsFolderInput),
           adminNotesFolderId: extractGoogleResourceId(adminNotesFolderInput),
         }),
@@ -5225,6 +5794,7 @@ function App() {
     setAuditFormsFolderInput("");
     setMasterSheetInput("");
     setEvidenceFolderInput("");
+    setHealthSafetyFolderInput("");
     setExportsFolderInput("");
     setAdminNotesFolderInput("");
     setOnboardingSource(null);
@@ -5244,6 +5814,7 @@ function App() {
     const auditFormsFolderId = extractGoogleResourceId(auditFormsFolderInput);
     const masterSheetId = extractGoogleResourceId(masterSheetInput);
     const evidenceFolderId = extractGoogleResourceId(evidenceFolderInput);
+    const healthSafetyFolderId = extractGoogleResourceId(healthSafetyFolderInput);
     const exportsFolderId = extractGoogleResourceId(exportsFolderInput);
     const adminNotesFolderId = extractGoogleResourceId(adminNotesFolderInput);
     const existingFolder = folders.find((folder) => folder.id === companyFolderId);
@@ -5335,6 +5906,7 @@ function App() {
       setAuditFormsFolderInput(auditFormsFolderId);
       setMasterSheetInput(masterSheetId);
       setEvidenceFolderInput(evidenceFolderId);
+      setHealthSafetyFolderInput(healthSafetyFolderId);
       setExportsFolderInput(exportsFolderId);
       setAdminNotesFolderInput(adminNotesFolderId);
       setSyncState("Linked");
@@ -5547,6 +6119,7 @@ function App() {
     setAuditFormsFolderInput("");
     setMasterSheetInput("");
     setEvidenceFolderInput("");
+    setHealthSafetyFolderInput("");
     setExportsFolderInput("");
     setAdminNotesFolderInput("");
     setSelectedOnboardingRecordId("");
@@ -6532,6 +7105,15 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!currentUser) return;
+    const params = new URLSearchParams(window.location.search);
+    const requestedScreen = params.get("screen");
+    if (requestedScreen === "incidents" && canSubmitIncidents(currentUser.role)) {
+      setScreen("incidents");
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
     if (googleConnected) {
       loadOnboardingRecords({ silent: true });
     } else {
@@ -6562,6 +7144,9 @@ function App() {
     if (currentUser && !canAccessActions(currentUser.role) && screen === "nonConformance") {
       setScreen("dashboard");
     }
+    if (currentUser && !canSubmitIncidents(currentUser.role) && screen === "incidents") {
+      setScreen("dashboard");
+    }
     if (currentUser && !canAccessAuditsCentre(currentUser.role) && screen === "audits") {
       setScreen("dashboard");
     }
@@ -6587,119 +7172,131 @@ function App() {
             <div
               data-qms-theme={themeMode}
               className={[
-                "qms-login-shell qms-login-card flex flex-col justify-start overflow-y-auto rounded-[2.2rem] border px-6 pb-6 pt-12 backdrop-blur",
+                "qms-login-shell qms-login-card relative flex h-full overflow-hidden rounded-[2.2rem] border p-6 backdrop-blur",
                 themeMode === "dark"
-                  ? "border-slate-800/80 bg-slate-950/80 shadow-[0_32px_90px_rgba(2,6,23,0.58)]"
-                  : "border-white/70 bg-white/90 shadow-[0_32px_90px_rgba(15,23,42,0.14)]",
+                  ? "border-slate-800/80 bg-slate-950/80 shadow-[0_32px_90px_rgba(2,6,23,0.58)] text-white"
+                  : "border-slate-200/85 bg-white/90 shadow-[0_28px_80px_rgba(15,23,42,0.14)] text-slate-900",
               ].join(" ")}
             >
-            <div className="mb-5 flex items-center justify-between">
-              <div className={["rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em]", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "bg-slate-100 text-slate-500"].join(" ")}>
-                Tablet sign in
-              </div>
-              <button
-                onClick={() => setThemeMode(themeMode === "dark" ? "light" : "dark")}
-                className={["rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em]", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition hover:bg-slate-200"].join(" ")}
-              >
-                {themeMode === "dark" ? "Light mode" : "Dark mode"}
-              </button>
-              <button
-                onClick={() => setPreviewOrientation(previewOrientation === "landscape" ? "portrait" : "landscape")}
-                className={["rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em]", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition hover:bg-slate-200"].join(" ")}
-              >
-                {previewOrientation === "landscape" ? "Portrait preview" : "Landscape preview"}
-              </button>
-            </div>
-            <div className="qms-login-grid">
-              <div>
-                <div className="mb-6 flex items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--qms-teal-500)] text-lg font-semibold tracking-[0.28em] text-[var(--qms-navy-950)]">
-                    QMS
-                  </div>
-                  <div>
-                    <p className={["text-xs font-semibold uppercase tracking-[0.3em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
-                      Health &amp; Safety Audit System
-                    </p>
-                    <h1 className={["text-2xl font-semibold tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{companyName}</h1>
-                  </div>
-                </div>
-
-                <div className="overflow-hidden rounded-[1.7rem] bg-slate-950 px-5 py-5 text-white shadow-[0_24px_50px_rgba(15,23,42,0.28)]">
-                  <div className="mb-4 flex items-center justify-between">
-                    <p className="text-sm text-slate-300">Commercial field platform</p>
-                    <div className="rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200">
-                      Live demo
-                    </div>
-                  </div>
-                  <p className="mt-2 text-2xl font-semibold leading-tight">
-                    Control onboarding, live audits, and corrective actions in one tablet app.
-                  </p>
-                  <p className="mt-3 text-sm leading-6 text-slate-300">
-                    Sign in to manage company setup, review compliance, complete inspections, and close risk actions.
-                  </p>
-                  <div className="mt-4 grid grid-cols-3 gap-2">
-                    <div className="rounded-2xl bg-white/8 px-3 py-3">
-                      <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Audit</p>
-                      <p className="mt-2 text-lg font-semibold">Live</p>
-                    </div>
-                    <div className="rounded-2xl bg-white/8 px-3 py-3">
-                      <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Actions</p>
-                      <p className="mt-2 text-lg font-semibold">Tracked</p>
-                    </div>
-                    <div className="rounded-2xl bg-white/8 px-3 py-3">
-                      <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Reports</p>
-                      <p className="mt-2 text-lg font-semibold">Ready</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="qms-login-access mt-6">
-                <div className="space-y-4">
-                  <div>
-                    <label className={["mb-2 block text-sm font-medium", themeMode === "dark" ? "text-slate-300" : "text-slate-700"].join(" ")}>Username or email</label>
-                    <input
-                      value={username}
-                      onChange={(event) => setUsername(event.target.value)}
-                      className={[
-                        "h-14 w-full rounded-2xl border px-4 text-base outline-none transition",
-                        themeMode === "dark"
-                          ? "border-slate-700 bg-slate-900 text-slate-100 focus:border-sky-400 focus:bg-slate-950"
-                          : "border-slate-200 bg-slate-50 text-slate-900 focus:border-slate-400 focus:bg-white",
-                      ].join(" ")}
-                      placeholder="Enter username or email"
-                    />
-                  </div>
-                  <div>
-                    <label className={["mb-2 block text-sm font-medium", themeMode === "dark" ? "text-slate-300" : "text-slate-700"].join(" ")}>Password</label>
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          handleLogin();
-                        }
-                      }}
-                      className={[
-                        "h-14 w-full rounded-2xl border px-4 text-base outline-none transition",
-                        themeMode === "dark"
-                          ? "border-slate-700 bg-slate-900 text-slate-100 focus:border-sky-400 focus:bg-slate-950"
-                          : "border-slate-200 bg-slate-50 text-slate-900 focus:border-slate-400 focus:bg-white",
-                      ].join(" ")}
-                      placeholder="Enter password"
-                    />
-                  </div>
-                </div>
-
+              <DataFlowBackground />
+              <div className="absolute right-8 top-8 z-20 flex items-center gap-3">
                 <button
-                  onClick={handleLogin}
-                  className={`mt-6 h-14 w-full rounded-2xl bg-[var(--qms-teal-500)] text-base font-semibold text-[var(--qms-navy-950)] shadow-[0_16px_30px_rgba(20,211,166,0.26)] active:scale-[0.99] ${slatePrimaryCtaInteract}`}
+                  type="button"
+                  className="rounded-full border border-slate-700 bg-slate-900/75 p-2 text-slate-300 transition hover:border-teal-400/60 hover:text-teal-300"
+                  aria-label="Help"
                 >
-                  Sign in
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M9.5 9a2.5 2.5 0 1 1 4.2 1.8c-.8.7-1.7 1.2-1.7 2.2" />
+                    <circle cx="12" cy="16.8" r="0.8" fill="currentColor" stroke="none" />
+                  </svg>
                 </button>
-
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-700 bg-slate-900/75 p-2 text-slate-300 transition hover:border-teal-400/60 hover:text-teal-300"
+                  aria-label="Settings"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                    <path d="M12 3.5l1 2.1 2.4.4-.9 2.2 1.7 1.8-1.7 1.8.9 2.2-2.4.4-1 2.1-1-2.1-2.4-.4.9-2.2-1.7-1.8 1.7-1.8-.9-2.2 2.4-.4z" />
+                    <circle cx="12" cy="12" r="2.4" />
+                  </svg>
+                </button>
               </div>
-            </div>
+
+              <div className="relative z-10 grid h-full w-full grid-cols-1 gap-6 lg:grid-cols-2">
+                <div className="flex flex-col justify-between p-8">
+                  <div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-300 to-teal-500 text-xl font-bold text-slate-950 shadow-[0_12px_28px_rgba(20,211,166,0.26)]">
+                        QMS
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.32em] text-teal-300/95">Health &amp; Safety Audit System</p>
+                        <h1 className="mt-2 text-4xl font-semibold tracking-tight text-white">Audit App</h1>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-sm font-medium text-slate-300">Secure • Reliable • Compliant</p>
+                </div>
+
+                <div className="flex items-center">
+                  <div className="w-full rounded-[1.8rem] border border-white/10 bg-white/[0.06] p-8 shadow-[0_24px_60px_rgba(2,6,23,0.45)] backdrop-blur-xl">
+                    <h2 className="text-center text-2xl font-semibold text-white">Sign in to your account</h2>
+                    <form className="mt-7 space-y-5" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-100">Username or email</label>
+                        <div className="relative">
+                          <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 fill-none stroke-slate-400" strokeWidth="2">
+                            <path d="M20 21a8 8 0 0 0-16 0" />
+                            <circle cx="12" cy="7" r="4" />
+                          </svg>
+                          <input
+                            value={username}
+                            onChange={(event) => setUsername(event.target.value)}
+                            placeholder="Enter username or email"
+                            className="h-14 w-full rounded-2xl border border-white/10 bg-slate-950/45 pl-12 pr-4 text-base text-white outline-none transition placeholder:text-slate-400 focus:border-teal-400 focus:ring-4 focus:ring-teal-400/10"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-100">Password</label>
+                        <div className="relative">
+                          <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 fill-none stroke-slate-400" strokeWidth="2">
+                            <rect x="4" y="11" width="16" height="10" rx="2" />
+                            <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+                          </svg>
+                          <input
+                            type={showPassword ? "text" : "password"}
+                            value={password}
+                            onChange={(event) => setPassword(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                handleLogin();
+                              }
+                            }}
+                            placeholder="Enter password"
+                            className="h-14 w-full rounded-2xl border border-white/10 bg-slate-950/45 pl-12 pr-14 text-base text-white outline-none transition placeholder:text-slate-400 focus:border-teal-400 focus:ring-4 focus:ring-teal-400/10"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword((current) => !current)}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 transition hover:text-teal-300"
+                            aria-label={showPassword ? "Hide password" : "Show password"}
+                          >
+                            {showPassword ? (
+                              <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                                <path d="M3 3l18 18" />
+                                <path d="M10.6 10.6a2 2 0 1 0 2.8 2.8" />
+                                <path d="M9.9 4.2A10.2 10.2 0 0 1 21 12a10.9 10.9 0 0 1-4.1 5.2" />
+                                <path d="M6.5 6.5A11.3 11.3 0 0 0 3 12a10.9 10.9 0 0 0 9 6 9.8 9.8 0 0 0 3.2-.5" />
+                              </svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                                <path d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z" />
+                                <circle cx="12" cy="12" r="3" />
+                              </svg>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end">
+                        <button type="button" className="text-sm font-medium text-teal-300 transition hover:text-teal-200">
+                          Forgot password?
+                        </button>
+                      </div>
+
+                      <button
+                        type="submit"
+                        className={`h-14 w-full rounded-2xl bg-gradient-to-r from-teal-300 to-teal-500 text-base font-semibold text-slate-950 shadow-[0_16px_30px_rgba(20,211,166,0.26)] active:scale-[0.99] ${slatePrimaryCtaInteract}`}
+                      >
+                        Sign in
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
           <ToastStack toasts={toasts} />
@@ -6724,13 +7321,14 @@ function App() {
           <div
             data-qms-theme={themeMode}
             className={[
-              "qms-app-shell mx-auto flex h-full w-full flex-col overflow-hidden rounded-[2.25rem] border backdrop-blur",
+              "qms-app-shell relative isolate mx-auto flex h-full w-full flex-col overflow-hidden rounded-[2.25rem] border backdrop-blur",
               themeMode === "dark"
-                ? "border-slate-800/90 bg-slate-950/80 shadow-[0_28px_90px_rgba(2,6,23,0.5)]"
-                : "border-[var(--qms-teal-500)] bg-white shadow-[0_28px_90px_rgba(15,23,42,0.16)]",
+                ? "border-white/10 bg-slate-950/72 shadow-[0_28px_90px_rgba(2,6,23,0.55)]"
+                : "border-slate-200/90 bg-white/86 shadow-[0_28px_90px_rgba(15,23,42,0.12)]",
             ].join(" ")}
           >
-        <header className={["qms-app-header border-b px-3 pb-1 pt-1", themeMode === "dark" ? "border-slate-800 bg-slate-950/80" : "border-[var(--qms-teal-500)] bg-white"].join(" ")}>
+        <DataFlowBackground className="z-20 opacity-10" showBase={false} />
+        <header className={["qms-app-header relative z-10 border-b px-3 pb-1 pt-1 backdrop-blur", themeMode === "dark" ? "border-white/10 bg-slate-950/58" : "border-slate-200/80 bg-white/72"].join(" ")}>
           <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[9px] font-semibold uppercase tracking-[0.16em]">
             <div className={["rounded-full px-2.5 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--qms-teal-500)] bg-white font-semibold text-[var(--qms-navy-900)]"].join(" ")}>
               Tablet workspace
@@ -6746,10 +7344,10 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleQuickRoleSwitch("Admin", "Audit")}
+                  onClick={() => handleQuickRoleSwitch("Admin", "Admin")}
                   className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--qms-teal-500)]/50 bg-slate-900 text-[var(--qms-teal-400)]" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] hover:bg-teal-50"].join(" ")}
                 >
-                  AUDIT
+                  ADMIN
                 </button>
                 <button
                   type="button"
@@ -6831,7 +7429,7 @@ function App() {
               </div>
             </div>
 
-            <div className={["qms-app-session-bar mt-0.5 hidden items-center justify-between gap-2 rounded-lg border px-2 py-0.5 lg:flex", themeMode === "dark" ? "border-slate-700 bg-slate-900" : "border-[var(--qms-teal-500)] bg-white"].join(" ")}>
+            <div className={["qms-app-session-bar mt-0.5 hidden items-center justify-between gap-2 rounded-lg border px-2 py-0.5 lg:flex", themeMode === "dark" ? "border-slate-700 bg-slate-900" : "border-slate-300 bg-white"].join(" ")}>
               <div className="flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-[10px] leading-4">
                 <p className={["shrink-0 font-semibold", themeMode === "dark" ? "text-slate-100" : "text-slate-900"].join(" ")}>{currentUser.name}</p>
                 <span className={themeMode === "dark" ? "text-slate-500" : "text-slate-400"}>•</span>
@@ -6857,8 +7455,8 @@ function App() {
           </div>
         </header>
 
-        <main className="flex min-h-0 flex-1 overflow-hidden">
-          <aside className={["hidden shrink-0 flex-col border-r-[3px] px-3 py-4 lg:flex", desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]", themeMode === "dark" ? "border-[var(--qms-teal-500)] bg-slate-900 text-slate-200" : "border-[var(--qms-teal-500)] bg-slate-100 text-slate-700"].join(" ")}>
+        <main className="relative z-10 flex min-h-0 flex-1 overflow-hidden">
+          <aside className={["hidden shrink-0 flex-col border-r px-3 py-4 backdrop-blur lg:flex", desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]", themeMode === "dark" ? "border-white/10 bg-slate-950/58 text-slate-200" : "border-slate-200/85 bg-slate-50/82 text-slate-700"].join(" ")}>
             <nav className="flex-1 space-y-2 overflow-y-auto pr-1">
               {visibleNavItems.map((item) => {
                 const selected = screen === item.id || (screen === "complete" && item.id === "audits");
@@ -6896,7 +7494,7 @@ function App() {
               </button>
             </div>
           </aside>
-          <div className={["qms-screen-stage h-full flex-1 overflow-y-auto px-4 pb-32 pt-4", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800" : "bg-slate-200/55"].join(" ")}>
+          <div className={["qms-screen-stage h-full flex-1 overflow-y-auto px-4 pb-32 pt-4", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_input:focus]:border-[var(--qms-teal-500)] [&_section_input:focus]:bg-slate-950 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_section_textarea:focus]:border-[var(--qms-teal-500)] [&_section_select]:border-slate-700 [&_section_select]:bg-slate-950 [&_section_select]:text-slate-100 [&_section_select:focus]:border-[var(--qms-teal-500)] [&_section_select:focus]:bg-slate-950 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800 [&_.bg-white]:bg-slate-900 [&_.text-slate-900]:text-slate-100 [&_.text-slate-800]:text-slate-200 [&_.text-slate-700]:text-slate-300 [&_.text-slate-600]:text-slate-400 [&_.text-slate-500]:text-slate-400 [&_input[type=file]]:border-[rgba(25,227,181,0.45)] [&_input[type=file]]:bg-slate-950 [&_input[type=file]]:text-slate-300 [&_input[type=file]]:file:text-slate-200" : "bg-slate-100/72"].join(" ")}>
             {currentUser.role === "Manager" && currentManagerAlerts.length > 0 && (
               <section className="mb-4 rounded-[1.5rem] border border-rose-200 bg-rose-50 px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
@@ -7117,6 +7715,18 @@ function App() {
               />
             )}
 
+            {screen === "incidents" && canSubmitIncidents(currentUser.role) && (
+              <IncidentReportingScreen
+                currentUser={currentUser}
+                incidents={incidents}
+                incidentActions={incidentActions}
+                onSubmitIncident={submitIncidentReport}
+                onUpdateIncident={updateIncidentRecord}
+                onAddIncidentAction={addIncidentCorrectiveAction}
+                onUpdateIncidentAction={updateIncidentCorrectiveAction}
+              />
+            )}
+
             {screen === "reports" && (
               <ReportsScreen
                 compliance={compliance}
@@ -7210,6 +7820,7 @@ function App() {
                 auditFormsFolderInput={auditFormsFolderInput}
                 masterSheetInput={masterSheetInput}
                 evidenceFolderInput={evidenceFolderInput}
+                healthSafetyFolderInput={healthSafetyFolderInput}
                 exportsFolderInput={exportsFolderInput}
                 adminNotesFolderInput={adminNotesFolderInput}
                 syncState={syncState}
@@ -7252,6 +7863,7 @@ function App() {
                 onAuditFormsFolderChange={setAuditFormsFolderInput}
                 onMasterSheetChange={setMasterSheetInput}
                 onEvidenceFolderChange={setEvidenceFolderInput}
+                onHealthSafetyFolderChange={setHealthSafetyFolderInput}
                 onExportsFolderChange={setExportsFolderInput}
                 onAdminNotesFolderChange={setAdminNotesFolderInput}
                 onScheduleNameChange={setScheduleNameInput}
@@ -8903,6 +9515,303 @@ function NonConformanceScreen({
   );
 }
 
+function IncidentReportingScreen({
+  currentUser,
+  incidents,
+  incidentActions,
+  onSubmitIncident,
+  onUpdateIncident,
+  onAddIncidentAction,
+  onUpdateIncidentAction,
+}: {
+  currentUser: User;
+  incidents: IncidentRecord[];
+  incidentActions: IncidentCorrectiveAction[];
+  onSubmitIncident: (payload: {
+    incidentType: IncidentType;
+    severity: IncidentSeverity;
+    incidentDate: string;
+    incidentTime: string;
+    reporterName: string;
+    reporterEmail: string;
+    department: string;
+    location: string;
+    description: string;
+    immediateAction: string;
+    injured: boolean;
+    injuryDetails: string;
+    contributingFactors: string;
+    witnesses: string;
+    evidenceUrls: IncidentEvidenceItem[];
+  }) => Promise<IncidentRecord>;
+  onUpdateIncident: (incidentId: string, patch: Partial<IncidentRecord>, options?: { statusNote?: string }) => void;
+  onAddIncidentAction: (incidentId: string, payload: { description: string; owner: string; dueDate: string }) => void;
+  onUpdateIncidentAction: (actionId: string, patch: Partial<IncidentCorrectiveAction>) => void;
+}) {
+  const [view, setView] = useState<"report" | "register" | "dashboard">("report");
+  const [selectedIncidentId, setSelectedIncidentId] = useState("");
+  const [statusFilter, setStatusFilter] = useState<IncidentStatus | "All">("All");
+  const [severityFilter, setSeverityFilter] = useState<IncidentSeverity | "All">("All");
+  const [departmentFilter, setDepartmentFilter] = useState("All");
+  const [typeFilter, setTypeFilter] = useState<IncidentType | "All">("All");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [actionDescription, setActionDescription] = useState("");
+  const [actionOwner, setActionOwner] = useState("");
+  const [actionDueDate, setActionDueDate] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+
+  const [form, setForm] = useState({
+    incidentType: "Near Miss" as IncidentType,
+    severity: "Minor" as IncidentSeverity,
+    incidentDate: new Date().toISOString().slice(0, 10),
+    incidentTime: new Date().toTimeString().slice(0, 5),
+    reporterName: currentUser.name,
+    reporterEmail: `${currentUser.username}@qmsprecast.co.uk`,
+    department: "",
+    location: "",
+    description: "",
+    immediateAction: "",
+    injured: false,
+    injuryDetails: "",
+    contributingFactors: "",
+    witnesses: "",
+    evidenceUrls: [] as IncidentEvidenceItem[],
+  });
+
+  const departments = useMemo(
+    () => Array.from(new Set(incidents.map((item) => item.department).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [incidents],
+  );
+
+  const filteredIncidents = useMemo(
+    () =>
+      incidents.filter((item) => {
+        if (statusFilter !== "All" && item.status !== statusFilter) return false;
+        if (severityFilter !== "All" && item.severity !== severityFilter) return false;
+        if (departmentFilter !== "All" && item.department !== departmentFilter) return false;
+        if (typeFilter !== "All" && item.incidentType !== typeFilter) return false;
+        if (fromDate && item.incidentDate < fromDate) return false;
+        if (toDate && item.incidentDate > toDate) return false;
+        return true;
+      }),
+    [incidents, statusFilter, severityFilter, departmentFilter, typeFilter, fromDate, toDate],
+  );
+
+  const selectedIncident = filteredIncidents.find((item) => item.id === selectedIncidentId) || incidents.find((item) => item.id === selectedIncidentId) || null;
+  const selectedActions = selectedIncident ? incidentActions.filter((item) => item.incidentId === selectedIncident.id) : [];
+  const openActionsCount = incidentActions.filter((item) => item.status !== "Complete").length;
+  const underInvestigation = incidents.filter((item) => item.status === "Under Investigation").length;
+  const highSeverityIncidents = incidents.filter((item) => item.priority === "High").length;
+  const nearMisses = incidents.filter((item) => item.incidentType === "Near Miss").length;
+  const overdueActions = incidentActions.filter((item) => item.status !== "Complete" && item.dueDate && item.dueDate < new Date().toISOString().slice(0, 10)).length;
+
+  const monthlyTrend = useMemo(() => {
+    const map = new Map<string, number>();
+    incidents.forEach((item) => {
+      const key = item.incidentDate.slice(0, 7);
+      map.set(key, (map.get(key) || 0) + 1);
+    });
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [incidents]);
+
+  const onAddEvidence = (files: FileList | null) => {
+    if (!files) return;
+    const next = Array.from(files).map((file) => ({
+      id: `incident-evidence-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: file.name,
+      mimeType: file.type || "application/octet-stream",
+      previewUrl: URL.createObjectURL(file),
+      addedAt: new Date().toISOString(),
+    }));
+    setForm((current) => ({ ...current, evidenceUrls: [...current.evidenceUrls, ...next] }));
+  };
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    const created = await onSubmitIncident(form);
+    setSuccessMessage(`Incident submitted successfully: ${created.incidentId}`);
+    setView("register");
+    setSelectedIncidentId(created.id);
+    setForm((current) => ({
+      ...current,
+      department: "",
+      location: "",
+      description: "",
+      immediateAction: "",
+      injured: false,
+      injuryDetails: "",
+      contributingFactors: "",
+      witnesses: "",
+      evidenceUrls: [],
+    }));
+  };
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">Accident / Near miss</p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight">Incident reporting module</h2>
+            <p className="mt-2 text-sm text-slate-300">Mobile-first reporting plus register, investigation workflow, corrective actions, and dashboard.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setView("report")} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${view === "report" ? "border-teal-400 bg-teal-400/15 text-teal-200" : "border-slate-700 bg-slate-900 text-slate-300"}`}>Report form</button>
+            <button type="button" onClick={() => setView("register")} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${view === "register" ? "border-teal-400 bg-teal-400/15 text-teal-200" : "border-slate-700 bg-slate-900 text-slate-300"}`}>Incident register</button>
+            <button type="button" onClick={() => setView("dashboard")} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${view === "dashboard" ? "border-teal-400 bg-teal-400/15 text-teal-200" : "border-slate-700 bg-slate-900 text-slate-300"}`}>Dashboard</button>
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-slate-400">QR reporting link: <span className="font-semibold text-slate-200">{`${window.location.origin}/?screen=incidents`}</span></p>
+      </section>
+
+      {successMessage && (
+        <section className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+          {successMessage}
+        </section>
+      )}
+
+      {view === "report" && (
+        <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
+          <form className="grid gap-3 md:grid-cols-2" onSubmit={onSubmit}>
+            <select value={form.incidentType} onChange={(event) => setForm((current) => ({ ...current, incidentType: event.target.value as IncidentType }))} className="h-11 rounded-xl border px-3"><option>Accident</option><option>Near Miss</option><option>Dangerous Occurrence</option><option>Property Damage</option><option>Environmental</option></select>
+            <select value={form.severity} onChange={(event) => setForm((current) => ({ ...current, severity: event.target.value as IncidentSeverity }))} className="h-11 rounded-xl border px-3"><option>Minor</option><option>Medical Treatment</option><option>Lost Time Injury</option><option>Major Incident</option><option>Fatality</option></select>
+            <input type="date" value={form.incidentDate} onChange={(event) => setForm((current) => ({ ...current, incidentDate: event.target.value }))} className="h-11 rounded-xl border px-3" />
+            <input type="time" value={form.incidentTime} onChange={(event) => setForm((current) => ({ ...current, incidentTime: event.target.value }))} className="h-11 rounded-xl border px-3" />
+            <input value={form.reporterName} onChange={(event) => setForm((current) => ({ ...current, reporterName: event.target.value }))} placeholder="Reporter name" className="h-11 rounded-xl border px-3" />
+            <input value={form.reporterEmail} onChange={(event) => setForm((current) => ({ ...current, reporterEmail: event.target.value }))} placeholder="Reporter email" className="h-11 rounded-xl border px-3" />
+            <input value={form.department} onChange={(event) => setForm((current) => ({ ...current, department: event.target.value }))} placeholder="Department / Area" className="h-11 rounded-xl border px-3" />
+            <input value={form.location} onChange={(event) => setForm((current) => ({ ...current, location: event.target.value }))} placeholder="Exact location" className="h-11 rounded-xl border px-3" />
+            <textarea value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} placeholder="Description of what happened" className="md:col-span-2 min-h-24 rounded-xl border px-3 py-2" />
+            <textarea value={form.immediateAction} onChange={(event) => setForm((current) => ({ ...current, immediateAction: event.target.value }))} placeholder="Immediate action taken" className="md:col-span-2 min-h-20 rounded-xl border px-3 py-2" />
+            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={form.injured} onChange={(event) => setForm((current) => ({ ...current, injured: event.target.checked }))} /> Was anyone injured?</label>
+            {form.injured && <textarea value={form.injuryDetails} onChange={(event) => setForm((current) => ({ ...current, injuryDetails: event.target.value }))} placeholder="Injury details" className="md:col-span-2 min-h-20 rounded-xl border px-3 py-2" />}
+            <textarea value={form.contributingFactors} onChange={(event) => setForm((current) => ({ ...current, contributingFactors: event.target.value }))} placeholder="Contributing factors" className="md:col-span-2 min-h-20 rounded-xl border px-3 py-2" />
+            <textarea value={form.witnesses} onChange={(event) => setForm((current) => ({ ...current, witnesses: event.target.value }))} placeholder="Witnesses" className="md:col-span-2 min-h-20 rounded-xl border px-3 py-2" />
+            <div className="md:col-span-2 rounded-xl border border-dashed border-slate-300 px-3 py-3">
+              <p className="text-xs text-slate-500">Evidence uploads (photos, videos, PDFs, documents)</p>
+              <input type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt" onChange={(event) => onAddEvidence(event.target.files)} className="mt-2 w-full text-sm" />
+              {form.evidenceUrls.length > 0 && <p className="mt-2 text-xs text-slate-600">{form.evidenceUrls.length} file(s) attached</p>}
+            </div>
+            <button type="submit" className="md:col-span-2 h-12 rounded-xl bg-[var(--qms-teal-500)] font-semibold text-[var(--qms-navy-950)]">Submit incident report</button>
+          </form>
+        </section>
+      )}
+
+      {view === "register" && (
+        <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4">
+          <div className="grid gap-2 md:grid-cols-6">
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as IncidentStatus | "All")} className="h-10 rounded-lg border px-2"><option value="All">All status</option><option>Open</option><option>Under Investigation</option><option>Closed</option></select>
+            <select value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value as IncidentSeverity | "All")} className="h-10 rounded-lg border px-2"><option value="All">All severity</option><option>Minor</option><option>Medical Treatment</option><option>Lost Time Injury</option><option>Major Incident</option><option>Fatality</option></select>
+            <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)} className="h-10 rounded-lg border px-2"><option value="All">All departments</option>{departments.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+            <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as IncidentType | "All")} className="h-10 rounded-lg border px-2"><option value="All">All types</option><option>Accident</option><option>Near Miss</option><option>Dangerous Occurrence</option><option>Property Damage</option><option>Environmental</option></select>
+            <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className="h-10 rounded-lg border px-2" />
+            <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className="h-10 rounded-lg border px-2" />
+          </div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead><tr className="text-left text-xs uppercase tracking-[0.14em] text-slate-500"><th className="px-2 py-2">Incident</th><th className="px-2 py-2">Date</th><th className="px-2 py-2">Type</th><th className="px-2 py-2">Severity</th><th className="px-2 py-2">Reporter</th><th className="px-2 py-2">Department</th><th className="px-2 py-2">Location</th><th className="px-2 py-2">Status</th><th className="px-2 py-2">Assigned</th><th className="px-2 py-2">Due</th><th className="px-2 py-2">Evidence</th><th className="px-2 py-2">Action</th></tr></thead>
+              <tbody>
+                {filteredIncidents.map((item) => (
+                  <tr key={item.id} onClick={() => setSelectedIncidentId(item.id)} className="cursor-pointer border-t border-slate-200 hover:bg-slate-50">
+                    <td className="px-2 py-2 font-semibold">{item.incidentId}</td><td className="px-2 py-2">{item.incidentDate} {item.incidentTime}</td><td className="px-2 py-2">{item.incidentType}</td><td className="px-2 py-2">{item.severity}</td><td className="px-2 py-2">{item.reporterName}</td><td className="px-2 py-2">{item.department}</td><td className="px-2 py-2">{item.location}</td><td className="px-2 py-2">{item.status}</td><td className="px-2 py-2">{item.assignedTo || "-"}</td><td className="px-2 py-2">{item.dueDate || "-"}</td><td className="px-2 py-2">{item.evidenceUrls.length > 0 ? "Yes" : "No"}</td>
+                    <td className="px-2 py-2">
+                      {canInvestigateIncidents(currentUser.role) && item.status !== "Closed" && (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedIncidentId(item.id);
+                            if (item.status === "Open") {
+                              onUpdateIncident(item.id, { status: "Under Investigation" }, { statusNote: "Investigation started" });
+                            }
+                          }}
+                          className="rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white"
+                        >
+                          {item.status === "Open" ? "Start investigation" : "Continue"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {view === "dashboard" && (
+        <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4">
+          <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-5">
+            <MiniMetric label="Total incidents" value={String(incidents.length)} />
+            <MiniMetric label="Open incidents" value={String(incidents.filter((item) => item.status === "Open").length)} />
+            <MiniMetric label="Under investigation" value={String(underInvestigation)} />
+            <MiniMetric label="Closed incidents" value={String(incidents.filter((item) => item.status === "Closed").length)} />
+            <MiniMetric label="Near misses" value={String(nearMisses)} />
+            <MiniMetric label="High severity" value={String(highSeverityIncidents)} />
+            <MiniMetric label="Overdue actions" value={String(overdueActions)} />
+            <MiniMetric label="Open actions" value={String(openActionsCount)} />
+          </div>
+          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+            Monthly trend: {monthlyTrend.length === 0 ? "No data yet." : monthlyTrend.map(([month, count]) => `${month}: ${count}`).join(" | ")}
+          </div>
+        </section>
+      )}
+
+      {selectedIncident && canInvestigateIncidents(currentUser.role) && (
+        <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Investigation workflow</p>
+              <h3 className="text-xl font-semibold text-slate-900">{selectedIncident.incidentId}</h3>
+              <p className="text-sm text-slate-600">{selectedIncident.description}</p>
+            </div>
+            <select value={selectedIncident.status} onChange={(event) => onUpdateIncident(selectedIncident.id, { status: event.target.value as IncidentStatus }, { statusNote: "Status updated from register" })} className="h-10 rounded-lg border px-2">
+              <option>Open</option><option>Under Investigation</option><option>Closed</option>
+            </select>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            <textarea value={selectedIncident.investigationNotes} onChange={(event) => onUpdateIncident(selectedIncident.id, { investigationNotes: event.target.value })} placeholder="Investigation notes" className="min-h-24 rounded-xl border px-3 py-2" />
+            <textarea value={selectedIncident.rootCause} onChange={(event) => onUpdateIncident(selectedIncident.id, { rootCause: event.target.value })} placeholder="Root cause analysis" className="min-h-24 rounded-xl border px-3 py-2" />
+            <textarea value={selectedIncident.correctiveActions} onChange={(event) => onUpdateIncident(selectedIncident.id, { correctiveActions: event.target.value })} placeholder="Corrective actions summary" className="min-h-24 rounded-xl border px-3 py-2" />
+            <textarea value={selectedIncident.preventiveActions} onChange={(event) => onUpdateIncident(selectedIncident.id, { preventiveActions: event.target.value })} placeholder="Preventive actions summary" className="min-h-24 rounded-xl border px-3 py-2" />
+            <input value={selectedIncident.assignedTo} onChange={(event) => onUpdateIncident(selectedIncident.id, { assignedTo: event.target.value })} placeholder="Assigned to" className="h-10 rounded-lg border px-3" />
+            <input value={selectedIncident.actionOwner} onChange={(event) => onUpdateIncident(selectedIncident.id, { actionOwner: event.target.value })} placeholder="Action owner" className="h-10 rounded-lg border px-3" />
+            <input type="date" value={selectedIncident.dueDate} onChange={(event) => onUpdateIncident(selectedIncident.id, { dueDate: event.target.value })} className="h-10 rounded-lg border px-3" />
+            <input type="date" value={selectedIncident.completionDate} onChange={(event) => onUpdateIncident(selectedIncident.id, { completionDate: event.target.value })} className="h-10 rounded-lg border px-3" />
+            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={selectedIncident.riddorRequired} onChange={(event) => onUpdateIncident(selectedIncident.id, { riddorRequired: event.target.checked })} /> RIDDOR required</label>
+          </div>
+
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Corrective action tracking</p>
+            <div className="mt-2 grid gap-2 md:grid-cols-4">
+              <input value={actionDescription} onChange={(event) => setActionDescription(event.target.value)} placeholder="Action description" className="h-10 rounded-lg border px-2 md:col-span-2" />
+              <input value={actionOwner} onChange={(event) => setActionOwner(event.target.value)} placeholder="Owner" className="h-10 rounded-lg border px-2" />
+              <input type="date" value={actionDueDate} onChange={(event) => setActionDueDate(event.target.value)} className="h-10 rounded-lg border px-2" />
+            </div>
+            <button type="button" onClick={() => { onAddIncidentAction(selectedIncident.id, { description: actionDescription, owner: actionOwner, dueDate: actionDueDate }); setActionDescription(""); setActionOwner(""); setActionDueDate(""); }} className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white">Add corrective action</button>
+            <div className="mt-2 space-y-2">
+              {selectedActions.map((item) => (
+                <div key={item.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                  <p className="min-w-[14rem] flex-1">{item.description}</p>
+                  <p className="text-slate-500">{item.owner}</p>
+                  <p className="text-slate-500">{item.dueDate || "-"}</p>
+                  <select value={item.status} onChange={(event) => onUpdateIncidentAction(item.id, { status: event.target.value as IncidentCorrectiveAction["status"] })} className="h-8 rounded border px-2 text-xs">
+                    <option>Open</option><option>In Progress</option><option>Complete</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
+          {selectedIncident.status !== "Closed" && (
+            <button type="button" onClick={() => onUpdateIncident(selectedIncident.id, { status: "Closed", closedAt: new Date().toISOString(), closedBy: currentUser.name, completionDate: selectedIncident.completionDate || new Date().toISOString().slice(0, 10) }, { statusNote: "Incident closed" })} className="mt-3 h-10 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white">Close incident</button>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
 function AuditsScreen({
   currentUser,
   audits,
@@ -9139,7 +10048,11 @@ function ActionsScreen({
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 {permissions.canAssignActions && (
-                  <select value={action.assignedToName} onChange={(event) => onAssignAction(action.id, event.target.value)} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
+                  <select
+                    value={action.assignedToName}
+                    onChange={(event) => onAssignAction(action.id, event.target.value)}
+                    className={`h-11 w-full min-w-0 rounded-2xl px-4 text-sm ${brandDarkFormControl}`}
+                  >
                     {[action.assignedToName, ...availableAuditors].filter((value, index, list) => value && list.indexOf(value) === index).map((name) => (
                       <option key={name} value={name}>{name}</option>
                     ))}
@@ -9170,7 +10083,7 @@ function ActionsScreen({
                         accept="image/*"
                         multiple
                         title="Fallback file chooser"
-                        className="mt-2 h-9 w-full rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-500"
+                        className={`mt-2 h-9 w-full rounded-xl px-2 text-xs ${brandDarkFormControl}`}
                         onChange={(event) => {
                           if (event.target.files?.length) {
                             onAddEvidence(action.id, event.target.files);
@@ -9866,10 +10779,6 @@ function SchedulesScreen({
   const startDateError = validationAttempted && !startDate;
   const auditorsError = validationAttempted && selectedAuditors.length === 0;
 
-  /** Brand teal fields — avoids OS dark form styling on pale backgrounds (unreadable text). */
-  const scheduleBrandField =
-    "border border-[rgba(25,227,181,0.5)] bg-[var(--qms-teal-500)] text-[var(--qms-navy-950)] shadow-[0_10px_26px_rgba(20,211,166,0.22)] outline-none transition focus:border-[var(--qms-navy-850)]";
-
   return (
     <div className="space-y-4">
       <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
@@ -9888,7 +10797,7 @@ function SchedulesScreen({
           </div>
           <button
             onClick={onOpenNew}
-            className={`h-12 rounded-2xl px-5 text-sm font-semibold ${scheduleBrandField} ${slatePrimaryCtaInteract}`}
+            className={`h-12 rounded-2xl px-5 text-sm font-semibold ${brandTealFormField} ${slatePrimaryCtaInteract}`}
           >
             Add new schedule
           </button>
@@ -9908,7 +10817,7 @@ function SchedulesScreen({
             <select
               value={filter}
               onChange={(event) => onFilterChange(event.target.value as ScheduleListFilter)}
-              className={`h-12 w-full rounded-2xl px-4 text-sm ${scheduleBrandField}`}
+              className={`h-12 w-full rounded-2xl px-4 text-sm ${brandTealFormField}`}
             >
               <option value="Live">Live</option>
               <option value="Archived">Archived</option>
@@ -9982,7 +10891,7 @@ function SchedulesScreen({
                 onChange={(event) => onScheduleNameChange(event.target.value)}
                 className={[
                   "h-12 w-full rounded-2xl px-4 text-sm outline-none transition",
-                  scheduleBrandField,
+                  brandTealFormField,
                   nameError ? "border-rose-400 ring-1 ring-rose-400" : "",
                 ].join(" ")}
                 placeholder="Enter the schedule name"
@@ -10054,7 +10963,7 @@ function SchedulesScreen({
                     <select
                       value={audit.frequency}
                       onChange={(event) => onAuditFieldChange(audit.auditId, "frequency", event.target.value)}
-                      className={`h-12 rounded-2xl px-4 text-sm ${scheduleBrandField}`}
+                      className={`h-12 rounded-2xl px-4 text-sm ${brandTealFormField}`}
                     >
                       {scheduleFrequencyOptions.map((frequency) => (
                         <option key={frequency} value={frequency}>{frequency}</option>
@@ -10063,7 +10972,7 @@ function SchedulesScreen({
                     <select
                       value={audit.liveTime}
                       onChange={(event) => onAuditFieldChange(audit.auditId, "liveTime", event.target.value)}
-                      className={`h-12 rounded-2xl px-4 text-sm ${scheduleBrandField}`}
+                      className={`h-12 rounded-2xl px-4 text-sm ${brandTealFormField}`}
                     >
                       {scheduleTimeOptions.map((time) => (
                         <option key={time} value={time}>{time}</option>
@@ -10072,7 +10981,7 @@ function SchedulesScreen({
                     <select
                       value={String(audit.completionHours)}
                       onChange={(event) => onAuditFieldChange(audit.auditId, "completionHours", event.target.value)}
-                      className={`h-12 rounded-2xl px-4 text-sm ${scheduleBrandField}`}
+                      className={`h-12 rounded-2xl px-4 text-sm ${brandTealFormField}`}
                     >
                       {scheduleDurationOptions.map((hours) => (
                         <option key={hours} value={hours}>{hours} hours to complete</option>
@@ -10092,7 +11001,7 @@ function SchedulesScreen({
                   onChange={(event) => onStartDateChange(event.target.value)}
                   className={[
                     "h-12 w-full rounded-2xl px-4 text-sm outline-none transition",
-                    scheduleBrandField,
+                    brandTealFormField,
                     startDateError ? "border-rose-400 ring-1 ring-rose-400" : "",
                   ].join(" ")}
                 />
@@ -10127,7 +11036,7 @@ function SchedulesScreen({
                     "h-12 w-full rounded-2xl px-4 text-sm outline-none transition",
                     continuous
                       ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                      : scheduleBrandField,
+                      : brandTealFormField,
                   ].join(" ")}
                 />
               </div>
@@ -10851,6 +11760,7 @@ function AdminScreen({
   auditFormsFolderInput,
   masterSheetInput,
   evidenceFolderInput,
+  healthSafetyFolderInput,
   exportsFolderInput,
   adminNotesFolderInput,
   templateNameInput,
@@ -10886,6 +11796,7 @@ function AdminScreen({
   onAuditFormsFolderChange,
   onMasterSheetChange,
   onEvidenceFolderChange,
+  onHealthSafetyFolderChange,
   onExportsFolderChange,
   onAdminNotesFolderChange,
   onScheduleNameChange,
@@ -10967,6 +11878,7 @@ function AdminScreen({
   auditFormsFolderInput: string;
   masterSheetInput: string;
   evidenceFolderInput: string;
+  healthSafetyFolderInput: string;
   exportsFolderInput: string;
   adminNotesFolderInput: string;
   templateNameInput: string;
@@ -11002,6 +11914,7 @@ function AdminScreen({
   onAuditFormsFolderChange: (value: string) => void;
   onMasterSheetChange: (value: string) => void;
   onEvidenceFolderChange: (value: string) => void;
+  onHealthSafetyFolderChange: (value: string) => void;
   onExportsFolderChange: (value: string) => void;
   onAdminNotesFolderChange: (value: string) => void;
   onScheduleNameChange: (value: string) => void;
@@ -11249,6 +12162,17 @@ function AdminScreen({
                       value={evidenceFolderInput}
                       onChange={(event) => onEvidenceFolderChange(event.target.value)}
                       placeholder="Optional"
+                      className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                      Health &amp; Safety folder
+                    </label>
+                    <input
+                      value={healthSafetyFolderInput}
+                      onChange={(event) => onHealthSafetyFolderChange(event.target.value)}
+                      placeholder="Recommended for incident reporting"
                       className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
                     />
                   </div>

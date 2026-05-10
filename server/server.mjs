@@ -52,7 +52,7 @@ const APP_VERSION = (() => {
 })();
 
 const CURRENT_SCHEMA_VERSION = "3.0.0";
-const REQUIRED_TABS = ["Config", "Onboarding", "Users", "Schedule", "Actions", "ActionComments", "AuditResults", "AuditFindings", "Evidence", "Reports", "SyncLog", "Notes"];
+const REQUIRED_TABS = ["Config", "Onboarding", "Users", "Schedule", "Actions", "ActionComments", "AuditResults", "AuditFindings", "Evidence", "Incidents", "IncidentActions", "Reports", "SyncLog", "Notes"];
 const TAB_COLUMNS = {
   Config: ["Key", "Value", "Updated At"],
   Onboarding: [
@@ -253,6 +253,71 @@ const TAB_COLUMNS = {
     "Remote Row ID",
     "Schema Version",
   ],
+  Incidents: [
+    "Incident Record ID",
+    "Incident ID",
+    "Company ID",
+    "Status",
+    "Priority",
+    "Incident Type",
+    "Severity",
+    "Incident Date",
+    "Incident Time",
+    "Reporter Name",
+    "Reporter Email",
+    "Department / Area",
+    "Location",
+    "Description",
+    "Immediate Action",
+    "Injured",
+    "Injury Details",
+    "Contributing Factors",
+    "Witnesses",
+    "Evidence Links",
+    "Assigned To",
+    "Investigation Notes",
+    "Root Cause",
+    "Corrective Actions",
+    "Preventive Actions",
+    "Action Owner",
+    "Due Date",
+    "Completion Date",
+    "RIDDOR Required",
+    "Closed By",
+    "Closed At",
+    "Notification Status",
+    "Status History",
+    "Created At",
+    "Created By",
+    "Updated At",
+    "Updated By",
+    "Sync Status",
+    "Sync Attempts",
+    "Last Sync Error",
+    "Remote Row ID",
+    "Schema Version",
+  ],
+  IncidentActions: [
+    "Action ID",
+    "Incident Record ID",
+    "Incident ID",
+    "Company ID",
+    "Description",
+    "Owner",
+    "Due Date",
+    "Status",
+    "Completed At",
+    "Completed By",
+    "Created At",
+    "Created By",
+    "Updated At",
+    "Updated By",
+    "Sync Status",
+    "Sync Attempts",
+    "Last Sync Error",
+    "Remote Row ID",
+    "Schema Version",
+  ],
   Reports: [
     "Report ID",
     "Company ID",
@@ -319,6 +384,8 @@ const ID_COLUMNS = {
   AuditResults: "Result ID",
   AuditFindings: "Finding ID",
   Evidence: "Evidence ID",
+  Incidents: "Incident Record ID",
+  IncidentActions: "Action ID",
   Reports: "Report ID",
   Schedule: "Schedule ID",
   SyncLog: "Sync Item ID",
@@ -742,6 +809,73 @@ async function sendNcrEscalationEmail({
   await transporter.sendMail({
     from,
     to: toEmail,
+    subject,
+    text: textBody,
+    html: htmlBody,
+  });
+}
+
+async function sendIncidentReportEmail({
+  incidentId,
+  incidentType,
+  severity,
+  reporter,
+  department,
+  location,
+  status,
+  incidentDate,
+  incidentTime,
+  priority,
+  escalated,
+  viewLink,
+}) {
+  if (!emailConfigured()) {
+    throw new Error("SMTP is not configured. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM_EMAIL.");
+  }
+  const transporter = createSmtpTransport();
+  const to = "andy@qmsprecast.co.uk";
+  const subject = `New Incident Report - ${incidentId}${escalated ? " [ESCALATED]" : ""}`;
+  const lines = [
+    "A new accident / near miss report has been submitted.",
+    "",
+    `Incident Number: ${incidentId}`,
+    `Incident Type: ${incidentType}`,
+    `Severity: ${severity}`,
+    `Reporter: ${reporter}`,
+    `Department / Area: ${department}`,
+    `Location: ${location}`,
+    `Status: ${status}`,
+    `Date and Time: ${incidentDate} ${incidentTime || ""}`.trim(),
+    `Priority: ${priority}`,
+    viewLink ? `View link: ${viewLink}` : "",
+    "",
+    escalated
+      ? "Escalation: High severity incident. Immediate management review required."
+      : "Escalation: Not required.",
+  ].filter(Boolean);
+  const textBody = lines.join("\n");
+  const htmlBody = `
+    <p>A new accident / near miss report has been submitted.</p>
+    <p>
+      <strong>Incident Number:</strong> ${incidentId}<br/>
+      <strong>Incident Type:</strong> ${incidentType}<br/>
+      <strong>Severity:</strong> ${severity}<br/>
+      <strong>Reporter:</strong> ${reporter}<br/>
+      <strong>Department / Area:</strong> ${department}<br/>
+      <strong>Location:</strong> ${location}<br/>
+      <strong>Status:</strong> ${status}<br/>
+      <strong>Date and Time:</strong> ${incidentDate} ${incidentTime || ""}<br/>
+      <strong>Priority:</strong> ${priority}
+    </p>
+    ${viewLink ? `<p><a href="${viewLink}">Open incident in app</a></p>` : ""}
+    <p>${escalated ? "<strong>Escalation:</strong> High severity incident. Immediate management review required." : "Escalation: Not required."}</p>
+  `;
+  const from = requiredEnv.SMTP_FROM_NAME
+    ? `"${requiredEnv.SMTP_FROM_NAME}" <${requiredEnv.SMTP_FROM_EMAIL}>`
+    : requiredEnv.SMTP_FROM_EMAIL;
+  await transporter.sendMail({
+    from,
+    to,
     subject,
     text: textBody,
     html: htmlBody,
@@ -2402,6 +2536,68 @@ app.post("/api/google-sheet-by-id/:sheetId/evidence", async (req, res) => {
   }
 });
 
+app.post("/api/google-sheet-by-id/:sheetId/incidents", async (req, res) => {
+  const authed = getAuthedClient();
+
+  if (!envConfigured() || !authed) {
+    return res.status(401).json({
+      ok: false,
+      error: "Google connection is required before saving incidents.",
+    });
+  }
+
+  const companyFolderId = String(req.body?.companyFolderId || "").trim();
+  const incidents = toObjectArray(req.body?.incidents);
+
+  if (!companyFolderId) {
+    return res.status(400).json({
+      ok: false,
+      error: "Company folder ID is required before saving incidents.",
+    });
+  }
+
+  try {
+    const payload = await appendRowObjects(authed, req.params.sheetId, "Incidents", incidents);
+    return res.json(payload);
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to save incidents to the company master sheet.",
+    });
+  }
+});
+
+app.post("/api/google-sheet-by-id/:sheetId/incident-actions", async (req, res) => {
+  const authed = getAuthedClient();
+
+  if (!envConfigured() || !authed) {
+    return res.status(401).json({
+      ok: false,
+      error: "Google connection is required before saving incident actions.",
+    });
+  }
+
+  const companyFolderId = String(req.body?.companyFolderId || "").trim();
+  const incidentActions = toObjectArray(req.body?.incidentActions);
+
+  if (!companyFolderId) {
+    return res.status(400).json({
+      ok: false,
+      error: "Company folder ID is required before saving incident actions.",
+    });
+  }
+
+  try {
+    const payload = await appendRowObjects(authed, req.params.sheetId, "IncidentActions", incidentActions);
+    return res.json(payload);
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to save incident actions to the company master sheet.",
+    });
+  }
+});
+
 app.post("/api/google-sheet-by-id/:sheetId/sync-log", async (req, res) => {
   const authed = getAuthedClient();
 
@@ -2677,6 +2873,48 @@ app.post("/api/ncr/escalation-alert", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: error instanceof Error ? error.message : "Unable to send NCR escalation email.",
+    });
+  }
+});
+
+app.post("/api/incidents/notify", async (req, res) => {
+  const incidentId = String(req.body?.incidentId || "").trim();
+  const incidentType = String(req.body?.incidentType || "").trim();
+  const severity = String(req.body?.severity || "").trim();
+  const reporter = String(req.body?.reporter || "").trim();
+  const department = String(req.body?.department || "").trim();
+  const location = String(req.body?.location || "").trim();
+  const status = String(req.body?.status || "Open").trim();
+  const incidentDate = String(req.body?.incidentDate || "").trim();
+  const incidentTime = String(req.body?.incidentTime || "").trim();
+  const priority = String(req.body?.priority || "Normal").trim();
+  const escalated = Boolean(req.body?.escalated);
+  const viewLink = String(req.body?.viewLink || "").trim();
+
+  if (!incidentId || !incidentType || !severity || !reporter || !department || !location || !incidentDate) {
+    return res.status(400).json({ ok: false, error: "Missing required incident notification fields." });
+  }
+
+  try {
+    await sendIncidentReportEmail({
+      incidentId,
+      incidentType,
+      severity,
+      reporter,
+      department,
+      location,
+      status,
+      incidentDate,
+      incidentTime,
+      priority,
+      escalated,
+      viewLink,
+    });
+    return res.json({ ok: true, escalated });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to send incident notification email.",
     });
   }
 });

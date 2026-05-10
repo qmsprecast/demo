@@ -12,10 +12,10 @@
   --qms-slate-200: #e3eaf0;
   --qms-teal-500: #19e3b5;
   --qms-teal-400: #5eead4;
-  --qms-shell-dark-radial: rgba(45, 212, 191, 0.14);
-  --qms-shell-dark-start: #020617;
-  --qms-shell-dark-mid: #0b132b;
-  --qms-shell-dark-end: #0f1b3d;
+  --qms-shell-dark-radial: rgba(45, 212, 191, 0.1);
+  --qms-shell-dark-start: #01040f;
+  --qms-shell-dark-mid: #070f24;
+  --qms-shell-dark-end: #0b1633;
   --qms-shell-light-radial: rgba(23, 37, 84, 0.08);
   --qms-shell-light-start: #eef4f7;
   --qms-shell-light-mid: #f9fbfc;
