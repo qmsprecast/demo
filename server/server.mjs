@@ -30,9 +30,9 @@ const requiredEnv = {
   SMTP_USER: process.env.SMTP_USER || "",
   SMTP_PASS: process.env.SMTP_PASS || "",
   SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || process.env.SMTP_FROM || "",
-  SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || process.env.APP_BRAND_NAME || "Audit App",
+  SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || process.env.APP_BRAND_NAME || "BERT",
 };
-const APP_BRAND_NAME = (process.env.APP_BRAND_NAME || "Audit App").trim();
+const APP_BRAND_NAME = (process.env.APP_BRAND_NAME || "BERT — Business Evaluation & Review Tool").trim();
 const ONBOARDING_INVITE_TTL_MS = Math.max(
   60 * 60 * 1000,
   Number(process.env.ONBOARDING_INVITE_TTL_MS || String(7 * 24 * 60 * 60 * 1000)),
@@ -506,8 +506,8 @@ function sendCallbackPage(res, options) {
         margin-bottom: 16px;
         padding: 6px 12px;
         border-radius: 999px;
-        background: ${success ? "rgba(16,185,129,0.14)" : "rgba(245,158,11,0.14)"};
-        color: ${success ? "#6ee7b7" : "#fcd34d"};
+        background: ${success ? "rgba(29,78,216,0.18)" : "rgba(245,158,11,0.14)"};
+        color: ${success ? "#93c5fd" : "#fcd34d"};
         font-size: 12px;
         font-weight: 600;
       }
@@ -3449,7 +3449,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`QMS backend listening on http://127.0.0.1:${port}`);
+  console.log(`Backend listening on http://127.0.0.1:${port} (${APP_BRAND_NAME})`);
   const config = smtpConfigSummary();
   console.log("[smtp] config", {
     host: config.host,

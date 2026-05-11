@@ -1,29 +1,46 @@
 @import "tailwindcss";
 
+/* BERT — Ink / Cobalt / Signal Orange (central brand tokens) */
 :root {
   font-family: "Inter", "Segoe UI", sans-serif;
   color: #0f172a;
-  background: #eef3f5;
-  --qms-navy-950: #020617;
-  --qms-navy-900: #0b132b;
-  --qms-navy-850: #0f1b3d;
-  --qms-navy-800: #172554;
-  --qms-slate-100: #eef4f7;
-  --qms-slate-200: #e3eaf0;
-  --qms-teal-500: #19e3b5;
-  --qms-teal-400: #5eead4;
-  --qms-shell-dark-radial: rgba(45, 212, 191, 0.1);
-  --qms-shell-dark-start: #01040f;
-  --qms-shell-dark-mid: #070f24;
-  --qms-shell-dark-end: #0b1633;
-  --qms-shell-light-radial: rgba(23, 37, 84, 0.08);
-  --qms-shell-light-start: #eef4f7;
-  --qms-shell-light-mid: #f9fbfc;
-  --qms-shell-light-end: #e3eaf0;
-  --qms-hover-overlay-light: rgb(15 23 42 / 0.15);
-  --qms-hover-overlay-dark: rgb(255 255 255 / 0.15);
-  --qms-active-overlay-light: rgb(15 23 42 / 0.22);
-  --qms-active-overlay-dark: rgb(255 255 255 / 0.22);
+  background: #f8fafc;
+  --bert-ink: #020617;
+  --bert-graphite: #18181b;
+  --bert-cobalt: #1d4ed8;
+  --bert-cobalt-dark: #1e40af;
+  --bert-cobalt-light: #dbeafe;
+  --bert-signal-orange: #f97316;
+  --bert-orange-dark: #c2410c;
+  --bert-stone: #f8fafc;
+  --bert-white: #ffffff;
+  /* Readable cobalt-tinted text/icons on dark chrome (sidebar labels, etc.) */
+  --bert-chrome-accent: #93c5fd;
+
+  /* Legacy names kept so existing `var(--qms-*)` across the app map to the new scheme */
+  --qms-navy-950: var(--bert-ink);
+  --qms-navy-900: var(--bert-graphite);
+  --qms-navy-850: #27272a;
+  --qms-navy-800: #3f3f46;
+  --qms-slate-100: #f1f5f9;
+  --qms-slate-200: #e2e8f0;
+  /* Primary CTA / focus / filled controls (was teal) */
+  --qms-teal-500: var(--bert-signal-orange);
+  /* Brand cool accent on dark chrome & links (was mint teal) */
+  --qms-teal-400: var(--bert-chrome-accent);
+
+  --qms-shell-dark-radial: rgba(29, 78, 216, 0.14);
+  --qms-shell-dark-start: #020617;
+  --qms-shell-dark-mid: #0f172a;
+  --qms-shell-dark-end: #1e1b4b;
+  --qms-shell-light-radial: rgba(29, 78, 216, 0.07);
+  --qms-shell-light-start: #f8fafc;
+  --qms-shell-light-mid: #ffffff;
+  --qms-shell-light-end: #dbeafe;
+  --qms-hover-overlay-light: rgb(15 23 42 / 0.12);
+  --qms-hover-overlay-dark: rgb(255 255 255 / 0.12);
+  --qms-active-overlay-light: rgb(15 23 42 / 0.18);
+  --qms-active-overlay-dark: rgb(255 255 255 / 0.18);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;

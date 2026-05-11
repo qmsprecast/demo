@@ -608,7 +608,9 @@ type AuditCompletionSummaryState = {
   syncLabel: string;
 };
 
-const companyName = (import.meta.env.VITE_APP_NAME || "Audit App").trim();
+const companyName = (import.meta.env.VITE_APP_NAME || "BERT").trim();
+const PRODUCT_TAGLINE = "Business Evaluation & Review Tool";
+const PRODUCT_BRAND_FULL = `${companyName} — ${PRODUCT_TAGLINE}`;
 function isDemoRoleSwitchEnabled() {
   const rawValue = String(import.meta.env.VITE_ENABLE_DEMO_ROLE_SWITCH || "").trim().toLowerCase();
   return rawValue === "true" || rawValue === "1" || rawValue === "yes" || rawValue === "on";
@@ -675,10 +677,10 @@ const statusStyles: Record<
 > = {
   green: {
     label: `More than ${amberThresholdHours} hours`,
-    dot: "bg-emerald-500",
-    soft: "bg-emerald-500/12",
-    ring: "ring-emerald-500/25",
-    text: "text-emerald-700",
+    dot: "bg-blue-600",
+    soft: "bg-blue-500/12",
+    ring: "ring-blue-500/25",
+    text: "text-blue-800",
   },
   amber: {
     label: `Less than ${amberThresholdHours} hours`,
@@ -722,13 +724,13 @@ const compactNavLabels: Partial<Record<Exclude<Screen, "complete">, string>> = {
 /** Transitions only — hover uses shell-wide 15% contrasting overlay (.qms-app-shell / .qms-login-shell). */
 const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
 
-/** Teal-filled fields — matches schedule editor; avoids washed-out OS styling on pale backgrounds in dark theme. */
-const brandTealFormField =
-  "border border-[rgba(25,227,181,0.5)] bg-[var(--qms-teal-500)] text-[var(--qms-navy-950)] shadow-[0_10px_26px_rgba(20,211,166,0.22)] outline-none transition focus:border-[var(--qms-navy-850)]";
+/** Accent-filled fields (signal orange) — schedule editor; avoids washed-out OS styling on pale backgrounds in dark theme. */
+const brandAccentFormField =
+  "border border-[rgba(249,115,22,0.5)] bg-[var(--bert-signal-orange)] text-[var(--qms-navy-950)] shadow-[0_10px_26px_rgba(249,115,22,0.22)] outline-none transition focus:border-[var(--qms-navy-850)]";
 
-/** Slate surface + teal outline for dropdowns and secondary inputs on navy (filters, assignees, file inputs). */
+/** Slate surface + accent outline for dropdowns and secondary inputs on dark panels (filters, assignees, file inputs). */
 const brandDarkFormControl =
-  "border border-[rgba(25,227,181,0.45)] bg-slate-950 text-slate-100 outline-none focus:border-[var(--qms-teal-500)]";
+  "border border-[rgba(249,115,22,0.45)] bg-slate-950 text-slate-100 outline-none focus:border-[var(--bert-signal-orange)]";
 const qmsDarkShellGradient =
   "bg-[radial-gradient(circle_at_top,var(--qms-shell-dark-radial),_transparent_35%),linear-gradient(180deg,var(--qms-shell-dark-start)_0%,var(--qms-shell-dark-mid)_45%,var(--qms-shell-dark-end)_100%)]";
 const qmsLightShellGradient =
@@ -987,15 +989,20 @@ const appMotionStyles = `
     justify-content: center;
   }
 
-  /* Sign-in: drop fixed portrait aspect + allow scroll so the CTA is never clipped. */
+  /* Sign-in: landscape frame so left/right columns fit without scrolling. */
   .qms-tablet-device.qms-tablet-device--signin {
-    aspect-ratio: auto;
-    width: min(92vw, 42rem);
-    max-height: min(96dvh, 56rem);
-    min-height: 0;
-    overflow-x: hidden;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
+    width: min(96vw, 52rem);
+    aspect-ratio: 16 / 10;
+    max-height: min(90dvh, 34rem);
+    overflow: hidden;
+  }
+
+  @media (max-width: 639px) {
+    .qms-tablet-device.qms-tablet-device--signin {
+      width: min(92vw, 26rem);
+      aspect-ratio: 10 / 13;
+      max-height: min(86dvh, 38rem);
+    }
   }
 
   .qms-tablet-device {
@@ -2899,9 +2906,9 @@ function useDashboardSectionLayout(storageKey: string, defaultOrder: string[]) {
 function DataFlowBackground({ className = "", showBase = true }: { className?: string; showBase?: boolean }) {
   return (
     <div className={`pointer-events-none absolute inset-0 overflow-hidden ${showBase ? "bg-[#020817]" : ""} ${className}`.trim()}>
-      {showBase && <div className="absolute inset-0 bg-[#020817]" />}
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_58%_42%,rgba(110,231,183,0.12),transparent_14%)]" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_22%_48%,rgba(16,185,129,0.08),transparent_30%)]" />
+      {showBase && <div className="absolute inset-0 bg-[#020617]" />}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_58%_42%,rgba(59,130,246,0.14),transparent_14%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_22%_48%,rgba(249,115,22,0.07),transparent_30%)]" />
       <svg
         className="absolute left-1/2 top-1/3 h-full w-[120%] -translate-x-1/2 opacity-50"
         viewBox="0 0 1600 900"
@@ -2910,16 +2917,16 @@ function DataFlowBackground({ className = "", showBase = true }: { className?: s
       >
         <defs>
           <linearGradient id="heroStrand" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#34d399" stopOpacity="0" />
-            <stop offset="18%" stopColor="#34d399" stopOpacity="0.55" />
-            <stop offset="50%" stopColor="#d1fae5" stopOpacity="1" />
-            <stop offset="76%" stopColor="#34d399" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="#34d399" stopOpacity="0" />
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0" />
+            <stop offset="18%" stopColor="#3b82f6" stopOpacity="0.5" />
+            <stop offset="50%" stopColor="#dbeafe" stopOpacity="1" />
+            <stop offset="76%" stopColor="#2563eb" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#1d4ed8" stopOpacity="0" />
           </linearGradient>
           <radialGradient id="coreLight" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#ecfdf5" stopOpacity="1" />
-            <stop offset="35%" stopColor="#86efac" stopOpacity="0.65" />
-            <stop offset="100%" stopColor="#86efac" stopOpacity="0" />
+            <stop offset="0%" stopColor="#eff6ff" stopOpacity="1" />
+            <stop offset="35%" stopColor="#93c5fd" stopOpacity="0.65" />
+            <stop offset="100%" stopColor="#60a5fa" stopOpacity="0" />
           </radialGradient>
         </defs>
 
@@ -2930,7 +2937,7 @@ function DataFlowBackground({ className = "", showBase = true }: { className?: s
           ry="48"
           fill="url(#coreLight)"
           opacity="0.95"
-          stroke="#a3e635"
+          stroke="#f97316"
           strokeOpacity="0.45"
           strokeWidth="1.2"
         />
@@ -2975,7 +2982,7 @@ function DataFlowBackground({ className = "", showBase = true }: { className?: s
                 key={`particle-${index}`}
                 x={x}
                 y={y}
-                fill="#6ee7b7"
+                fill="#93c5fd"
                 opacity={0.04 + (index % 8) * 0.012}
                 fontSize={index % 20 === 0 ? "10" : "7"}
                 fontFamily="monospace"
@@ -2991,9 +2998,9 @@ function DataFlowBackground({ className = "", showBase = true }: { className?: s
               cx={x}
               cy={y}
               r={0.45}
-              fill="#6ee7b7"
+              fill="#93c5fd"
               opacity="0.07"
-              stroke="#a3e635"
+              stroke="#fb923c"
               strokeOpacity="0.4"
               strokeWidth="0.35"
             />
@@ -3011,7 +3018,7 @@ function DataFlowBackground({ className = "", showBase = true }: { className?: s
               key={`binary-${index}`}
               x={x}
               y={y}
-              fill="#4ade80"
+              fill="#60a5fa"
               opacity={Math.max(0.03, 0.46 - col * 0.008)}
               fontSize="8"
               fontFamily="monospace"
@@ -3027,7 +3034,7 @@ function DataFlowBackground({ className = "", showBase = true }: { className?: s
             <path
               key={`output-${index}`}
               d={`M1000 ${y} C 1120 ${y}, 1260 ${y + Math.sin(index) * 12}, 1480 ${y}`}
-              stroke="#6ee7b7"
+              stroke="#3b82f6"
               strokeWidth="0.5"
               fill="none"
               opacity="0.22"
@@ -3144,12 +3151,13 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
     >
       <div className="mx-auto max-w-lg">
         <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-300 to-teal-500 text-lg font-bold text-slate-950">
-            QMS
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-400 to-orange-600 text-sm font-bold leading-tight text-slate-950">
+            BERT
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-teal-300/90">Onboarding</p>
-            <h1 className="text-2xl font-semibold tracking-tight text-white">
+            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-blue-400/90">Onboarding</p>
+            <p className="mt-1 text-xs text-slate-500">{PRODUCT_TAGLINE}</p>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">
               {!details
                 ? "Complete onboarding"
                 : details.kind === "company_user"
@@ -3164,12 +3172,12 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
         )}
 
         {done && (
-          <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/30 p-5 text-sm leading-6 text-emerald-50">
+          <div className="rounded-2xl border border-blue-500/30 bg-blue-950/30 p-5 text-sm leading-6 text-blue-50">
             <p className="text-base font-semibold text-white">{done.title}</p>
             <p className="mt-2">{done.message}</p>
             <a
               href="/"
-              className="mt-4 inline-flex h-11 items-center justify-center rounded-xl bg-teal-400 px-4 text-sm font-semibold text-slate-950 no-underline"
+              className="mt-4 inline-flex h-11 items-center justify-center rounded-xl bg-orange-400 px-4 text-sm font-semibold text-slate-950 no-underline"
             >
               Go to sign in
             </a>
@@ -3194,7 +3202,7 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
                 <input
                   value={companyName}
                   onChange={(e) => setCompanyName(e.target.value)}
-                  className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-teal-400/60"
+                  className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-orange-400/60"
                   placeholder="Acme Precast Ltd"
                   autoComplete="organization"
                 />
@@ -3205,7 +3213,7 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
               <input
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-teal-400/60"
+                className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-orange-400/60"
                 placeholder="Jane Smith"
                 autoComplete="name"
               />
@@ -3216,7 +3224,7 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-teal-400/60"
+                className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-orange-400/60"
                 placeholder="At least 8 characters"
                 autoComplete="new-password"
               />
@@ -3227,7 +3235,7 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-teal-400/60"
+                className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-orange-400/60"
                 autoComplete="new-password"
               />
             </div>
@@ -3235,7 +3243,7 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
             <button
               type="submit"
               disabled={submitting}
-              className="h-12 w-full rounded-2xl bg-teal-400 text-sm font-semibold text-slate-950 disabled:opacity-50"
+              className="h-12 w-full rounded-2xl bg-orange-400 text-sm font-semibold text-slate-950 disabled:opacity-50"
             >
               {submitting ? "Saving…" : "Complete onboarding"}
             </button>
@@ -7511,7 +7519,7 @@ function App() {
       <div
         className={[
           shellPreviewClass,
-          "min-h-[100dvh] px-4 py-6",
+          "flex min-h-[100dvh] w-full max-w-[100vw] flex-col items-center justify-center overflow-hidden px-3 py-4 sm:px-4 sm:py-5",
           themeMode === "dark"
             ? `${qmsDarkShellGradient} text-slate-100`
             : `${qmsLightShellGradient} text-slate-900`,
@@ -7523,17 +7531,17 @@ function App() {
             <div
               data-qms-theme={themeMode}
               className={[
-                "qms-login-shell qms-login-card relative flex min-h-0 w-full flex-col overflow-y-auto overflow-x-hidden rounded-[2.2rem] border p-5 backdrop-blur sm:p-6",
+                "qms-login-shell qms-login-card relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[2.2rem] border p-3 backdrop-blur sm:p-4",
                 themeMode === "dark"
                   ? "border-slate-800/80 bg-slate-950/80 shadow-[0_32px_90px_rgba(2,6,23,0.58)] text-white"
                   : "border-slate-200/85 bg-white/90 shadow-[0_28px_80px_rgba(15,23,42,0.14)] text-slate-900",
               ].join(" ")}
             >
               <DataFlowBackground />
-              <div className="absolute right-8 top-8 z-20 flex items-center gap-3">
+              <div className="absolute right-4 top-4 z-20 flex items-center gap-2 sm:right-6 sm:top-6">
                 <button
                   type="button"
-                  className="rounded-full border border-slate-700 bg-slate-900/75 p-2 text-slate-300 transition hover:border-teal-400/60 hover:text-teal-300"
+                  className="rounded-full border border-slate-700 bg-slate-900/75 p-2 text-slate-300 transition hover:border-orange-400/60 hover:text-blue-400"
                   aria-label="Help"
                 >
                   <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
@@ -7544,7 +7552,7 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className="rounded-full border border-slate-700 bg-slate-900/75 p-2 text-slate-300 transition hover:border-teal-400/60 hover:text-teal-300"
+                  className="rounded-full border border-slate-700 bg-slate-900/75 p-2 text-slate-300 transition hover:border-orange-400/60 hover:text-blue-400"
                   aria-label="Settings"
                 >
                   <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
@@ -7554,30 +7562,30 @@ function App() {
                 </button>
               </div>
 
-              <div className="relative z-10 grid min-h-0 w-full grid-cols-1 gap-4 sm:gap-6 lg:h-full lg:grid-cols-2">
-                <div className="flex flex-col justify-between p-5 sm:p-8">
-                  <div>
-                    <div className="flex items-center gap-4">
-                      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-300 to-teal-500 text-xl font-bold text-slate-950 shadow-[0_12px_28px_rgba(20,211,166,0.26)]">
-                        QMS
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.32em] text-teal-300/95">Health &amp; Safety Audit System</p>
-                        <h1 className="mt-2 text-4xl font-semibold tracking-tight text-white">Audit App</h1>
-                      </div>
+              <div className="relative z-10 grid h-full min-h-0 w-full grid-cols-1 items-center gap-3 sm:grid-cols-2 sm:gap-4">
+                <div className="flex flex-col justify-center gap-2 px-1 py-0 sm:px-2">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 to-orange-600 text-xs font-bold leading-tight text-slate-950 shadow-[0_8px_20px_rgba(249,115,22,0.22)] sm:h-12 sm:w-12 sm:rounded-2xl sm:text-sm">
+                      BERT
+                    </div>
+                    <div className="min-w-0">
+                      <h1 className="text-2xl font-semibold leading-tight tracking-tight text-white sm:text-3xl">BERT</h1>
+                      <p className="mt-0.5 text-xs leading-snug text-slate-400 sm:text-sm">
+                        {PRODUCT_TAGLINE}
+                      </p>
                     </div>
                   </div>
-                  <p className="text-sm font-medium text-slate-300">Secure • Reliable • Compliant</p>
+                  <p className="text-xs font-medium text-slate-400 sm:text-sm sm:text-slate-300">Secure • Reliable • Compliant</p>
                 </div>
 
-                <div className="flex min-h-0 items-stretch lg:items-center">
-                  <div className="w-full rounded-[1.8rem] border border-white/10 bg-white/[0.06] p-5 shadow-[0_24px_60px_rgba(2,6,23,0.45)] backdrop-blur-xl sm:p-8">
-                    <h2 className="text-center text-xl font-semibold text-white sm:text-2xl">Sign in to your account</h2>
-                    <form className="mt-5 space-y-4 sm:mt-7 sm:space-y-5" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
+                <div className="flex min-h-0 items-center">
+                  <div className="w-full rounded-2xl border border-white/10 bg-white/[0.06] p-3 shadow-[0_16px_40px_rgba(2,6,23,0.4)] backdrop-blur-xl sm:rounded-[1.5rem] sm:p-4">
+                    <h2 className="text-center text-base font-semibold text-white sm:text-lg">Sign in to your account</h2>
+                    <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
                       <div>
-                        <label className="mb-2 block text-sm font-medium text-slate-100">Username or email</label>
+                        <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Username or email</label>
                         <div className="relative">
-                          <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 fill-none stroke-slate-400" strokeWidth="2">
+                          <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 fill-none stroke-slate-400 sm:left-3.5 sm:h-5 sm:w-5" strokeWidth="2">
                             <path d="M20 21a8 8 0 0 0-16 0" />
                             <circle cx="12" cy="7" r="4" />
                           </svg>
@@ -7585,15 +7593,15 @@ function App() {
                             value={username}
                             onChange={(event) => setUsername(event.target.value)}
                             placeholder="Enter username or email"
-                            className="h-14 w-full rounded-2xl border border-white/10 bg-slate-950/45 pl-12 pr-4 text-base text-white outline-none transition placeholder:text-slate-400 focus:border-teal-400 focus:ring-4 focus:ring-teal-400/10"
+                            className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/45 pl-10 pr-3 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 sm:h-12 sm:rounded-2xl sm:pl-11 sm:pr-4 sm:text-base"
                           />
                         </div>
                       </div>
 
                       <div>
-                        <label className="mb-2 block text-sm font-medium text-slate-100">Password</label>
+                        <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Password</label>
                         <div className="relative">
-                          <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 fill-none stroke-slate-400" strokeWidth="2">
+                          <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 fill-none stroke-slate-400 sm:left-3.5 sm:h-5 sm:w-5" strokeWidth="2">
                             <rect x="4" y="11" width="16" height="10" rx="2" />
                             <path d="M8 11V8a4 4 0 0 1 8 0v3" />
                           </svg>
@@ -7607,12 +7615,12 @@ function App() {
                               }
                             }}
                             placeholder="Enter password"
-                            className="h-14 w-full rounded-2xl border border-white/10 bg-slate-950/45 pl-12 pr-14 text-base text-white outline-none transition placeholder:text-slate-400 focus:border-teal-400 focus:ring-4 focus:ring-teal-400/10"
+                            className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/45 pl-10 pr-11 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 sm:h-12 sm:rounded-2xl sm:pl-11 sm:pr-12 sm:text-base"
                           />
                           <button
                             type="button"
                             onClick={() => setShowPassword((current) => !current)}
-                            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 transition hover:text-teal-300"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition hover:text-blue-400 sm:right-3.5"
                             aria-label={showPassword ? "Hide password" : "Show password"}
                           >
                             {showPassword ? (
@@ -7632,15 +7640,15 @@ function App() {
                         </div>
                       </div>
 
-                      <div className="flex justify-end">
-                        <button type="button" className="text-sm font-medium text-teal-300 transition hover:text-teal-200">
+                      <div className="flex justify-end pt-0.5">
+                        <button type="button" className="text-xs font-medium text-blue-400 transition hover:text-orange-200 sm:text-sm">
                           Forgot password?
                         </button>
                       </div>
 
                       <button
                         type="submit"
-                        className={`h-14 w-full rounded-2xl bg-gradient-to-r from-teal-300 to-teal-500 text-base font-semibold text-slate-950 shadow-[0_16px_30px_rgba(20,211,166,0.26)] active:scale-[0.99] ${slatePrimaryCtaInteract}`}
+                        className={`h-11 w-full rounded-xl bg-gradient-to-r from-orange-400 to-orange-600 text-sm font-semibold text-slate-950 shadow-[0_10px_22px_rgba(249,115,22,0.22)] active:scale-[0.99] sm:h-12 sm:rounded-2xl sm:text-base ${slatePrimaryCtaInteract}`}
                       >
                         Sign in
                       </button>
@@ -7681,7 +7689,7 @@ function App() {
         <DataFlowBackground className="z-20 opacity-10" showBase={false} />
         <header className={["qms-app-header relative z-10 border-b px-3 pb-1 pt-1 backdrop-blur", themeMode === "dark" ? "border-white/10 bg-slate-950/58" : "border-slate-200/80 bg-white/72"].join(" ")}>
           <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[9px] font-semibold uppercase tracking-[0.16em]">
-            <div className={["rounded-full px-2.5 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--qms-teal-500)] bg-white font-semibold text-[var(--qms-navy-900)]"].join(" ")}>
+            <div className={["rounded-full px-2.5 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--bert-signal-orange)] bg-white font-semibold text-[var(--qms-navy-900)]"].join(" ")}>
               Tablet workspace
             </div>
             <div className="flex items-center gap-1">
@@ -7689,28 +7697,28 @@ function App() {
                 <button
                   type="button"
                   onClick={() => handleQuickRoleSwitch("Master", "God Mode")}
-                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--qms-teal-500)]/50 bg-slate-900 text-[var(--qms-teal-400)]" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] hover:bg-teal-50"].join(" ")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
                 >
                   GOD
                 </button>
                 <button
                   type="button"
                   onClick={() => handleQuickRoleSwitch("Admin", "Admin")}
-                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--qms-teal-500)]/50 bg-slate-900 text-[var(--qms-teal-400)]" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] hover:bg-teal-50"].join(" ")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
                 >
                   ADMIN
                 </button>
                 <button
                   type="button"
                   onClick={() => handleQuickRoleSwitch("Manager", "Manager")}
-                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--qms-teal-500)]/50 bg-slate-900 text-[var(--qms-teal-400)]" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] hover:bg-teal-50"].join(" ")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
                 >
                   MANAGER
                 </button>
                 <button
                   type="button"
                   onClick={() => handleQuickRoleSwitch("Auditor", "Auditor")}
-                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--qms-teal-500)]/50 bg-slate-900 text-[var(--qms-teal-400)]" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] hover:bg-teal-50"].join(" ")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
                 >
                   AUDITOR
                 </button>
@@ -7718,20 +7726,20 @@ function App() {
               <button
                 type="button"
                 onClick={() => setScreen("dashboard")}
-                className={["rounded-full border px-1.5 py-0 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-teal-50"].join(" ")}
+                className={["rounded-full border px-1.5 py-0 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-orange-50"].join(" ")}
               >
                 Layout options
               </button>
               <button
                 onClick={() => setPreviewOrientation(previewOrientation === "landscape" ? "portrait" : "landscape")}
-                className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-teal-50"].join(" ")}
+                className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-orange-50"].join(" ")}
               >
                 {previewOrientation === "landscape" ? "Portrait preview" : "Landscape preview"}
               </button>
-              <div className={["rounded-full px-2 py-0.5", offlineMode ? "bg-amber-500/15 text-amber-600" : "bg-emerald-500/12 text-emerald-700"].join(" ")}>
+              <div className={["rounded-full px-2 py-0.5", offlineMode ? "bg-amber-500/15 text-amber-600" : "bg-blue-500/12 text-blue-800"].join(" ")}>
                 {offlineMode ? "Offline" : "Online"}
               </div>
-              <div className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-300" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)]"].join(" ")}>
+              <div className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-300" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)]"].join(" ")}>
                 {deviceTimeLabel}
               </div>
             </div>
@@ -7740,18 +7748,18 @@ function App() {
             <div className="flex items-center gap-2">
               <button
                 onClick={handleLogout}
-                className={`h-6 shrink-0 rounded-md bg-[var(--qms-teal-500)] px-2 text-[9px] font-semibold text-[var(--qms-navy-950)] shadow-sm ${slatePrimaryCtaInteract}`}
+                className={`h-6 shrink-0 rounded-md bg-[var(--bert-signal-orange)] px-2 text-[9px] font-semibold text-[var(--qms-navy-950)] shadow-sm ${slatePrimaryCtaInteract}`}
               >
                 Logout
               </button>
-              <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--qms-teal-500)] text-[9px] font-semibold tracking-[0.08em] text-[var(--qms-navy-950)]">
+              <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--bert-signal-orange)] text-[9px] font-semibold tracking-[0.08em] text-[var(--qms-navy-950)]">
                 {accountPhotoUrl ? (
                   <img src={accountPhotoUrl} alt={currentUser.name} className="h-full w-full object-cover" />
                 ) : (
                   getWorkspaceInitials(currentUser.name)
                 )}
                 {selectedFolder && (
-                    <span className="absolute -bottom-1 -right-1 rounded-full bg-emerald-500 px-1 py-0 text-[8px] font-bold uppercase tracking-[0.08em] text-white">
+                    <span className="absolute -bottom-1 -right-1 rounded-full bg-blue-500 px-1 py-0 text-[8px] font-bold uppercase tracking-[0.08em] text-white">
                     Live
                   </span>
                 )}
@@ -7759,14 +7767,14 @@ function App() {
               <div className="min-w-0 flex-1">
                 <p className={["truncate text-[11px] font-semibold leading-4 tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{workspaceName}</p>
                 <p className={["truncate text-[8px] leading-3 tracking-[0.08em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
-                  {selectedFolder ? "Live company workspace" : "Health &amp; Safety Audit System"}
+                  {selectedFolder ? `Live company workspace · ${PRODUCT_TAGLINE}` : PRODUCT_BRAND_FULL}
                 </p>
                 {showSiteSelectorForRole && (
                 <div className="mt-1">
                   <select
                     value={selectedSiteId}
                     onChange={(event) => setSelectedSiteId(event.target.value)}
-                    className={["h-6 max-w-[12rem] rounded-md border-2 px-2 text-[9px] font-semibold", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-200" : "border-[var(--qms-teal-500)] bg-white text-[var(--qms-navy-900)]"].join(" ")}
+                    className={["h-6 max-w-[12rem] rounded-md border-2 px-2 text-[9px] font-semibold", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-200" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)]"].join(" ")}
                   >
                     <option value="">All sites</option>
                     {headerSelectableSites.map((site) => (
@@ -7798,7 +7806,7 @@ function App() {
                     Demo mode active
                   </div>
                 )}
-                <div className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                <div className="rounded-full bg-blue-500/12 px-2 py-0.5 text-[10px] font-semibold text-blue-800">
                   {selectedFolder ? "Live workspace" : "Live session"}
                 </div>
               </div>
@@ -7819,11 +7827,11 @@ function App() {
                       "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition-colors duration-200 ease-in-out",
                       selected
                         ? themeMode === "dark"
-                          ? "border border-[var(--qms-teal-500)]/40 bg-[rgba(25,227,181,0.12)] text-[var(--qms-teal-400)] hover:bg-[rgba(25,227,181,0.18)]"
-                          : `bg-[var(--qms-teal-500)] text-[var(--qms-navy-950)] ${slatePrimaryCtaInteract}`
+                          ? "border border-[var(--bert-signal-orange)]/40 bg-[rgba(249,115,22,0.12)] text-[var(--bert-chrome-accent)] hover:bg-[rgba(249,115,22,0.18)]"
+                          : `bg-[var(--bert-signal-orange)] text-[var(--qms-navy-950)] ${slatePrimaryCtaInteract}`
                         : themeMode === "dark"
-                          ? "text-slate-300 hover:border hover:border-[var(--qms-teal-500)]/25 hover:bg-slate-800/80"
-                          : "text-slate-700 hover:bg-teal-50 hover:text-teal-950",
+                          ? "text-slate-300 hover:border hover:border-[var(--bert-signal-orange)]/25 hover:bg-slate-800/80"
+                          : "text-slate-700 hover:bg-orange-50 hover:text-slate-900",
                       desktopSidebarCollapsed ? "justify-center" : "",
                     ].join(" ")}
                     title={item.label}
@@ -7837,7 +7845,7 @@ function App() {
             <div className="mt-auto pt-2">
               <button
                 onClick={() => setDesktopSidebarCollapsed((current) => !current)}
-                className={["flex w-full items-center justify-center rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition", desktopSidebarCollapsed ? "border-[var(--qms-teal-500)]/50 bg-[rgba(25,227,181,0.12)] text-[var(--qms-teal-400)] hover:bg-[rgba(25,227,181,0.18)]" : "border-[var(--qms-teal-500)]/45 bg-slate-700 text-white hover:bg-slate-600"].join(" ")}
+                className={["flex w-full items-center justify-center rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition", desktopSidebarCollapsed ? "border-[var(--bert-signal-orange)]/50 bg-[rgba(249,115,22,0.12)] text-[var(--bert-chrome-accent)] hover:bg-[rgba(249,115,22,0.18)]" : "border-[var(--bert-signal-orange)]/45 bg-slate-700 text-white hover:bg-slate-600"].join(" ")}
                 aria-label={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
                 title={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
               >
@@ -7845,7 +7853,7 @@ function App() {
               </button>
             </div>
           </aside>
-          <div className={["qms-screen-stage h-full flex-1 overflow-y-auto px-4 pb-32 pt-4", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_input:focus]:border-[var(--qms-teal-500)] [&_section_input:focus]:bg-slate-950 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_section_textarea:focus]:border-[var(--qms-teal-500)] [&_section_select]:border-slate-700 [&_section_select]:bg-slate-950 [&_section_select]:text-slate-100 [&_section_select:focus]:border-[var(--qms-teal-500)] [&_section_select:focus]:bg-slate-950 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800 [&_.bg-white]:bg-slate-900 [&_.text-slate-900]:text-slate-100 [&_.text-slate-800]:text-slate-200 [&_.text-slate-700]:text-slate-300 [&_.text-slate-600]:text-slate-400 [&_.text-slate-500]:text-slate-400 [&_input[type=file]]:border-[rgba(25,227,181,0.45)] [&_input[type=file]]:bg-slate-950 [&_input[type=file]]:text-slate-300 [&_input[type=file]]:file:text-slate-200" : "bg-slate-100/72"].join(" ")}>
+          <div className={["qms-screen-stage h-full flex-1 overflow-y-auto px-4 pb-32 pt-4", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_input:focus]:border-[var(--bert-signal-orange)] [&_section_input:focus]:bg-slate-950 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_section_textarea:focus]:border-[var(--bert-signal-orange)] [&_section_select]:border-slate-700 [&_section_select]:bg-slate-950 [&_section_select]:text-slate-100 [&_section_select:focus]:border-[var(--bert-signal-orange)] [&_section_select:focus]:bg-slate-950 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800 [&_.bg-white]:bg-slate-900 [&_.text-slate-900]:text-slate-100 [&_.text-slate-800]:text-slate-200 [&_.text-slate-700]:text-slate-300 [&_.text-slate-600]:text-slate-400 [&_.text-slate-500]:text-slate-400 [&_input[type=file]]:border-[rgba(249,115,22,0.45)] [&_input[type=file]]:bg-slate-950 [&_input[type=file]]:text-slate-300 [&_input[type=file]]:file:text-slate-200" : "bg-slate-100/72"].join(" ")}>
             {currentUser.role === "Manager" && currentManagerAlerts.length > 0 && (
               <section className="mb-4 rounded-[1.5rem] border border-rose-200 bg-rose-50 px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
@@ -8477,7 +8485,7 @@ function App() {
           <div
             className={[
               "qms-bottom-nav-grid grid gap-2 rounded-[1.75rem] border p-2 shadow-[0_20px_45px_rgba(15,23,42,0.16)] backdrop-blur-xl",
-              themeMode === "dark" ? "border-slate-800 bg-slate-950/92" : "border-[var(--qms-teal-500)] bg-white",
+              themeMode === "dark" ? "border-slate-800 bg-slate-950/92" : "border-[var(--bert-signal-orange)] bg-white",
             ].join(" ")}
             style={{ gridTemplateColumns: `repeat(${visibleNavItems.length}, minmax(0, 1fr))` }}
           >
@@ -8491,10 +8499,10 @@ function App() {
                   className={[
                     "qms-nav-button group flex h-12 flex-col items-center justify-center rounded-2xl border px-1 text-[10px] font-semibold leading-none transition-all duration-200 sm:text-[11px]",
                     selected
-                        ? `border-[var(--qms-teal-500)] bg-[var(--qms-teal-500)] text-[var(--qms-navy-950)] shadow-[0_12px_30px_rgba(20,211,166,0.22)] ${slatePrimaryCtaInteract}`
+                        ? `border-[var(--bert-signal-orange)] bg-[var(--bert-signal-orange)] text-[var(--qms-navy-950)] shadow-[0_12px_30px_rgba(249,115,22,0.22)] ${slatePrimaryCtaInteract}`
                         : themeMode === "dark"
                         ? "border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-slate-700 hover:bg-slate-900/25 hover:text-slate-100"
-                        : "border-slate-200 bg-white text-slate-600 hover:border-[var(--qms-teal-500)] hover:bg-teal-50 hover:text-teal-950",
+                        : "border-slate-200 bg-white text-slate-600 hover:border-[var(--bert-signal-orange)] hover:bg-orange-50 hover:text-slate-900",
                   ].join(" ")}
                 >
                   <span
@@ -8503,7 +8511,7 @@ function App() {
                       selected ? "bg-white/90" : themeMode === "dark" ? "bg-slate-700 group-hover:bg-slate-500" : "bg-slate-300 group-hover:bg-slate-400",
                     ].join(" ")}
                   />
-                  <span className={["mb-0.5", selected ? "text-[var(--qms-navy-950)]" : themeMode === "dark" ? "text-slate-400 group-hover:text-slate-100" : "text-slate-500 group-hover:text-teal-950"].join(" ")}>
+                  <span className={["mb-0.5", selected ? "text-[var(--qms-navy-950)]" : themeMode === "dark" ? "text-slate-400 group-hover:text-slate-100" : "text-slate-500 group-hover:text-slate-900"].join(" ")}>
                     <AppIcon name={item.icon} className="h-3.5 w-3.5" />
                   </span>
                   <span className={["qms-nav-label max-w-full truncate", selected ? "text-[var(--qms-navy-950)]" : ""].join(" ")}>{navLabel}</span>
@@ -9057,7 +9065,7 @@ function AuditorTaskDashboard({
           <div
             className={[
               "rounded-full px-3 py-1 text-xs font-semibold",
-              failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700",
+              failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-800",
             ].join(" ")}
           >
             {syncLabel}
@@ -9184,7 +9192,7 @@ function ManagerDashboard({
             <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue audits {overdueAudits.length}</div>
           </div>
           {allClear ? (
-            <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm font-semibold text-emerald-800">
+            <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm font-semibold text-blue-900">
               All clear - No overdue audits, actions, or critical issues.
             </div>
           ) : (
@@ -9449,7 +9457,7 @@ function AdminDashboard({
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
           <SectionHeader icon="shield" eyebrow="Immediate attention" title="Immediate attention" subtitle="Operational issues needing action." />
           {allClear ? (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm font-semibold text-emerald-800">All clear - No overdue audits, actions, or critical issues.</div>
+            <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm font-semibold text-blue-900">All clear - No overdue audits, actions, or critical issues.</div>
           ) : (
             <div className="mt-2 flex flex-wrap gap-2">
               <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue actions {overdueActions.length}</div>
@@ -9602,7 +9610,7 @@ function GodModeDashboard({
                     onClick={() => onToggleRoleSiteSelectorVisibility(role)}
                     className={[
                       "rounded-full border px-3 py-1 text-xs font-semibold transition",
-                      roleSiteSelectorVisibility[role] ? "border-emerald-300 bg-emerald-100 text-emerald-800" : "border-slate-300 bg-white text-slate-600",
+                      roleSiteSelectorVisibility[role] ? "border-blue-300 bg-blue-100 text-blue-900" : "border-slate-300 bg-white text-slate-600",
                     ].join(" ")}
                   >
                     Site selector
@@ -9625,7 +9633,7 @@ function GodModeDashboard({
                           !baselineVisible
                             ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
                             : enabled
-                              ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+                              ? "border-blue-300 bg-blue-100 text-blue-900"
                               : "border-slate-300 bg-white text-slate-600",
                         ].join(" ")}
                         title={
@@ -9679,9 +9687,9 @@ function GodModeDashboard({
       <section key={section} className="rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-[0_10px_24px_rgba(2,6,23,0.35)]">
         <SectionHeader icon="chart" eyebrow="Company setup" title="Company setup status" subtitle="Provisioning completeness snapshot." />
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <div className="rounded-xl border border-[rgba(25,227,181,0.45)] bg-[rgba(187,247,208,0.92)] px-3 py-2"><p className="text-xs text-emerald-800">Users created</p><p className="text-lg font-semibold text-emerald-950">{reportUsersCount}</p></div>
-          <div className="rounded-xl border border-[rgba(25,227,181,0.45)] bg-[rgba(187,247,208,0.92)] px-3 py-2"><p className="text-xs text-emerald-800">Schedules active</p><p className="text-lg font-semibold text-emerald-950">{activeSchedulesCount}</p></div>
-          <div className="rounded-xl border border-[rgba(25,227,181,0.45)] bg-[rgba(187,247,208,0.92)] px-3 py-2"><p className="text-xs text-emerald-800">Templates present</p><p className="text-lg font-semibold text-emerald-950">{templatesCount}</p></div>
+          <div className="rounded-xl border border-[rgba(249,115,22,0.45)] bg-[rgba(219,234,254,0.92)] px-3 py-2"><p className="text-xs text-blue-900">Users created</p><p className="text-lg font-semibold text-blue-950">{reportUsersCount}</p></div>
+          <div className="rounded-xl border border-[rgba(249,115,22,0.45)] bg-[rgba(219,234,254,0.92)] px-3 py-2"><p className="text-xs text-blue-900">Schedules active</p><p className="text-lg font-semibold text-blue-950">{activeSchedulesCount}</p></div>
+          <div className="rounded-xl border border-[rgba(249,115,22,0.45)] bg-[rgba(219,234,254,0.92)] px-3 py-2"><p className="text-xs text-blue-900">Templates present</p><p className="text-lg font-semibold text-blue-950">{templatesCount}</p></div>
         </div>
       </section>
     );
@@ -10019,16 +10027,16 @@ function IncidentReportingScreen({
             <p className="mt-2 text-sm text-slate-300">Mobile-first reporting plus register, investigation workflow, corrective actions, and dashboard.</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => setView("report")} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${view === "report" ? "border-teal-400 bg-teal-400/15 text-teal-200" : "border-slate-700 bg-slate-900 text-slate-300"}`}>Report form</button>
-            <button type="button" onClick={() => setView("register")} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${view === "register" ? "border-teal-400 bg-teal-400/15 text-teal-200" : "border-slate-700 bg-slate-900 text-slate-300"}`}>Incident register</button>
-            <button type="button" onClick={() => setView("dashboard")} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${view === "dashboard" ? "border-teal-400 bg-teal-400/15 text-teal-200" : "border-slate-700 bg-slate-900 text-slate-300"}`}>Dashboard</button>
+            <button type="button" onClick={() => setView("report")} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${view === "report" ? "border-orange-400 bg-orange-400/15 text-orange-200" : "border-slate-700 bg-slate-900 text-slate-300"}`}>Report form</button>
+            <button type="button" onClick={() => setView("register")} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${view === "register" ? "border-orange-400 bg-orange-400/15 text-orange-200" : "border-slate-700 bg-slate-900 text-slate-300"}`}>Incident register</button>
+            <button type="button" onClick={() => setView("dashboard")} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${view === "dashboard" ? "border-orange-400 bg-orange-400/15 text-orange-200" : "border-slate-700 bg-slate-900 text-slate-300"}`}>Dashboard</button>
           </div>
         </div>
         <p className="mt-3 text-xs text-slate-400">QR reporting link: <span className="font-semibold text-slate-200">{`${window.location.origin}/?screen=incidents`}</span></p>
       </section>
 
       {successMessage && (
-        <section className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+        <section className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900">
           {successMessage}
         </section>
       )}
@@ -10055,7 +10063,7 @@ function IncidentReportingScreen({
               <input type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt" onChange={(event) => onAddEvidence(event.target.files)} className="mt-2 w-full text-sm" />
               {form.evidenceUrls.length > 0 && <p className="mt-2 text-xs text-slate-600">{form.evidenceUrls.length} file(s) attached</p>}
             </div>
-            <button type="submit" className="md:col-span-2 h-12 rounded-xl bg-[var(--qms-teal-500)] font-semibold text-[var(--qms-navy-950)]">Submit incident report</button>
+            <button type="submit" className="md:col-span-2 h-12 rounded-xl bg-[var(--bert-signal-orange)] font-semibold text-[var(--qms-navy-950)]">Submit incident report</button>
           </form>
         </section>
       )}
@@ -10166,7 +10174,7 @@ function IncidentReportingScreen({
             </div>
           </div>
           {selectedIncident.status !== "Closed" && (
-            <button type="button" onClick={() => onUpdateIncident(selectedIncident.id, { status: "Closed", closedAt: new Date().toISOString(), closedBy: currentUser.name, completionDate: selectedIncident.completionDate || new Date().toISOString().slice(0, 10) }, { statusNote: "Incident closed" })} className="mt-3 h-10 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white">Close incident</button>
+            <button type="button" onClick={() => onUpdateIncident(selectedIncident.id, { status: "Closed", closedAt: new Date().toISOString(), closedBy: currentUser.name, completionDate: selectedIncident.completionDate || new Date().toISOString().slice(0, 10) }, { statusNote: "Incident closed" })} className="mt-3 h-10 rounded-lg bg-orange-600 px-4 text-sm font-semibold text-white hover:bg-orange-700">Close incident</button>
           )}
         </section>
       )}
@@ -10321,7 +10329,7 @@ function ActionsScreen({
           <select
             value={actionFilter}
             onChange={(event) => onFilterChange(event.target.value as "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity")}
-            className="h-12 rounded-2xl border border-[rgba(25,227,181,0.45)] bg-slate-950 px-4 text-sm text-white outline-none focus:border-[var(--qms-teal-500)]"
+            className="h-12 rounded-2xl border border-[rgba(249,115,22,0.45)] bg-slate-950 px-4 text-sm text-white outline-none focus:border-[var(--bert-signal-orange)]"
           >
             <option value="Open">Open</option>
             <option value="Overdue">Overdue</option>
@@ -10332,7 +10340,7 @@ function ActionsScreen({
           <select
             value={actionSeverityFilter}
             onChange={(event) => onSeverityFilterChange(event.target.value as RiskLevel | "All")}
-            className="h-12 rounded-2xl border border-[rgba(25,227,181,0.45)] bg-slate-950 px-4 text-sm text-white outline-none focus:border-[var(--qms-teal-500)]"
+            className="h-12 rounded-2xl border border-[rgba(249,115,22,0.45)] bg-slate-950 px-4 text-sm text-white outline-none focus:border-[var(--bert-signal-orange)]"
           >
             <option value="All">All severities</option>
             <option value="Critical">Critical</option>
@@ -10343,7 +10351,7 @@ function ActionsScreen({
           <select
             value={actionNcFilter}
             onChange={(event) => onNcFilterChange(event.target.value)}
-            className="h-12 rounded-2xl border border-[rgba(25,227,181,0.45)] bg-slate-950 px-4 text-sm text-white outline-none focus:border-[var(--qms-teal-500)]"
+            className="h-12 rounded-2xl border border-[rgba(249,115,22,0.45)] bg-slate-950 px-4 text-sm text-white outline-none focus:border-[var(--bert-signal-orange)]"
           >
             <option value="All">All non-conformance refs</option>
             {availableNonConformanceIds.map((reference) => (
@@ -10535,7 +10543,7 @@ function SyncCentreScreen({
                     Retry
                   </button>
                 )}
-                {permissions.canRepairWorkspace && <button onClick={() => onForceSyncItem(item.localId)} className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">Force sync</button>}
+                {permissions.canRepairWorkspace && <button onClick={() => onForceSyncItem(item.localId)} className="rounded-xl bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">Force sync</button>}
               </div>
             </section>
           ))}
@@ -10635,7 +10643,7 @@ function AccessMatrixTable({
                               : cell.access === "Oversight"
                                 ? "border-sky-200 bg-sky-50"
                                 : cell.access === "Complete"
-                                  ? "border-emerald-200 bg-emerald-50"
+                                  ? "border-blue-200 bg-blue-50"
                                   : "border-slate-200 bg-slate-50",
                           ].join(" ")}
                         >
@@ -10647,7 +10655,7 @@ function AccessMatrixTable({
                                 : cell.access === "Oversight"
                                   ? "text-sky-700"
                                   : cell.access === "Complete"
-                                    ? "text-emerald-700"
+                                    ? "text-blue-800"
                                     : "text-slate-500",
                             ].join(" ")}
                           >
@@ -10919,7 +10927,7 @@ function ReportsScreen({
                       onClick={() => onToggleReportRecipient(user.email)}
                       className={[
                         "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
-                        selected ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white",
+                        selected ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-white",
                       ].join(" ")}
                     >
                       <div className="min-w-0">
@@ -10931,7 +10939,7 @@ function ReportsScreen({
                       <div
                         className={[
                           "rounded-full px-3 py-1 text-xs font-semibold",
-                          selected ? "bg-emerald-500/12 text-emerald-700" : "bg-slate-100 text-slate-500",
+                          selected ? "bg-blue-500/12 text-blue-800" : "bg-slate-100 text-slate-500",
                         ].join(" ")}
                       >
                         {selected ? "Can view" : "Select"}
@@ -11159,7 +11167,7 @@ function SchedulesScreen({
           </div>
           <button
             onClick={onOpenNew}
-            className={`h-12 rounded-2xl px-5 text-sm font-semibold ${brandTealFormField} ${slatePrimaryCtaInteract}`}
+            className={`h-12 rounded-2xl px-5 text-sm font-semibold ${brandAccentFormField} ${slatePrimaryCtaInteract}`}
           >
             Add new schedule
           </button>
@@ -11179,7 +11187,7 @@ function SchedulesScreen({
             <select
               value={filter}
               onChange={(event) => onFilterChange(event.target.value as ScheduleListFilter)}
-              className={`h-12 w-full rounded-2xl px-4 text-sm ${brandTealFormField}`}
+              className={`h-12 w-full rounded-2xl px-4 text-sm ${brandAccentFormField}`}
             >
               <option value="Live">Live</option>
               <option value="Archived">Archived</option>
@@ -11192,7 +11200,7 @@ function SchedulesScreen({
             <EmptyPanel title="No schedules in this view" text="Add a new schedule or switch the filter to see archived revisions." />
           ) : (
             schedules.map((schedule) => (
-              <div key={schedule.id} className="rounded-[1.4rem] border border-[rgba(25,227,181,0.35)] bg-[rgba(25,227,181,0.1)] px-4 py-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+              <div key={schedule.id} className="rounded-[1.4rem] border border-[rgba(249,115,22,0.35)] bg-[rgba(249,115,22,0.1)] px-4 py-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-slate-900">{schedule.scheduleName}</p>
@@ -11216,7 +11224,7 @@ function SchedulesScreen({
                       Delete
                     </button>
                     {computeScheduleHealthState(schedule) === "Paused" ? (
-                      <button onClick={() => onResume(schedule.id)} className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                      <button onClick={() => onResume(schedule.id)} className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">
                         Resume
                       </button>
                     ) : (
@@ -11225,7 +11233,7 @@ function SchedulesScreen({
                       </button>
                     )}
                     {schedule.lifecycle === "Archived" && (
-                      <button onClick={() => onReactivate(schedule.id)} className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                      <button onClick={() => onReactivate(schedule.id)} className="rounded-xl bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">
                         Reactivate
                       </button>
                     )}
@@ -11253,7 +11261,7 @@ function SchedulesScreen({
                 onChange={(event) => onScheduleNameChange(event.target.value)}
                 className={[
                   "h-12 w-full rounded-2xl px-4 text-sm outline-none transition",
-                  brandTealFormField,
+                  brandAccentFormField,
                   nameError ? "border-rose-400 ring-1 ring-rose-400" : "",
                 ].join(" ")}
                 placeholder="Enter the schedule name"
@@ -11271,8 +11279,8 @@ function SchedulesScreen({
                       className={[
                         "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
                         selected
-                          ? "border-[rgba(25,227,181,0.55)] bg-[rgba(25,227,181,0.18)]"
-                          : "border-[rgba(25,227,181,0.28)] bg-[rgba(25,227,181,0.08)]",
+                          ? "border-[rgba(249,115,22,0.55)] bg-[rgba(249,115,22,0.18)]"
+                          : "border-[rgba(249,115,22,0.28)] bg-[rgba(249,115,22,0.08)]",
                       ].join(" ")}
                     >
                       <div className="flex items-center gap-3">
@@ -11296,7 +11304,7 @@ function SchedulesScreen({
             {scheduleAudits.map((audit) => {
               const auditError = validationAttempted && audit.days.length === 0;
               return (
-                <div key={audit.id} className="rounded-[1.5rem] border border-[rgba(25,227,181,0.35)] bg-[rgba(25,227,181,0.08)] p-4">
+                <div key={audit.id} className="rounded-[1.5rem] border border-[rgba(249,115,22,0.35)] bg-[rgba(249,115,22,0.08)] p-4">
                   <p className="text-sm font-semibold text-slate-900">{audit.auditName}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {scheduleDayOptions.map((day) => {
@@ -11325,7 +11333,7 @@ function SchedulesScreen({
                     <select
                       value={audit.frequency}
                       onChange={(event) => onAuditFieldChange(audit.auditId, "frequency", event.target.value)}
-                      className={`h-12 rounded-2xl px-4 text-sm ${brandTealFormField}`}
+                      className={`h-12 rounded-2xl px-4 text-sm ${brandAccentFormField}`}
                     >
                       {scheduleFrequencyOptions.map((frequency) => (
                         <option key={frequency} value={frequency}>{frequency}</option>
@@ -11334,7 +11342,7 @@ function SchedulesScreen({
                     <select
                       value={audit.liveTime}
                       onChange={(event) => onAuditFieldChange(audit.auditId, "liveTime", event.target.value)}
-                      className={`h-12 rounded-2xl px-4 text-sm ${brandTealFormField}`}
+                      className={`h-12 rounded-2xl px-4 text-sm ${brandAccentFormField}`}
                     >
                       {scheduleTimeOptions.map((time) => (
                         <option key={time} value={time}>{time}</option>
@@ -11343,7 +11351,7 @@ function SchedulesScreen({
                     <select
                       value={String(audit.completionHours)}
                       onChange={(event) => onAuditFieldChange(audit.auditId, "completionHours", event.target.value)}
-                      className={`h-12 rounded-2xl px-4 text-sm ${brandTealFormField}`}
+                      className={`h-12 rounded-2xl px-4 text-sm ${brandAccentFormField}`}
                     >
                       {scheduleDurationOptions.map((hours) => (
                         <option key={hours} value={hours}>{hours} hours to complete</option>
@@ -11363,7 +11371,7 @@ function SchedulesScreen({
                   onChange={(event) => onStartDateChange(event.target.value)}
                   className={[
                     "h-12 w-full rounded-2xl px-4 text-sm outline-none transition",
-                    brandTealFormField,
+                    brandAccentFormField,
                     startDateError ? "border-rose-400 ring-1 ring-rose-400" : "",
                   ].join(" ")}
                 />
@@ -11398,7 +11406,7 @@ function SchedulesScreen({
                     "h-12 w-full rounded-2xl px-4 text-sm outline-none transition",
                     continuous
                       ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                      : brandTealFormField,
+                      : brandAccentFormField,
                   ].join(" ")}
                 />
               </div>
@@ -11415,8 +11423,8 @@ function SchedulesScreen({
                       className={[
                         "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
                         selected
-                          ? "border-[rgba(25,227,181,0.55)] bg-[rgba(25,227,181,0.18)]"
-                          : "border-[rgba(25,227,181,0.28)] bg-[rgba(25,227,181,0.08)]",
+                          ? "border-[rgba(249,115,22,0.55)] bg-[rgba(249,115,22,0.18)]"
+                          : "border-[rgba(249,115,22,0.28)] bg-[rgba(249,115,22,0.08)]",
                       ].join(" ")}
                     >
                       <div className="flex items-center gap-3">
@@ -11650,7 +11658,7 @@ function AuditModeScreen({
   const currentQuestion = audit.questions[safeIndex];
   const answeredCount = audit.questions.filter((question) => Boolean(responses[question.id])).length;
   const syncBadgeClass =
-    failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
+    failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-800";
   const syncLabel = failedSyncCount > 0 ? "Sync failed" : pendingSyncCount > 0 ? `${pendingSyncCount} pending sync` : "Synced";
   const options: Answer[] = currentQuestion.fieldType === "Traffic light" ? ["pass", "nc", "fail"] : ["pass", "fail", "nc"];
 
@@ -12364,8 +12372,8 @@ function AdminScreen({
             <p className="mt-1 text-sm text-slate-500">Tools and configuration based on your access level.</p>
           </div>
           <div className="flex items-center gap-3">
-            <div className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            <div className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700">
+              <span className="h-2 w-2 rounded-full bg-blue-500" />
               Online
             </div>
             <div className="rounded-full bg-fuchsia-100 px-2.5 py-1 text-xs font-semibold text-fuchsia-700">{getRoleDisplayName(currentUser.role)}</div>
@@ -12666,7 +12674,7 @@ function AdminScreen({
                       "h-12 rounded-2xl px-5 text-sm font-semibold transition",
                       adminOnly || !backendConfigured || !selectedFolder || folderInspectionLoading
                         ? "bg-white/10 text-slate-400"
-                        : "bg-emerald-400 text-slate-950 shadow-[0_14px_28px_rgba(16,185,129,0.22)] active:scale-[0.99]",
+                        : "bg-orange-500 text-white shadow-[0_14px_28px_rgba(249,115,22,0.35)] active:scale-[0.99]",
                     ].join(" ")}
                   >
                     {folderInspectionLoading
@@ -12696,7 +12704,7 @@ function AdminScreen({
                       className={[
                         "rounded-full px-3 py-1 text-xs font-semibold",
                         folderInspection.blockingItems.length === 0
-                          ? "bg-emerald-500/12 text-emerald-300"
+                          ? "bg-blue-500/12 text-blue-300"
                           : "bg-amber-500/12 text-amber-300",
                       ].join(" ")}
                     >
@@ -12858,7 +12866,7 @@ function AdminScreen({
                     className={[
                       "w-full rounded-xl border px-3 py-2 text-left text-sm",
                       selectedSiteId === ""
-                        ? "border-[var(--qms-teal-500)] bg-[rgba(25,227,181,0.14)] text-white"
+                        ? "border-[var(--bert-signal-orange)] bg-[rgba(249,115,22,0.14)] text-white"
                         : "border-slate-800 bg-slate-950 text-slate-300",
                     ].join(" ")}
                   >
@@ -12874,7 +12882,7 @@ function AdminScreen({
                           className={[
                             "flex-1 rounded-xl border px-3 py-2 text-left text-sm",
                             selectedSiteId === site.id
-                              ? "border-[var(--qms-teal-500)] bg-[rgba(25,227,181,0.14)] text-white"
+                              ? "border-[var(--bert-signal-orange)] bg-[rgba(249,115,22,0.14)] text-white"
                               : "border-slate-800 bg-slate-950 text-slate-300",
                           ].join(" ")}
                         >
@@ -13032,7 +13040,7 @@ function AdminScreen({
                         >
                           Delete
                         </button>
-                        <div className="rounded-full bg-emerald-500/12 px-3 py-1 text-xs font-semibold text-emerald-700">
+                        <div className="rounded-full bg-blue-500/12 px-3 py-1 text-xs font-semibold text-blue-800">
                           {invite.status}
                         </div>
                       </div>
@@ -13172,14 +13180,14 @@ function AdminScreen({
           <button onClick={onValidateWorkspace} className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
             {workspaceValidationLoading ? "Validating..." : "Validate workspace"}
           </button>
-          <button onClick={onRepairWorkspace} className="h-12 rounded-2xl bg-emerald-50 px-5 text-sm font-semibold text-emerald-700">
+          <button onClick={onRepairWorkspace} className="h-12 rounded-2xl bg-blue-50 px-5 text-sm font-semibold text-blue-800">
             Repair / upgrade workspace
           </button>
         </div>
               </section>
 
               {syncState === "Synced" && selectedFolder && (
-                <section className="rounded-[1.75rem] border border-emerald-200 bg-gradient-to-b from-emerald-50 to-white p-4 shadow-[0_16px_36px_rgba(16,185,129,0.10)]">
+                <section className="rounded-[1.75rem] border border-blue-200 bg-gradient-to-b from-blue-50 to-white p-4 shadow-[0_16px_36px_rgba(29,78,216,0.12)]">
           <SectionHeader
             icon="check"
             eyebrow="Go live complete"
@@ -13314,7 +13322,7 @@ function AdminScreen({
                   onClick={() => onToggleTemplate(template.id)}
                   className={[
                     "rounded-xl px-3 py-2 text-xs font-semibold",
-                    template.active ? "bg-emerald-500/12 text-emerald-700" : "bg-slate-200 text-slate-700",
+                    template.active ? "bg-blue-500/12 text-blue-800" : "bg-slate-200 text-slate-700",
                   ].join(" ")}
                 >
                   {template.active ? "Active" : "Inactive"}
@@ -13347,8 +13355,8 @@ function KpiCard({
   const toneClasses =
     tone === "green"
       ? dark
-        ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/30"
-        : "bg-emerald-500/12 text-emerald-700 ring-emerald-500/20"
+        ? "bg-blue-500/20 text-blue-200 ring-blue-400/30"
+        : "bg-blue-500/12 text-blue-800 ring-blue-500/20"
       : tone === "red"
         ? dark
           ? "bg-rose-500/20 text-rose-200 ring-rose-400/30"
@@ -13364,7 +13372,7 @@ function KpiCard({
         <div
           className={[
             "h-10 w-10 rounded-2xl",
-            tone === "green" ? (dark ? "bg-emerald-500/22" : "bg-emerald-500/12") : tone === "red" ? (dark ? "bg-rose-500/22" : "bg-rose-500/12") : (dark ? "bg-amber-500/22" : "bg-amber-500/12"),
+            tone === "green" ? (dark ? "bg-blue-500/22" : "bg-blue-500/12") : tone === "red" ? (dark ? "bg-rose-500/22" : "bg-rose-500/12") : (dark ? "bg-amber-500/22" : "bg-amber-500/12"),
           ].join(" ")}
         />
       </div>
@@ -13405,10 +13413,10 @@ function MiniMetric({
       value: "text-amber-900",
     },
     green: {
-      shell: "border-emerald-200 bg-white",
-      icon: "text-emerald-600",
-      label: "text-emerald-600",
-      value: "text-emerald-900",
+      shell: "border-blue-200 bg-white",
+      icon: "text-blue-700",
+      label: "text-blue-700",
+      value: "text-blue-950",
     },
     sky: {
       shell: "border-sky-200 bg-white",
@@ -13465,7 +13473,7 @@ function MiniPill({ label, active }: { label: string; active: boolean }) {
     <div
       className={[
         "rounded-full px-3 py-1 text-xs font-semibold",
-        active ? "bg-emerald-500/12 text-emerald-700" : "bg-slate-100 text-slate-600",
+        active ? "bg-blue-500/12 text-blue-800" : "bg-slate-100 text-slate-600",
       ].join(" ")}
     >
       {label}
@@ -13480,7 +13488,7 @@ function FolderCheckRow({ label, ok }: { label: string; ok: boolean }) {
       <div
         className={[
           "rounded-full px-2.5 py-1 text-[11px] font-semibold",
-          ok ? "bg-emerald-500/12 text-emerald-300" : "bg-amber-500/12 text-amber-300",
+          ok ? "bg-blue-500/12 text-blue-300" : "bg-amber-500/12 text-amber-300",
         ].join(" ")}
       >
         {ok ? "Found" : "Missing"}
@@ -13589,7 +13597,7 @@ function TrendBar({
 }) {
   const width = Math.max(8, Math.round((value / total) * 100));
   const toneClass =
-    tone === "green" ? "bg-emerald-500" : tone === "amber" ? "bg-amber-500" : "bg-rose-500";
+    tone === "green" ? "bg-blue-500" : tone === "amber" ? "bg-amber-500" : "bg-rose-500";
   return (
     <div className="rounded-[1.2rem] bg-slate-50 px-3 py-3">
       <div className="mb-1 flex items-center justify-between text-sm">
@@ -13792,7 +13800,7 @@ function AnswerButton({
 }) {
   const selectedClasses =
     tone === "green"
-      ? "bg-emerald-600 text-white"
+      ? "bg-blue-600 text-white"
       : tone === "amber"
         ? "bg-amber-500 text-white"
         : "bg-rose-600 text-white";
@@ -13836,7 +13844,7 @@ function AdminAction({
           disabled
             ? "bg-slate-200 text-slate-400"
             : active
-              ? "bg-emerald-500/12 text-emerald-700"
+              ? "bg-blue-500/12 text-blue-800"
               : `bg-slate-900 text-white ${slatePrimaryCtaInteract}`,
         ].join(" ")}
       >
@@ -13893,7 +13901,7 @@ function ProcessCard({
             <p className="mt-1 text-sm leading-6 text-slate-600">{text}</p>
           </div>
         </div>
-        <div className={["shrink-0 rounded-full px-3 py-1 text-xs font-semibold", active ? "bg-emerald-500/12 text-emerald-700" : "bg-white text-slate-600"].join(" ")}>
+        <div className={["shrink-0 rounded-full px-3 py-1 text-xs font-semibold", active ? "bg-blue-500/12 text-blue-800" : "bg-white text-slate-600"].join(" ")}>
           {active ? "Ready" : "Pending"}
         </div>
       </div>
@@ -13921,7 +13929,7 @@ function ToastStack({ toasts }: { toasts: Toast[] }) {
       {toasts.slice(0, 3).map((toast) => {
         const toneClass =
           toast.tone === "success"
-            ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+            ? "border-blue-200 bg-blue-50 text-blue-950"
             : toast.tone === "warning"
               ? "border-amber-200 bg-amber-50 text-amber-900"
               : "border-slate-200 bg-white text-slate-900";

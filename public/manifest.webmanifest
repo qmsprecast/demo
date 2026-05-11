@@ -1,13 +1,13 @@
 {
-  "name": "Audit App",
-  "short_name": "Audit",
-  "description": "Health and safety audit system for live company audit workflows.",
+  "name": "BERT — Business Evaluation & Review Tool",
+  "short_name": "BERT",
+  "description": "Business Evaluation & Review Tool — audits, actions, evidence, and schedules for your company.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#f8fafc",
-  "theme_color": "#0f172a",
+  "theme_color": "#1d4ed8",
   "icons": [
     {
       "src": "/qms-icon.svg",
