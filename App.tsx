@@ -633,6 +633,9 @@ const GOD_MODE_PASSWORD = import.meta.env.VITE_GODMODE_PASSWORD || "demo";
 
 const users: User[] = [
   { username: GOD_MODE_USERNAME, password: GOD_MODE_PASSWORD, role: "Master", name: "System Setup" },
+  { username: "admin", password: "demo", role: "Admin", name: "Audit Control" },
+  { username: "manager", password: "demo", role: "Manager", name: "James Preston" },
+  { username: "tom", password: "demo", role: "Auditor", name: "Tom Hughes" },
 ];
 
 const DEFAULT_MANAGER_NAME = users.find((user) => user.role === "Manager")?.name || "Unassigned";
@@ -712,15 +715,6 @@ const navItems: { id: NavItemId; label: string; icon: string }[] = [
   { id: "account", label: "Account settings", icon: "user" },
 ];
 
-const compactNavLabels: Partial<Record<Exclude<Screen, "complete">, string>> = {
-  actions: "Actions",
-  nonConformance: "NCR",
-  incidents: "Incidents",
-  reports: "Reports",
-  sync: "Sync",
-  account: "Settings",
-};
-
 /** Transitions only — hover uses shell-wide 15% contrasting overlay (.qms-app-shell / .qms-login-shell). */
 const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
 
@@ -753,7 +747,7 @@ const appMotionStyles = `
     padding-top: 0.75rem;
     padding-left: 0.85rem;
     padding-right: 0.85rem;
-    padding-bottom: 6rem;
+    padding-bottom: 1.5rem;
   }
 
   /* Compact fit pass: reduce chunky spacing while keeping readability. */
@@ -1083,7 +1077,7 @@ const appMotionStyles = `
   .qms-force-landscape .qms-screen-stage {
     padding-left: 1.25rem;
     padding-right: 1.25rem;
-    padding-bottom: 6.75rem;
+    padding-bottom: 2rem;
   }
 
   .qms-force-landscape .qms-bottom-nav {
@@ -1145,7 +1139,7 @@ const appMotionStyles = `
     .qms-screen-stage {
       padding-left: 1.25rem;
       padding-right: 1.25rem;
-      padding-bottom: 6.75rem;
+      padding-bottom: 2rem;
     }
 
     .qms-bottom-nav {
@@ -7581,6 +7575,9 @@ function App() {
                 <div className="flex min-h-0 items-center">
                   <div className="w-full rounded-2xl border border-white/10 bg-white/[0.06] p-3 shadow-[0_16px_40px_rgba(2,6,23,0.4)] backdrop-blur-xl sm:rounded-[1.5rem] sm:p-4">
                     <h2 className="text-center text-base font-semibold text-white sm:text-lg">Sign in to your account</h2>
+                    <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs text-slate-300 sm:text-sm">
+                      Demo accounts: <span className="font-semibold text-white">admin</span>, <span className="font-semibold text-white">manager</span>, <span className="font-semibold text-white">tom</span>, <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span> (password: <span className="font-semibold text-white">demo</span> unless overridden).
+                    </p>
                     <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Username or email</label>
@@ -7815,7 +7812,7 @@ function App() {
         </header>
 
         <main className="relative z-10 flex min-h-0 flex-1 overflow-hidden">
-          <aside className={["hidden shrink-0 flex-col border-r px-3 py-4 backdrop-blur lg:flex", desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]", themeMode === "dark" ? "border-white/10 bg-slate-950/58 text-slate-200" : "border-slate-200/85 bg-slate-50/82 text-slate-700"].join(" ")}>
+          <aside className={["flex shrink-0 flex-col border-r px-3 py-4 backdrop-blur", desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]", themeMode === "dark" ? "border-white/10 bg-slate-950/58 text-slate-200" : "border-slate-200/85 bg-slate-50/82 text-slate-700"].join(" ")}>
             <nav className="flex-1 space-y-2 overflow-y-auto pr-1">
               {visibleNavItems.map((item) => {
                 const selected = screen === item.id || (screen === "complete" && item.id === "audits");
@@ -7853,7 +7850,7 @@ function App() {
               </button>
             </div>
           </aside>
-          <div className={["qms-screen-stage h-full flex-1 overflow-y-auto px-4 pb-32 pt-4", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_input:focus]:border-[var(--bert-signal-orange)] [&_section_input:focus]:bg-slate-950 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_section_textarea:focus]:border-[var(--bert-signal-orange)] [&_section_select]:border-slate-700 [&_section_select]:bg-slate-950 [&_section_select]:text-slate-100 [&_section_select:focus]:border-[var(--bert-signal-orange)] [&_section_select:focus]:bg-slate-950 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800 [&_.bg-white]:bg-slate-900 [&_.text-slate-900]:text-slate-100 [&_.text-slate-800]:text-slate-200 [&_.text-slate-700]:text-slate-300 [&_.text-slate-600]:text-slate-400 [&_.text-slate-500]:text-slate-400 [&_input[type=file]]:border-[rgba(249,115,22,0.45)] [&_input[type=file]]:bg-slate-950 [&_input[type=file]]:text-slate-300 [&_input[type=file]]:file:text-slate-200" : "bg-slate-100/72"].join(" ")}>
+          <div className={["qms-screen-stage h-full min-w-0 flex-1 overflow-y-auto px-4 pb-10 pt-4", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_input:focus]:border-[var(--bert-signal-orange)] [&_section_input:focus]:bg-slate-950 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_section_textarea:focus]:border-[var(--bert-signal-orange)] [&_section_select]:border-slate-700 [&_section_select]:bg-slate-950 [&_section_select]:text-slate-100 [&_section_select:focus]:border-[var(--bert-signal-orange)] [&_section_select:focus]:bg-slate-950 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800 [&_.bg-white]:bg-slate-900 [&_.text-slate-900]:text-slate-100 [&_.text-slate-800]:text-slate-200 [&_.text-slate-700]:text-slate-300 [&_.text-slate-600]:text-slate-400 [&_.text-slate-500]:text-slate-400 [&_input[type=file]]:border-[rgba(249,115,22,0.45)] [&_input[type=file]]:bg-slate-950 [&_input[type=file]]:text-slate-300 [&_input[type=file]]:file:text-slate-200" : "bg-slate-100/72"].join(" ")}>
             {currentUser.role === "Manager" && currentManagerAlerts.length > 0 && (
               <section className="mb-4 rounded-[1.5rem] border border-rose-200 bg-rose-50 px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
@@ -8481,45 +8478,6 @@ function App() {
           </div>
         </main>
 
-        <nav className="qms-bottom-nav absolute inset-x-0 bottom-0 mx-auto w-full max-w-[37rem] px-3 pb-3 lg:hidden">
-          <div
-            className={[
-              "qms-bottom-nav-grid grid gap-2 rounded-[1.75rem] border p-2 shadow-[0_20px_45px_rgba(15,23,42,0.16)] backdrop-blur-xl",
-              themeMode === "dark" ? "border-slate-800 bg-slate-950/92" : "border-[var(--bert-signal-orange)] bg-white",
-            ].join(" ")}
-            style={{ gridTemplateColumns: `repeat(${visibleNavItems.length}, minmax(0, 1fr))` }}
-          >
-            {visibleNavItems.map((item) => {
-              const selected = screen === item.id || (screen === "complete" && item.id === "audits");
-              const navLabel = compactNavLabels[item.id] ?? item.label;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setScreen(item.id)}
-                  className={[
-                    "qms-nav-button group flex h-12 flex-col items-center justify-center rounded-2xl border px-1 text-[10px] font-semibold leading-none transition-all duration-200 sm:text-[11px]",
-                    selected
-                        ? `border-[var(--bert-signal-orange)] bg-[var(--bert-signal-orange)] text-[var(--qms-navy-950)] shadow-[0_12px_30px_rgba(249,115,22,0.22)] ${slatePrimaryCtaInteract}`
-                        : themeMode === "dark"
-                        ? "border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-slate-700 hover:bg-slate-900/25 hover:text-slate-100"
-                        : "border-slate-200 bg-white text-slate-600 hover:border-[var(--bert-signal-orange)] hover:bg-orange-50 hover:text-slate-900",
-                  ].join(" ")}
-                >
-                  <span
-                    className={[
-                      "mb-0.5 h-1.5 w-7 rounded-full transition-all duration-200",
-                      selected ? "bg-white/90" : themeMode === "dark" ? "bg-slate-700 group-hover:bg-slate-500" : "bg-slate-300 group-hover:bg-slate-400",
-                    ].join(" ")}
-                  />
-                  <span className={["mb-0.5", selected ? "text-[var(--qms-navy-950)]" : themeMode === "dark" ? "text-slate-400 group-hover:text-slate-100" : "text-slate-500 group-hover:text-slate-900"].join(" ")}>
-                    <AppIcon name={item.icon} className="h-3.5 w-3.5" />
-                  </span>
-                  <span className={["qms-nav-label max-w-full truncate", selected ? "text-[var(--qms-navy-950)]" : ""].join(" ")}>{navLabel}</span>
-                </button>
-              );
-            })}
-          </div>
-          </nav>
         </div>
       </div>
       </div>
