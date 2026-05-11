@@ -1177,6 +1177,23 @@ const appMotionStyles = `
   }
 `;
 
+/** Parse JSON from `fetch` responses — avoids `response.json()` throwing on empty/HTML proxy errors. */
+async function parseJsonApiResponse<T = Record<string, unknown>>(response: Response): Promise<T> {
+  const text = await response.text();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    const hint =
+      "Start the API: from the project root run `npm run server` (default port 8787) while using `npm run dev`.";
+    throw new Error(`No response body from server (${response.status}). ${hint}`);
+  }
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    const snippet = trimmed.length > 120 ? `${trimmed.slice(0, 120)}…` : trimmed;
+    throw new Error(`Invalid response (${response.status}): ${snippet}`);
+  }
+}
+
 const userStorageKey = "qms-precast-current-user";
 /** When set, Master session is limited to company onboarding (no other nav or tools). Cleared on staff sign-in or logout. */
 const masterCompanySetupSessionKey = "bert-master-company-setup-session";
@@ -3078,7 +3095,7 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
     (async () => {
       try {
         const response = await fetch(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}`);
-        const payload = (await response.json()) as AppInviteDetails & { ok?: boolean; error?: string };
+        const payload = (await parseJsonApiResponse(response)) as AppInviteDetails & { ok?: boolean; error?: string };
         if (cancelled) return;
         if (!response.ok || !payload.ok) {
           setLoadError(payload.error || "This invite link is not valid.");
@@ -3127,7 +3144,7 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
           confirmPassword,
         }),
       });
-      const payload = (await response.json()) as { ok?: boolean; error?: string; folderUrl?: string; outcome?: string };
+      const payload = (await parseJsonApiResponse(response)) as { ok?: boolean; error?: string; folderUrl?: string; outcome?: string };
       if (!response.ok || !payload.ok) {
         setSubmitError(payload.error || "Unable to complete onboarding.");
         return;
@@ -5179,7 +5196,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: trimmed, invitedBy: currentUser.name }),
       });
-      const payload = (await response.json()) as {
+      const payload = (await parseJsonApiResponse(response)) as {
         ok?: boolean;
         error?: string;
         delivery?: "smtp" | "manual";
@@ -5273,7 +5290,7 @@ function App() {
           companyName: selectedFolder?.name || "",
         }),
       });
-      const payload = (await response.json()) as {
+      const payload = (await parseJsonApiResponse(response)) as {
         ok?: boolean;
         error?: string;
         delivery?: "smtp" | "manual";
@@ -5361,7 +5378,7 @@ function App() {
           companyName: selectedFolder?.name || "",
         }),
       });
-      const payload = (await response.json()) as {
+      const payload = (await parseJsonApiResponse(response)) as {
         ok?: boolean;
         error?: string;
         delivery?: "smtp" | "manual";

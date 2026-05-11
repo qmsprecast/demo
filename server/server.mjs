@@ -1103,10 +1103,15 @@ function readInviteStore() {
 }
 
 function writeInviteStore(store) {
-  if (!fs.existsSync(sessionDir)) {
-    fs.mkdirSync(sessionDir, { recursive: true });
+  try {
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true });
+    }
+    fs.writeFileSync(INVITE_STORE_PATH, JSON.stringify(store, null, 2), "utf8");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Cannot write invite store (${INVITE_STORE_PATH}): ${msg}`);
   }
-  fs.writeFileSync(INVITE_STORE_PATH, JSON.stringify(store, null, 2), "utf8");
 }
 
 function createInviteRecord(payload) {
@@ -2964,127 +2969,167 @@ app.post("/api/onboarding/invite", async (req, res) => {
   }
 });
 
-app.post("/api/onboarding/app-invites/new-company", async (req, res) => {
-  const toEmail = String(req.body?.email || "").trim().toLowerCase();
-  const invitedBy = String(req.body?.invitedBy || APP_BRAND_NAME).trim();
+app.post("/api/onboarding/app-invites/new-company", (req, res) => {
+  const run = async () => {
+    const toEmail = String(req.body?.email || "").trim().toLowerCase();
+    const invitedBy = String(req.body?.invitedBy || APP_BRAND_NAME).trim();
 
-  if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
-    return res.status(400).json({ ok: false, error: "A valid email address is required." });
-  }
+    if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
+      res.status(400).json({ ok: false, error: "A valid email address is required." });
+      return;
+    }
 
-  try {
-    const { id } = createInviteRecord({
-      kind: "new_company",
-      email: toEmail,
-      invitedBy,
-    });
-    const onboardingUrl = buildAppOnboardingUrl(id);
-    const subjectLine = `${APP_BRAND_NAME} — set up your company workspace`;
-    const manual = () =>
-      res.json({
-        ok: true,
-        delivery: "manual",
-        tokenId: id,
-        onboardingUrl,
-        mailtoUrl: buildAppOnboardingInviteMailto({
+    try {
+      const { id } = createInviteRecord({
+        kind: "new_company",
+        email: toEmail,
+        invitedBy,
+      });
+      const onboardingUrl = buildAppOnboardingUrl(id);
+      const subjectLine = `${APP_BRAND_NAME} — set up your company workspace`;
+      const manual = () => {
+        res.json({
+          ok: true,
+          delivery: "manual",
+          tokenId: id,
+          onboardingUrl,
+          mailtoUrl: buildAppOnboardingInviteMailto({
+            toEmail,
+            subjectLine,
+            invitedBy,
+            onboardingUrl,
+          }),
+        });
+      };
+      if (!emailConfigured()) {
+        manual();
+        return;
+      }
+      try {
+        await sendAppHostedOnboardingEmail({
           toEmail,
           subjectLine,
           invitedBy,
           onboardingUrl,
-        }),
+          htmlIntro: `You have been invited to create a new company workspace in <strong>${APP_BRAND_NAME}</strong>.`,
+        });
+        res.json({ ok: true, delivery: "smtp", tokenId: id, onboardingUrl });
+      } catch (err) {
+        console.warn("[smtp] app new-company invite failed; manual fallback", err);
+        manual();
+      }
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Unable to create onboarding invite.",
       });
-    if (!emailConfigured()) {
-      return manual();
     }
-    try {
-      await sendAppHostedOnboardingEmail({
-        toEmail,
-        subjectLine,
-        invitedBy,
-        onboardingUrl,
-        htmlIntro: `You have been invited to create a new company workspace in <strong>${APP_BRAND_NAME}</strong>.`,
-      });
-      return res.json({ ok: true, delivery: "smtp", tokenId: id, onboardingUrl });
-    } catch (err) {
-      console.warn("[smtp] app new-company invite failed; manual fallback", err);
-      return manual();
+  };
+
+  void run().catch((err) => {
+    console.error("[api] POST /api/onboarding/app-invites/new-company", err);
+    if (!res.headersSent) {
+      try {
+        res.status(500).json({
+          ok: false,
+          error: err instanceof Error ? err.message : "Unable to create onboarding invite.",
+        });
+      } catch (sendErr) {
+        console.error("[api] failed to write JSON error for new-company invite", sendErr);
+      }
     }
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error instanceof Error ? error.message : "Unable to create onboarding invite.",
-    });
-  }
+  });
 });
 
-app.post("/api/onboarding/app-invites/company-user", async (req, res) => {
-  const toEmail = String(req.body?.email || "").trim().toLowerCase();
-  const inviteRole = String(req.body?.role || "").trim();
-  const invitedBy = String(req.body?.invitedBy || APP_BRAND_NAME).trim();
-  const companyFolderId = String(req.body?.companyFolderId || "").trim();
-  const masterSheetId = String(req.body?.masterSheetId || "").trim();
-  const companyName = String(req.body?.companyName || "").trim();
+app.post("/api/onboarding/app-invites/company-user", (req, res) => {
+  const run = async () => {
+    const toEmail = String(req.body?.email || "").trim().toLowerCase();
+    const inviteRole = String(req.body?.role || "").trim();
+    const invitedBy = String(req.body?.invitedBy || APP_BRAND_NAME).trim();
+    const companyFolderId = String(req.body?.companyFolderId || "").trim();
+    const masterSheetId = String(req.body?.masterSheetId || "").trim();
+    const companyName = String(req.body?.companyName || "").trim();
 
-  if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
-    return res.status(400).json({ ok: false, error: "A valid email address is required." });
-  }
-  if (!["Admin", "Manager", "Auditor"].includes(inviteRole)) {
-    return res.status(400).json({ ok: false, error: "Role must be Admin, Manager, or Auditor." });
-  }
-  if (!companyFolderId || !masterSheetId) {
-    return res.status(400).json({
-      ok: false,
-      error: "companyFolderId and masterSheetId are required.",
-    });
-  }
+    if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
+      res.status(400).json({ ok: false, error: "A valid email address is required." });
+      return;
+    }
+    if (!["Admin", "Manager", "Auditor"].includes(inviteRole)) {
+      res.status(400).json({ ok: false, error: "Role must be Admin, Manager, or Auditor." });
+      return;
+    }
+    if (!companyFolderId || !masterSheetId) {
+      res.status(400).json({
+        ok: false,
+        error: "companyFolderId and masterSheetId are required.",
+      });
+      return;
+    }
 
-  try {
-    const { id } = createInviteRecord({
-      kind: "company_user",
-      email: toEmail,
-      role: inviteRole,
-      invitedBy,
-      companyFolderId,
-      masterSheetId,
-      companyName,
-    });
-    const onboardingUrl = buildAppOnboardingUrl(id);
-    const subjectLine = `${APP_BRAND_NAME} — join ${companyName || "your company"}`;
-    const manual = () =>
-      res.json({
-        ok: true,
-        delivery: "manual",
-        tokenId: id,
-        onboardingUrl,
-        mailtoUrl: buildAppOnboardingInviteMailto({
+    try {
+      const { id } = createInviteRecord({
+        kind: "company_user",
+        email: toEmail,
+        role: inviteRole,
+        invitedBy,
+        companyFolderId,
+        masterSheetId,
+        companyName,
+      });
+      const onboardingUrl = buildAppOnboardingUrl(id);
+      const subjectLine = `${APP_BRAND_NAME} — join ${companyName || "your company"}`;
+      const manual = () => {
+        res.json({
+          ok: true,
+          delivery: "manual",
+          tokenId: id,
+          onboardingUrl,
+          mailtoUrl: buildAppOnboardingInviteMailto({
+            toEmail,
+            subjectLine,
+            invitedBy,
+            onboardingUrl,
+          }),
+        });
+      };
+      if (!emailConfigured()) {
+        manual();
+        return;
+      }
+      try {
+        await sendAppHostedOnboardingEmail({
           toEmail,
           subjectLine,
           invitedBy,
           onboardingUrl,
-        }),
+          htmlIntro: `You have been invited to join <strong>${companyName || "your company"}</strong> in ${APP_BRAND_NAME} as <strong>${inviteRole}</strong>.`,
+        });
+        res.json({ ok: true, delivery: "smtp", tokenId: id, onboardingUrl });
+      } catch (err) {
+        console.warn("[smtp] app company-user invite failed; manual fallback", err);
+        manual();
+      }
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Unable to create onboarding invite.",
       });
-    if (!emailConfigured()) {
-      return manual();
     }
-    try {
-      await sendAppHostedOnboardingEmail({
-        toEmail,
-        subjectLine,
-        invitedBy,
-        onboardingUrl,
-        htmlIntro: `You have been invited to join <strong>${companyName || "your company"}</strong> in ${APP_BRAND_NAME} as <strong>${inviteRole}</strong>.`,
-      });
-      return res.json({ ok: true, delivery: "smtp", tokenId: id, onboardingUrl });
-    } catch (err) {
-      console.warn("[smtp] app company-user invite failed; manual fallback", err);
-      return manual();
+  };
+
+  void run().catch((err) => {
+    console.error("[api] POST /api/onboarding/app-invites/company-user", err);
+    if (!res.headersSent) {
+      try {
+        res.status(500).json({
+          ok: false,
+          error: err instanceof Error ? err.message : "Unable to create onboarding invite.",
+        });
+      } catch (sendErr) {
+        console.error("[api] failed to write JSON error for company-user invite", sendErr);
+      }
     }
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error instanceof Error ? error.message : "Unable to create onboarding invite.",
-    });
-  }
+  });
 });
 
 app.get("/api/onboarding/app-invites/:tokenId", async (req, res) => {
@@ -3445,6 +3490,17 @@ app.get("/api/health", (_req, res) => {
     ok: true,
     configured: envConfigured(),
     sharedDriveId: requiredEnv.GOOGLE_SHARED_DRIVE_ID || "",
+  });
+});
+
+app.use((err, req, res, _next) => {
+  if (res.headersSent) {
+    console.error("[express] error after headers sent:", err);
+    return;
+  }
+  res.status(500).json({
+    ok: false,
+    error: err instanceof Error ? err.message : "Internal server error",
   });
 });
 
