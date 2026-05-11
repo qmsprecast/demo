@@ -22,7 +22,8 @@ const requiredEnv = {
   GOOGLE_SHARED_DRIVE_ID: process.env.GOOGLE_SHARED_DRIVE_ID || "",
   GOOGLE_ONBOARDING_FORM_ID: process.env.GOOGLE_ONBOARDING_FORM_ID || "",
   GOOGLE_ONBOARDING_SHEET_ID: process.env.GOOGLE_ONBOARDING_SHEET_ID || "",
-  FRONTEND_URL: process.env.FRONTEND_URL || "http://127.0.0.1:5180",
+  /** Public origin of the SPA (must match where users open the app). Default matches Vite dev (`npm run dev`). Set in .env for real emails, e.g. https://app.example.com */
+  FRONTEND_URL: process.env.FRONTEND_URL || "http://127.0.0.1:5173",
   SESSION_SECRET: process.env.SESSION_SECRET || "qms-local-dev-secret",
   SMTP_HOST: process.env.SMTP_HOST || "",
   SMTP_PORT: process.env.SMTP_PORT || "",
@@ -32,7 +33,7 @@ const requiredEnv = {
   SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || process.env.SMTP_FROM || "",
   SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || process.env.APP_BRAND_NAME || "BERT",
 };
-const APP_BRAND_NAME = (process.env.APP_BRAND_NAME || "BERT — Business Evaluation & Review Tool").trim();
+const APP_BRAND_NAME = (process.env.APP_BRAND_NAME || "BERT — Business. Evaluate. Report. Tool.").trim();
 const ONBOARDING_INVITE_TTL_MS = Math.max(
   60 * 60 * 1000,
   Number(process.env.ONBOARDING_INVITE_TTL_MS || String(7 * 24 * 60 * 60 * 1000)),
@@ -46,6 +47,75 @@ const scopes = [
   "https://www.googleapis.com/auth/drive",
   "https://www.googleapis.com/auth/spreadsheets",
 ];
+
+/** Pause between sequential Sheets reads (values.get / spreadsheets.get) to stay under per-user per-minute read quotas. Override with SHEETS_READ_GAP_MS (50–3000). */
+const SHEETS_READ_GAP_MS = Math.min(3000, Math.max(50, Number(process.env.SHEETS_READ_GAP_MS || 500)));
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isSheetsQuotaOrRateLimitError(err) {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const status = err.code ?? err.response?.status ?? err.status;
+  if (status === 429) {
+    return true;
+  }
+  const msg = String(err.message || (typeof err.toString === "function" ? err.toString() : "") || "");
+  if (/quota|resource_exhausted|rate limit|429/i.test(msg)) {
+    return true;
+  }
+  const apiStatus = err.response?.data?.error?.status;
+  if (apiStatus === "RESOURCE_EXHAUSTED") {
+    return true;
+  }
+  const reasons = err.errors || err.response?.data?.error?.errors;
+  if (Array.isArray(reasons)) {
+    for (const entry of reasons) {
+      const reason = String(entry?.reason || "").toLowerCase();
+      if (
+        reason.includes("quota") ||
+        reason.includes("ratelimit") ||
+        reason === "userratelimitexceeded" ||
+        reason === "ratelimitexceeded"
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Retries a Sheets API operation on HTTP 429 / quota / RESOURCE_EXHAUSTED (default 8 retries, exponential backoff capped at 45s, honors Retry-After when present).
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @param {{ maxRetries?: number }} [options]
+ * @returns {Promise<T>}
+ */
+async function withSheetsQuotaRetry(fn, { maxRetries = 8 } = {}) {
+  const cap = Math.max(1, Number(process.env.SHEETS_QUOTA_MAX_RETRIES || maxRetries) || maxRetries);
+  for (let attempt = 0; attempt <= cap; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isSheetsQuotaOrRateLimitError(err) || attempt === cap) {
+        throw err;
+      }
+      let delayMs = Math.min(45_000, 1000 * 2 ** attempt);
+      const retryAfter = err.response?.headers?.["retry-after"];
+      if (retryAfter) {
+        const secs = Number(retryAfter);
+        if (Number.isFinite(secs) && secs > 0) {
+          delayMs = Math.max(delayMs, Math.min(120_000, secs * 1000));
+        }
+      }
+      await sleep(delayMs);
+    }
+  }
+}
 
 const APP_VERSION = (() => {
   try {
@@ -418,6 +488,15 @@ function envConfigured() {
       requiredEnv.GOOGLE_REDIRECT_URI &&
       requiredEnv.GOOGLE_SHARED_DRIVE_ID,
   );
+}
+
+function collectMissingGoogleEnvKeys() {
+  const missing = [];
+  if (!requiredEnv.GOOGLE_CLIENT_ID) missing.push("GOOGLE_CLIENT_ID");
+  if (!requiredEnv.GOOGLE_CLIENT_SECRET) missing.push("GOOGLE_CLIENT_SECRET");
+  if (!requiredEnv.GOOGLE_REDIRECT_URI) missing.push("GOOGLE_REDIRECT_URI");
+  if (!requiredEnv.GOOGLE_SHARED_DRIVE_ID) missing.push("GOOGLE_SHARED_DRIVE_ID");
+  return missing;
 }
 
 function readStoredSession() {
@@ -1055,17 +1134,21 @@ async function readOnboardingSubmissions(auth, onboardingSource) {
   }
 
   const sheets = google.sheets({ version: "v4", auth });
-  const workbook = await sheets.spreadsheets.get({
-    spreadsheetId: onboardingSource.sheetId,
-    fields: "sheets(properties(title))",
-  });
+  const workbook = await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.get({
+      spreadsheetId: onboardingSource.sheetId,
+      fields: "sheets(properties(title))",
+    }),
+  );
 
   const firstTab = workbook.data.sheets?.[0]?.properties?.title;
   const range = firstTab ? `${firstTab}!A1:ZZ500` : "A1:ZZ500";
-  const valuesResponse = await sheets.spreadsheets.values.get({
-    spreadsheetId: onboardingSource.sheetId,
-    range,
-  });
+  const valuesResponse = await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.get({
+      spreadsheetId: onboardingSource.sheetId,
+      range,
+    }),
+  );
 
   const rows = valuesResponse.data.values || [];
   if (rows.length === 0) {
@@ -1123,6 +1206,12 @@ function createInviteRecord(payload) {
     createdAt: now,
     expiresAt: now + ONBOARDING_INVITE_TTL_MS,
     consumedAt: null,
+    provisionStatus: payload.provisionStatus ?? "idle",
+    provisionStartedAt: payload.provisionStartedAt ?? null,
+    provisionFinishedAt: payload.provisionFinishedAt ?? null,
+    provisionError: payload.provisionError ?? null,
+    provisionDriveFolderId: payload.provisionDriveFolderId ?? null,
+    provisionMasterSheetId: payload.provisionMasterSheetId ?? null,
   };
   store[id] = record;
   writeInviteStore(store);
@@ -1142,6 +1231,61 @@ function markInviteConsumed(id) {
   store[id] = { ...store[id], consumedAt: Date.now() };
   writeInviteStore(store);
   return true;
+}
+
+/** @typedef {"idle"|"running"|"succeeded"|"failed"} InviteProvisionStatus */
+
+const INVITE_PROVISION_STALE_RUNNING_MS = 10 * 60 * 1000;
+
+/**
+ * Serializes invite completion per tokenId so parallel POST /complete cannot double-provision.
+ * Single-process dev server only — for production use a distributed lock or transactional store.
+ */
+function createPerTokenAsyncQueue() {
+  /** @type {Map<string, Promise<void>>} */
+  const tails = new Map();
+  return async (tokenId, fn) => {
+    const prev = tails.get(tokenId) || Promise.resolve();
+    let release = () => {};
+    const next = new Promise((resolve) => {
+      release = resolve;
+    });
+    tails.set(
+      tokenId,
+      prev.then(() => next, () => next),
+    );
+    await prev.catch(() => {});
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  };
+}
+
+const runWithInviteCompletionLock = createPerTokenAsyncQueue();
+
+function patchInviteRecord(id, partial) {
+  const store = readInviteStore();
+  if (!store[id]) {
+    return null;
+  }
+  store[id] = { ...store[id], ...partial };
+  writeInviteStore(store);
+  return store[id];
+}
+
+function normalizeInviteProvisionFields(record) {
+  if (!record) return null;
+  return {
+    ...record,
+    provisionStatus: record.provisionStatus || "idle",
+    provisionStartedAt: record.provisionStartedAt ?? null,
+    provisionFinishedAt: record.provisionFinishedAt ?? null,
+    provisionError: record.provisionError ?? null,
+    provisionDriveFolderId: record.provisionDriveFolderId ?? null,
+    provisionMasterSheetId: record.provisionMasterSheetId ?? null,
+  };
 }
 
 function buildAppOnboardingUrl(tokenId) {
@@ -1180,7 +1324,7 @@ async function sendAppHostedOnboardingEmail({ toEmail, subjectLine, invitedBy, o
   const htmlBody = `
     <p>${htmlIntro}</p>
     <p><strong>Invited by:</strong> ${invitedBy}</p>
-    <p><a href="${onboardingUrl}">Complete onboarding in ${APP_BRAND_NAME}</a></p>
+    <p><a href="${onboardingUrl}" target="_blank" rel="noopener noreferrer">Complete onboarding in ${APP_BRAND_NAME}</a></p>
     <p style="word-break:break-all;font-size:12px;color:#64748b;">${onboardingUrl}</p>
   `;
   await transporter.sendMail({
@@ -1220,20 +1364,42 @@ async function createBlankSpreadsheet(auth, name, parentId) {
   return res.data;
 }
 
-async function provisionNewCompanyWorkspace(auth, { companyName, adminEmail, adminFullName, password }) {
+async function provisionNewCompanyWorkspace(
+  auth,
+  { companyName, adminEmail, adminFullName, password },
+  onProvisionProgress,
+) {
   if (!requiredEnv.GOOGLE_SHARED_DRIVE_ID) {
     throw new Error("GOOGLE_SHARED_DRIVE_ID is not configured on the server.");
   }
   const safeName = String(companyName || "New company")
     .trim()
     .slice(0, 120);
+  const adminEmailDomain = String(adminEmail || "").includes("@")
+    ? String(adminEmail)
+        .split("@")
+        .pop()
+        ?.toLowerCase() || ""
+    : "";
+  console.log("[provision] new_company_workspace start", {
+    companyNameLen: safeName.length,
+    adminEmailDomain: adminEmailDomain || undefined,
+  });
   const root = await createDriveFolder(auth, safeName, requiredEnv.GOOGLE_SHARED_DRIVE_ID);
+  console.log("[provision] milestone", { step: "company_root_folder", folderId: root.id });
+  if (typeof onProvisionProgress === "function") {
+    await onProvisionProgress({ provisionDriveFolderId: root.id });
+  }
   const auditForms = await createDriveFolder(auth, "02 Audit Forms", root.id);
   const masterData = await createDriveFolder(auth, "03 Master Data Sheet", root.id);
   await createDriveFolder(auth, "04 Evidence", root.id);
   await createDriveFolder(auth, "05 Exports", root.id);
   await createDriveFolder(auth, "06 Admin Notes", root.id);
   const masterSheet = await createBlankSpreadsheet(auth, "Company Master Sheet", masterData.id);
+  console.log("[provision] milestone", { step: "master_sheet_created", spreadsheetId: masterSheet.id });
+  if (typeof onProvisionProgress === "function") {
+    await onProvisionProgress({ provisionMasterSheetId: masterSheet.id });
+  }
   await ensureTabsAndColumns(auth, masterSheet.id, {
     companyId: root.id,
     companyName: safeName,
@@ -1258,6 +1424,10 @@ async function provisionNewCompanyWorkspace(auth, { companyName, adminEmail, adm
   await updateConfig(auth, masterSheet.id, {
     ...(await getConfig(auth, masterSheet.id)),
     [authKey]: password,
+  });
+  console.log("[provision] new_company_workspace done", {
+    companyFolderId: root.id,
+    masterSheetId: masterSheet.id,
   });
   return {
     companyFolderId: root.id,
@@ -1473,10 +1643,12 @@ async function inspectCompanyFolder(auth, folderId) {
 
   let masterSheetTabs = [];
   if (masterSheet?.id) {
-    const workbook = await sheets.spreadsheets.get({
-      spreadsheetId: masterSheet.id,
-      fields: "sheets(properties(title))",
-    });
+    const workbook = await withSheetsQuotaRetry(() =>
+      sheets.spreadsheets.get({
+        spreadsheetId: masterSheet.id,
+        fields: "sheets(properties(title))",
+      }),
+    );
 
     masterSheetTabs =
       workbook.data.sheets?.map((sheet) => sheet.properties?.title).filter(Boolean) || [];
@@ -1578,19 +1750,23 @@ function toObjectArray(value) {
 
 async function getWorkbook(auth, spreadsheetId) {
   const sheets = google.sheets({ version: "v4", auth });
-  return sheets.spreadsheets.get({
-    spreadsheetId,
-    fields: "properties(title),sheets(properties(sheetId,title))",
-  });
+  return withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.get({
+      spreadsheetId,
+      fields: "properties(title),sheets(properties(sheetId,title))",
+    }),
+  );
 }
 
 async function getTabValues(auth, spreadsheetId, tabName, range = "A1:ZZ5000") {
   const sheets = google.sheets({ version: "v4", auth });
   try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${tabName}!${range}`,
-    });
+    const response = await withSheetsQuotaRetry(() =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${tabName}!${range}`,
+      }),
+    );
     return response.data.values || [];
   } catch {
     return [];
@@ -1614,33 +1790,39 @@ async function createBackupSheets(auth, spreadsheetId, tabNames) {
   }
 
   const sheets = google.sheets({ version: "v4", auth });
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: { requests: backupRequests },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: backupRequests },
+    }),
+  );
 
   return backupRequests.map((request) => request.duplicateSheet.newSheetName);
 }
 
-async function ensureTabExists(auth, spreadsheetId, tabName) {
-  const workbook = await getWorkbook(auth, spreadsheetId);
+/** When `existingWorkbook` is set, skips an extra spreadsheets.get for that tab check. */
+async function ensureTabExists(auth, spreadsheetId, tabName, existingWorkbook = null) {
+  let workbook = existingWorkbook ?? (await getWorkbook(auth, spreadsheetId));
   if (ensureSheetTab(workbook, tabName)) {
-    return false;
+    return { added: false, workbook };
   }
 
   const sheets = google.sheets({ version: "v4", auth });
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [{ addSheet: { properties: { title: tabName } } }],
-    },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: tabName } } }],
+      },
+    }),
+  );
 
-  return true;
+  workbook = await getWorkbook(auth, spreadsheetId);
+  return { added: true, workbook };
 }
 
 async function ensureColumns(auth, spreadsheetId, tabName, expectedHeaders) {
-  await ensureTabExists(auth, spreadsheetId, tabName);
+  await ensureTabExists(auth, spreadsheetId, tabName, null);
 
   const sheets = google.sheets({ version: "v4", auth });
   const rows = await getTabValues(auth, spreadsheetId, tabName);
@@ -1650,12 +1832,14 @@ async function ensureColumns(auth, spreadsheetId, tabName, expectedHeaders) {
   );
 
   if (rows.length === 0) {
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${tabName}!A1`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: [expectedHeaders] },
-    });
+    await withSheetsQuotaRetry(() =>
+      sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${tabName}!A1`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: { values: [expectedHeaders] },
+      }),
+    );
     return { addedColumns: [...expectedHeaders], headers: expectedHeaders };
   }
 
@@ -1672,16 +1856,20 @@ async function ensureColumns(auth, spreadsheetId, tabName, expectedHeaders) {
     return padded;
   });
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: `${tabName}!A:ZZ`,
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `${tabName}!A1`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [nextHeaders, ...remainingRows] },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `${tabName}!A:ZZ`,
+    }),
+  );
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${tabName}!A1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [nextHeaders, ...remainingRows] },
+    }),
+  );
 
   return { addedColumns: missing, headers: nextHeaders };
 }
@@ -1715,21 +1903,25 @@ async function updateConfig(auth, spreadsheetId, patch) {
   Object.assign(merged, patch);
 
   const orderedKeys = Array.from(new Set([...CONFIG_KEYS, ...Object.keys(merged)]));
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: "Config!A:C",
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: "Config!A1",
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [
-        TAB_COLUMNS.Config,
-        ...orderedKeys.map((key) => [key, merged[key] || "", new Date().toISOString()]),
-      ],
-    },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: "Config!A:C",
+    }),
+  );
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: "Config!A1",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [
+          TAB_COLUMNS.Config,
+          ...orderedKeys.map((key) => [key, merged[key] || "", new Date().toISOString()]),
+        ],
+      },
+    }),
+  );
 
   return merged;
 }
@@ -1759,15 +1951,17 @@ async function appendRowObjects(auth, spreadsheetId, tabName, rowObjects) {
   }
 
   const sheets = google.sheets({ version: "v4", auth });
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${tabName}!A1`,
-    valueInputOption: "USER_ENTERED",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: {
-      values: uniqueRows.map((row) => mapRowObjectToHeaders(headers, row)),
-    },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${tabName}!A1`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: uniqueRows.map((row) => mapRowObjectToHeaders(headers, row)),
+      },
+    }),
+  );
 
   return { ok: true, written: uniqueRows.length, skipped: sanitizedRows.length - uniqueRows.length };
 }
@@ -1792,12 +1986,14 @@ async function updateRowById(auth, spreadsheetId, tabName, idColumn, id, patch) 
   }, {});
   const nextRecord = { ...currentRow, ...patch };
   const nextRow = existingHeaders.map((header) => normalizeCellValue(nextRecord[header]));
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `${tabName}!A${rowIndex + 1}`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [nextRow] },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${tabName}!A${rowIndex + 1}`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [nextRow] },
+    }),
+  );
 
   return { ok: true, updated: 1 };
 }
@@ -1820,7 +2016,11 @@ async function ensureTabsAndColumns(auth, spreadsheetId, options = {}) {
   const errors = [];
   const tabsNeedingBackup = [];
 
-  for (const tab of REQUIRED_TABS) {
+  for (let tabIndex = 0; tabIndex < REQUIRED_TABS.length; tabIndex += 1) {
+    const tab = REQUIRED_TABS[tabIndex];
+    if (tabIndex > 0) {
+      await sleep(SHEETS_READ_GAP_MS);
+    }
     if (!ensureSheetTab(workbook, tab)) {
       tabsAdded.push(tab);
     } else {
@@ -1840,11 +2040,13 @@ async function ensureTabsAndColumns(auth, spreadsheetId, options = {}) {
     await createBackupSheets(auth, spreadsheetId, tabsNeedingBackup);
   }
 
-  for (const tab of REQUIRED_TABS) {
-    const added = await ensureTabExists(auth, spreadsheetId, tab);
-    if (added) {
-      workbook = await getWorkbook(auth, spreadsheetId);
+  for (let tabIndex = 0; tabIndex < REQUIRED_TABS.length; tabIndex += 1) {
+    const tab = REQUIRED_TABS[tabIndex];
+    if (tabIndex > 0) {
+      await sleep(SHEETS_READ_GAP_MS);
     }
+    const { workbook: workbookAfterTab } = await ensureTabExists(auth, spreadsheetId, tab, workbook);
+    workbook = workbookAfterTab;
     const { addedColumns } = await ensureColumns(auth, spreadsheetId, tab, TAB_COLUMNS[tab] || []);
     if (addedColumns.length > 0) {
       columnsAdded[tab] = Array.from(new Set([...(columnsAdded[tab] || []), ...addedColumns]));
@@ -1948,18 +2150,22 @@ async function writeCompanySchedules(auth, spreadsheetId, companyFolderId, sched
     ),
   );
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: "Schedule!A:ZZ",
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: "Schedule!A1",
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [headers, ...keptRows, ...nextRows],
-    },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: "Schedule!A:ZZ",
+    }),
+  );
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: "Schedule!A1",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [headers, ...keptRows, ...nextRows],
+      },
+    }),
+  );
 
   return { ok: true, written: nextRows.length, existing: existingRecords.length };
 }
@@ -2074,18 +2280,22 @@ async function writeCompanyActions(auth, spreadsheetId, companyFolderId, actions
     }),
   );
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: "Actions!A:ZZ",
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: "Actions!A1",
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [headers, ...keptRows, ...nextRows],
-    },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: "Actions!A:ZZ",
+    }),
+  );
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: "Actions!A1",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [headers, ...keptRows, ...nextRows],
+      },
+    }),
+  );
 
   return { ok: true, written: nextRows.length };
 }
@@ -2237,9 +2447,16 @@ async function validateWorkspace(auth, input) {
         validation.repairableIssues.push("The Company Master Sheet schema version is behind the app version.");
       }
 
-      for (const [tab, headers] of Object.entries(TAB_COLUMNS)) {
-        const rows = await getTabValues(auth, sheetId, tab, "A1:ZZ2");
-        const existingHeaders = rows[0] || [];
+      const tabColumnEntries = Object.entries(TAB_COLUMNS);
+      for (let entryIndex = 0; entryIndex < tabColumnEntries.length; entryIndex += 1) {
+        const [tab, headers] = tabColumnEntries[entryIndex];
+        let existingHeaders = Array.isArray(payload.headerRowByTab?.[tab]) ? payload.headerRowByTab[tab] : null;
+        if (!existingHeaders) {
+          if (entryIndex > 0) {
+            await sleep(SHEETS_READ_GAP_MS);
+          }
+          existingHeaders = (await getTabValues(auth, sheetId, tab, "A1:ZZ2"))[0] || [];
+        }
         const missing = headers.filter(
           (header) => !existingHeaders.some((existing) => safeLower(existing) === safeLower(header)),
         );
@@ -2287,25 +2504,38 @@ async function validateWorkspace(auth, input) {
 
 async function readCompanySheetById(auth, spreadsheetId) {
   const sheets = google.sheets({ version: "v4", auth });
-  const workbook = await sheets.spreadsheets.get({
-    spreadsheetId,
-    fields: "properties(title),sheets(properties(title))",
-  });
+  const workbook = await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.get({
+      spreadsheetId,
+      fields: "properties(title),sheets(properties(title))",
+    }),
+  );
 
   const availableTabs = workbook.data.sheets?.map((sheet) => sheet.properties?.title).filter(Boolean) || [];
   const tabData = {};
+  /** First row per required tab (for validation without a second values.get pass). */
+  const headerRowByTab = {};
 
-  for (const tab of REQUIRED_TABS) {
+  for (let tabIndex = 0; tabIndex < REQUIRED_TABS.length; tabIndex += 1) {
+    const tab = REQUIRED_TABS[tabIndex];
+    if (tabIndex > 0) {
+      await sleep(SHEETS_READ_GAP_MS);
+    }
     if (!availableTabs.some((name) => safeLower(name) === safeLower(tab))) {
       tabData[tab] = [];
+      headerRowByTab[tab] = [];
       continue;
     }
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${tab}!A1:ZZ500`,
-    });
-    tabData[tab] = rowsToRecords(response.data.values || []);
+    const response = await withSheetsQuotaRetry(() =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${tab}!A1:ZZ500`,
+      }),
+    );
+    const rawValues = response.data.values || [];
+    headerRowByTab[tab] = rawValues[0] || [];
+    tabData[tab] = rowsToRecords(rawValues);
   }
 
   return {
@@ -2314,6 +2544,7 @@ async function readCompanySheetById(auth, spreadsheetId) {
     sheetName: workbook.data.properties?.title || "Company Master Sheet",
     tabs: availableTabs,
     data: tabData,
+    headerRowByTab,
   };
 }
 
@@ -3137,16 +3368,39 @@ app.get("/api/onboarding/app-invites/:tokenId", async (req, res) => {
   if (!tokenId) {
     return res.status(400).json({ ok: false, error: "Invite token is required." });
   }
-  const record = getInviteRecord(tokenId);
-  if (!record) {
+  const recordRaw = getInviteRecord(tokenId);
+  if (!recordRaw) {
     return res.status(404).json({ ok: false, error: "This invite link is not valid." });
   }
+  const record = normalizeInviteProvisionFields(recordRaw);
   if (record.consumedAt) {
-    return res.status(410).json({ ok: false, error: "This invite has already been used." });
+    const folderId = record.provisionDriveFolderId;
+    const consumedBody = {
+      ok: false,
+      error: "This invite has already been used.",
+      provisionStatus: record.provisionStatus || "succeeded",
+      outcome: record.kind === "new_company" ? "new_company" : "company_user",
+      ...(record.kind === "new_company" && folderId
+        ? {
+            folderUrl: `https://drive.google.com/drive/folders/${folderId}`,
+            companyFolderId: folderId,
+            masterSheetId: record.provisionMasterSheetId || "",
+          }
+        : {}),
+    };
+    return res.status(410).json(consumedBody);
   }
   if (Date.now() > record.expiresAt) {
     return res.status(410).json({ ok: false, error: "This invite has expired." });
   }
+  const provisionExtras = {
+    provisionStatus: record.provisionStatus,
+    provisionStartedAt: record.provisionStartedAt,
+    provisionFinishedAt: record.provisionFinishedAt,
+    provisionError: record.provisionError || "",
+    provisionDriveFolderId: record.provisionDriveFolderId || "",
+    provisionMasterSheetId: record.provisionMasterSheetId || "",
+  };
   const payload =
     record.kind === "new_company"
       ? {
@@ -3154,6 +3408,7 @@ app.get("/api/onboarding/app-invites/:tokenId", async (req, res) => {
           kind: "new_company",
           email: record.email,
           invitedBy: record.invitedBy || "",
+          ...provisionExtras,
         }
       : {
           ok: true,
@@ -3162,102 +3417,240 @@ app.get("/api/onboarding/app-invites/:tokenId", async (req, res) => {
           role: record.role,
           invitedBy: record.invitedBy || "",
           companyName: record.companyName || "",
+          ...provisionExtras,
         };
   return res.json(payload);
 });
 
 app.post("/api/onboarding/app-invites/:tokenId/complete", async (req, res) => {
-  const authed = getAuthedClient();
-  const tokenId = String(req.params.tokenId || "").trim();
-  const password = String(req.body?.password || "");
-  const fullName = String(req.body?.fullName || "").trim();
-  const companyName = String(req.body?.companyName || "").trim();
-  const confirmPassword = String(req.body?.confirmPassword || "");
-
-  if (!tokenId) {
-    return res.status(400).json({ ok: false, error: "Invite token is required." });
-  }
-  if (password.length < 8) {
-    return res.status(400).json({ ok: false, error: "Password must be at least 8 characters." });
-  }
-  if (confirmPassword && confirmPassword !== password) {
-    return res.status(400).json({ ok: false, error: "Password confirmation does not match." });
-  }
-  if (!fullName) {
-    return res.status(400).json({ ok: false, error: "Full name is required." });
-  }
-
-  const record = getInviteRecord(tokenId);
-  if (!record) {
-    return res.status(404).json({ ok: false, error: "This invite link is not valid." });
-  }
-  if (record.consumedAt) {
-    return res.status(410).json({ ok: false, error: "This invite has already been used." });
-  }
-  if (Date.now() > record.expiresAt) {
-    return res.status(410).json({ ok: false, error: "This invite has expired." });
-  }
-
-  if (!envConfigured() || !authed) {
-    return res.status(401).json({
-      ok: false,
-      error: "Google connection is required on the server to finish onboarding. Ask your administrator to stay signed in to Google on the backend, then try again.",
-    });
-  }
-
   try {
-    if (record.kind === "new_company") {
-      if (!companyName) {
-        return res.status(400).json({ ok: false, error: "Company name is required." });
+    const authed = getAuthedClient();
+    const tokenId = String(req.params.tokenId || "").trim();
+    const password = String(req.body?.password || "");
+    const fullName = String(req.body?.fullName || "").trim();
+    const companyName = String(req.body?.companyName || "").trim();
+    const confirmPassword = String(req.body?.confirmPassword || "");
+
+    if (!tokenId) {
+      return res.status(400).json({ ok: false, error: "Invite token is required." });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ ok: false, error: "Password must be at least 8 characters." });
+    }
+    if (confirmPassword && confirmPassword !== password) {
+      return res.status(400).json({ ok: false, error: "Password confirmation does not match." });
+    }
+    if (!fullName) {
+      return res.status(400).json({ ok: false, error: "Full name is required." });
+    }
+
+    const missingGoogleEnv = collectMissingGoogleEnvKeys();
+    if (missingGoogleEnv.length > 0) {
+      return res.status(401).json({
+        ok: false,
+        error: `Invite completion needs Google Drive configured on the API server. Missing environment variables: ${missingGoogleEnv.join(
+          ", ",
+        )}. Add them (for example in a .env file next to package.json), restart \`npm run server\`, then try again.`,
+      });
+    }
+    if (!authed) {
+      const frontend = requiredEnv.FRONTEND_URL.replace(/\/$/, "");
+      return res.status(401).json({
+        ok: false,
+        error: `Invite completion uses the API server's Google account to create Drive folders and sheet rows. On the machine where the API runs, sign in once: open http://127.0.0.1:${port}/auth/google/login and complete consent (OAuth redirect must match GOOGLE_REDIRECT_URI). If you use Vite dev with the proxy, ${frontend}/auth/google/login also works while \`npm run dev\` and \`npm run server\` are both running. Then click Complete onboarding again.`,
+      });
+    }
+
+    await runWithInviteCompletionLock(tokenId, async () => {
+      let record = normalizeInviteProvisionFields(getInviteRecord(tokenId));
+      if (!record) {
+        res.status(404).json({ ok: false, error: "This invite link is not valid." });
+        return;
       }
-      const result = await provisionNewCompanyWorkspace(authed, {
-        companyName,
-        adminEmail: record.email,
-        adminFullName: fullName,
-        password,
-      });
-      markInviteConsumed(tokenId);
-      return res.json({
-        ok: true,
-        outcome: "new_company",
-        companyFolderId: result.companyFolderId,
-        masterSheetId: result.masterSheetId,
-        folderUrl: `https://drive.google.com/drive/folders/${result.companyFolderId}`,
-      });
-    }
 
-    if (record.kind === "company_user") {
-      const userId = `app-${String(record.email || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/gi, "-")}-${String(record.role || "").toLowerCase()}`;
-      await writeCompanyUsers(authed, record.masterSheetId, record.companyFolderId, [
-        {
-          id: userId,
-          email: record.email,
-          role: record.role,
-          name: fullName,
-          invitedBy: record.invitedBy || APP_BRAND_NAME,
-          senderEmail: "",
-          sentAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          syncStatus: "Synced",
-        },
-      ]);
-      const authKey = `UserAuth.${String(record.email || "").toLowerCase()}`;
-      await updateConfig(authed, record.masterSheetId, {
-        ...(await getConfig(authed, record.masterSheetId)),
-        [authKey]: password,
-      });
-      markInviteConsumed(tokenId);
-      return res.json({ ok: true, outcome: "company_user" });
-    }
+      if (record.consumedAt) {
+        const status = record.provisionStatus || "succeeded";
+        if (status === "succeeded") {
+          if (record.kind === "new_company") {
+            const fid = record.provisionDriveFolderId;
+            res.json({
+              ok: true,
+              outcome: "new_company",
+              companyFolderId: fid || "",
+              masterSheetId: record.provisionMasterSheetId || "",
+              folderUrl: fid ? `https://drive.google.com/drive/folders/${fid}` : "",
+            });
+            return;
+          }
+          if (record.kind === "company_user") {
+            res.json({ ok: true, outcome: "company_user" });
+            return;
+          }
+        }
+        res.status(410).json({ ok: false, error: "This invite has already been used." });
+        return;
+      }
 
-    return res.status(400).json({ ok: false, error: "Unknown invite type." });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error instanceof Error ? error.message : "Unable to complete onboarding.",
+      if (Date.now() > record.expiresAt) {
+        res.status(410).json({ ok: false, error: "This invite has expired." });
+        return;
+      }
+
+      if (record.provisionStatus === "running" && record.provisionStartedAt != null) {
+        const elapsed = Date.now() - Number(record.provisionStartedAt);
+        if (elapsed >= 0 && elapsed < INVITE_PROVISION_STALE_RUNNING_MS) {
+          res.status(202).json({
+            ok: false,
+            provisionStatus: "running",
+            error: "Provisioning already in progress.",
+          });
+          return;
+        }
+        patchInviteRecord(tokenId, {
+          provisionStatus: "failed",
+          provisionFinishedAt: Date.now(),
+          provisionError:
+            "The previous provisioning attempt appears stuck or timed out. You can try completing onboarding again.",
+        });
+      }
+
+      if (record.kind === "new_company" && !companyName) {
+        res.status(400).json({ ok: false, error: "Company name is required." });
+        return;
+      }
+
+      try {
+        /**
+         * On failure after Drive/Sheets partial work we mark failed and do NOT consume the invite,
+         * so the same token can be retried (may orphan folders — same as pre–Phase 2 behaviour).
+         * Success writes succeeded + consumedAt in one patch so GET never exposes a succeeded unconsumed window.
+         */
+        patchInviteRecord(tokenId, {
+          provisionStatus: "running",
+          provisionStartedAt: Date.now(),
+          provisionFinishedAt: null,
+          provisionError: null,
+        });
+
+        if (record.kind === "new_company") {
+          const inviteEmailDomain = String(record.email || "").includes("@")
+            ? String(record.email)
+                .split("@")
+                .pop()
+                ?.toLowerCase() || ""
+            : "";
+          console.log("[invite] new_company provision start", {
+            tokenIdPrefix: tokenId.slice(0, 8),
+            companyNameLen: companyName.trim().length,
+            inviteEmailDomain: inviteEmailDomain || undefined,
+          });
+          const result = await provisionNewCompanyWorkspace(
+            authed,
+            {
+              companyName,
+              adminEmail: record.email,
+              adminFullName: fullName,
+              password,
+            },
+            async (progressPatch) => {
+              patchInviteRecord(tokenId, progressPatch);
+            },
+          );
+          console.log("[invite] new_company provision done", {
+            companyFolderId: result.companyFolderId,
+            masterSheetId: result.masterSheetId,
+          });
+          patchInviteRecord(tokenId, {
+            provisionStatus: "succeeded",
+            provisionFinishedAt: Date.now(),
+            provisionError: null,
+            provisionDriveFolderId: result.companyFolderId,
+            provisionMasterSheetId: result.masterSheetId,
+            consumedAt: Date.now(),
+          });
+          res.json({
+            ok: true,
+            outcome: "new_company",
+            companyFolderId: result.companyFolderId,
+            masterSheetId: result.masterSheetId,
+            folderUrl: `https://drive.google.com/drive/folders/${result.companyFolderId}`,
+          });
+          return;
+        }
+
+        if (record.kind === "company_user") {
+          console.log("[invite] company_user row start", {
+            tokenIdPrefix: tokenId.slice(0, 8),
+            masterSheetId: record.masterSheetId,
+            role: record.role,
+          });
+          const userId = `app-${String(record.email || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/gi, "-")}-${String(record.role || "").toLowerCase()}`;
+          await writeCompanyUsers(authed, record.masterSheetId, record.companyFolderId, [
+            {
+              id: userId,
+              email: record.email,
+              role: record.role,
+              name: fullName,
+              invitedBy: record.invitedBy || APP_BRAND_NAME,
+              senderEmail: "",
+              sentAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              syncStatus: "Synced",
+            },
+          ]);
+          const authKey = `UserAuth.${String(record.email || "").toLowerCase()}`;
+          await updateConfig(authed, record.masterSheetId, {
+            ...(await getConfig(authed, record.masterSheetId)),
+            [authKey]: password,
+          });
+          patchInviteRecord(tokenId, {
+            provisionStatus: "succeeded",
+            provisionFinishedAt: Date.now(),
+            provisionError: null,
+            consumedAt: Date.now(),
+          });
+          console.log("[invite] company_user row done", { tokenIdPrefix: tokenId.slice(0, 8) });
+          res.json({ ok: true, outcome: "company_user" });
+          return;
+        }
+
+        patchInviteRecord(tokenId, {
+          provisionStatus: "failed",
+          provisionFinishedAt: Date.now(),
+          provisionError: "Unknown invite type.",
+        });
+        res.status(400).json({ ok: false, error: "Unknown invite type." });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Unable to complete onboarding.";
+        console.error("[invite] complete provision stage failed", {
+          tokenIdPrefix: tokenId.slice(0, 8),
+          inviteKind: record?.kind,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        patchInviteRecord(tokenId, {
+          provisionStatus: "failed",
+          provisionFinishedAt: Date.now(),
+          provisionError: msg,
+        });
+        res.status(500).json({
+          ok: false,
+          provisionStatus: "failed",
+          error: msg,
+        });
+      }
     });
+  } catch (error) {
+    console.error("[invite] complete unexpected failure", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    if (!res.headersSent) {
+      return res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Unable to complete onboarding.",
+      });
+    }
   }
 });
 
@@ -3504,8 +3897,9 @@ app.use((err, req, res, _next) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`Backend listening on http://127.0.0.1:${port} (${APP_BRAND_NAME})`);
+const httpServer = app.listen(port, "0.0.0.0", () => {
+  console.log(`[api] listening on http://127.0.0.1:${port} and http://0.0.0.0:${port} (${APP_BRAND_NAME})`);
+  console.log(`[api] PORT env: ${process.env.PORT || "(unset, using 8787)"}`);
   const config = smtpConfigSummary();
   console.log("[smtp] config", {
     host: config.host,
@@ -3518,4 +3912,16 @@ app.listen(port, () => {
   void verifySmtpTransport().then((result) => {
     console.log("[smtp] verify", result);
   });
+});
+
+httpServer.on("error", (err) => {
+  if (err && "code" in err && err.code === "EADDRINUSE") {
+    console.error(
+      `[api] Port ${port} is already in use. You already have an API on this port (another terminal running \`npm run server\` or \`npm run dev:full\`). Stop that process first, or use a different port: PORT=8790 npm run server`,
+    );
+    process.exit(1);
+    return;
+  }
+  console.error("[api] Failed to listen:", err);
+  process.exit(1);
 });

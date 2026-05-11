@@ -58,7 +58,7 @@ export function BertLogo({ className = "", variant = "full", tone, size = "md" }
         <span className={`shrink-0 rounded-full bg-[var(--bert-signal-orange)] ${s.dot}`} aria-hidden />
       </div>
       {variant === "full" && (
-        <p className={`max-w-[20rem] ${s.tag} ${tagColor}`}>Business. Evaluation. Reporting. Tool.</p>
+        <p className={`max-w-[20rem] ${s.tag} ${tagColor}`}>Business. Evaluate. Report. Tool.</p>
       )}
     </div>
   );

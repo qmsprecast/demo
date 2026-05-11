@@ -1,7 +1,26 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { BertLogo } from "./src/components/BertLogo";
+import type { NavItemId, Role } from "./src/permissions";
+import {
+  canAccessActions,
+  canAccessAdmin,
+  canAccessAdminOnboardingWorkspace,
+  canAccessAuditsCentre,
+  canAccessCompletedNcrReports,
+  canAccessControlScreen,
+  canAccessOnboardingNav,
+  canAccessReports,
+  canAccessSchedules,
+  canEditLegalName,
+  canInvestigateIncidents,
+  canRoleAccessNavItem,
+  canSubmitIncidents,
+  getCreatableRoles,
+  getHomeScreenForRole,
+  getRoleDisplayName,
+  getRolePermissions,
+} from "./src/permissions";
 
-type Role = "Master" | "Admin" | "Manager" | "Auditor";
 type AuditStatus = "green" | "amber" | "red";
 type Answer = "pass" | "nc" | "fail";
 type Priority = "High" | "Medium" | "Low";
@@ -16,8 +35,7 @@ type ScheduleFrequency =
 type ScheduleScope = "Company schedule" | "Personal schedule";
 type OverdueAlertTiming = "At due time" | "30 minutes overdue" | "1 hour overdue" | "2 hours overdue";
 type CompletionCheckTiming = "30 minutes after send" | "1 hour after send" | "At due time" | "2 hours after due";
-type Screen = "dashboard" | "audits" | "actions" | "nonConformance" | "incidents" | "reports" | "sync" | "schedules" | "admin" | "onboarding" | "account" | "complete";
-type NavItemId = Exclude<Screen, "complete">;
+type Screen = NavItemId | "complete";
 type ThemeMode = "light" | "dark";
 type ReportTemplateType = "Executive summary" | "Overdue audit pack" | "Corrective action pack" | "Evidence pack" | "Full report";
 type ScheduleDay = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
@@ -610,7 +628,7 @@ type AuditCompletionSummaryState = {
 };
 
 const companyName = (import.meta.env.VITE_APP_NAME || "BERT").trim();
-const PRODUCT_TAGLINE = "Business. Evaluation. Reporting. Tool.";
+const PRODUCT_TAGLINE = "Business. Evaluate. Report. Tool.";
 const PRODUCT_BRAND_FULL = `${companyName} — ${PRODUCT_TAGLINE}`;
 function isDemoRoleSwitchEnabled() {
   const rawValue = String(import.meta.env.VITE_ENABLE_DEMO_ROLE_SWITCH || "").trim().toLowerCase();
@@ -2161,78 +2179,6 @@ function normalizeFolderName(value: string) {
   return trimmed.toLowerCase().startsWith("qms - ") ? trimmed : `QMS - ${trimmed}`;
 }
 
-function canAccessAdmin(role: Role) {
-  return role === "Master" || role === "Admin";
-}
-
-/** Control (admin) workspace tab — company Admin only; God Mode uses Onboarding only. */
-function canAccessControlScreen(role: Role) {
-  return role === "Admin";
-}
-
-function getHomeScreenForRole(role: Role): Screen {
-  if (role === "Master") {
-    return "onboarding";
-  }
-  return "dashboard";
-}
-
-function canAccessSchedules(role: Role) {
-  return role === "Master" || role === "Admin" || role === "Manager";
-}
-
-/** Master or Admin may use the in-app onboarding workspace tab (folder linking, user invites). */
-function canAccessAdminOnboardingWorkspace(role: Role) {
-  return role === "Master" || role === "Admin";
-}
-
-/** Dedicated Onboarding menu — company Admin and God Mode (platform setup). */
-function canAccessOnboardingNav(role: Role) {
-  return role === "Admin" || role === "Master";
-}
-
-function canAccessReports(role: Role) {
-  return role !== "Auditor";
-}
-
-function canAccessActions(role: Role) {
-  return role === "Master" || role === "Admin" || role === "Manager" || role === "Auditor";
-}
-
-function canAccessCompletedNcrReports(role: Role) {
-  return role === "Master" || role === "Admin" || role === "Manager";
-}
-
-function canAccessAuditsCentre(role: Role) {
-  return role !== "Auditor";
-}
-
-function canSubmitIncidents(_role: Role) {
-  return true;
-}
-
-function canInvestigateIncidents(role: Role) {
-  return role === "Master" || role === "Admin" || role === "Manager";
-}
-
-function canEditLegalName(role: Role) {
-  return role === "Master" || role === "Admin";
-}
-
-function canRoleAccessNavItem(role: Role, itemId: NavItemId) {
-  if (role === "Master") {
-    return itemId === "onboarding" || itemId === "account";
-  }
-  if (itemId === "admin") return canAccessControlScreen(role);
-  if (itemId === "onboarding") return canAccessOnboardingNav(role);
-  if (itemId === "schedules") return canAccessSchedules(role);
-  if (itemId === "reports") return canAccessReports(role);
-  if (itemId === "incidents") return canSubmitIncidents(role);
-  if (itemId === "actions" || itemId === "nonConformance") return canAccessActions(role);
-  if (itemId === "audits") return canAccessAuditsCentre(role);
-  return true;
-}
-
 function buildDefaultRoleNavVisibilityMatrix(): RoleNavVisibilityMatrix {
   const roles: Role[] = ["Master", "Admin", "Manager", "Auditor"];
   return roles.reduce((matrix, role) => {
@@ -2253,23 +2199,6 @@ function buildDefaultRoleSiteSelectorVisibility(): RoleSiteSelectorVisibility {
   };
 }
 
-function getRolePermissions(role: Role) {
-  return {
-    canManageUsers: role === "Master" || role === "Admin",
-    canManageSchedules: role === "Master" || role === "Admin" || role === "Manager",
-    canManageTemplates: role === "Master" || role === "Admin",
-    canAssignActions: role === "Master" || role === "Admin" || role === "Manager",
-    canVerifyActions: role === "Master" || role === "Admin" || role === "Manager",
-    canExportReports: role !== "Auditor",
-    canRepairWorkspace: role === "Master",
-    canViewAllReports: role !== "Auditor",
-  };
-}
-
-function getRoleDisplayName(role: Role) {
-  return role === "Master" ? "God Mode" : role;
-}
-
 function normalizeScheduleFrequency(value: string): ScheduleFrequency {
   const normalized = value.trim().toLowerCase();
   if (normalized === "daily") return "Daily";
@@ -2278,16 +2207,6 @@ function normalizeScheduleFrequency(value: string): ScheduleFrequency {
     return "Monthly";
   }
   return "Weekly";
-}
-
-function getCreatableRoles(role: Role) {
-  if (role === "Master" || role === "Admin") {
-    return ["Admin", "Manager", "Auditor"] as Role[];
-  }
-  if (role === "Manager") {
-    return ["Manager", "Auditor"] as Role[];
-  }
-  return [] as Role[];
 }
 
 function extractByKeys(record: Record<string, string>, candidates: string[]) {
@@ -3133,6 +3052,9 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
       return;
     }
     setSubmitting(true);
+    const completeTimeoutMs = 300_000;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), completeTimeoutMs);
     try {
       const response = await fetch(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}/complete`, {
         method: "POST",
@@ -3143,10 +3065,16 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
           password,
           confirmPassword,
         }),
+        signal: controller.signal,
       });
       const payload = (await parseJsonApiResponse(response)) as { ok?: boolean; error?: string; folderUrl?: string; outcome?: string };
       if (!response.ok || !payload.ok) {
-        setSubmitError(payload.error || "Unable to complete onboarding.");
+        const serverMsg = payload.error || `The server returned HTTP ${response.status}.`;
+        setSubmitError(
+          response.status >= 500
+            ? `${serverMsg} If provisioning stopped part-way, check the terminal running the API server before retrying; you may need a fresh invite if a Drive folder was already created.`
+            : `${serverMsg} Fix the issue above, then use Complete onboarding again.`,
+        );
         return;
       }
       if (payload.outcome === "new_company") {
@@ -3163,9 +3091,21 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
         });
       }
       window.history.replaceState({}, "", window.location.pathname);
-    } catch {
-      setSubmitError("Something went wrong. Please try again.");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setSubmitError(
+          `No response after ${Math.round(completeTimeoutMs / 60_000)} minutes. The server may still be talking to Google—check the terminal running npm run server, then try again if the workspace was not created.`,
+        );
+      } else {
+        const detail = error instanceof Error ? error.message : "";
+        setSubmitError(
+          detail
+            ? `${detail} Confirm the API server is running and Google is signed in on that machine, then retry.`
+            : "Something went wrong. Check your connection, confirm the API server is running, and try again.",
+        );
+      }
     } finally {
+      window.clearTimeout(timeoutId);
       setSubmitting(false);
     }
   };
@@ -3266,6 +3206,15 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
               />
             </div>
             {submitError && <p className="text-sm text-rose-300">{submitError}</p>}
+            <p className="text-xs leading-relaxed text-slate-500">
+              First-time company setup creates Drive folders and your master sheet. It often finishes in a few minutes but can take longer when Google is busy—keep this tab open until you see a success message or a clear error below.
+            </p>
+            {submitting && (
+              <p className="text-xs leading-relaxed text-slate-400">
+                Working with Google Drive (folders, master sheet, tabs). Typical range{" "}
+                <span className="font-semibold text-slate-300">1–3 minutes</span>—please wait.
+              </p>
+            )}
             <button
               type="submit"
               disabled={submitting}
@@ -7625,17 +7574,30 @@ function App() {
     if (currentUser && !canAccessAuditsCentre(currentUser.role) && screen === "audits") {
       setScreen(getHomeScreenForRole(currentUser.role));
     }
+    if (
+      currentUser &&
+      screen === "complete" &&
+      !activeAudit &&
+      !(currentUser.role === "Auditor" && auditCompletionSummary)
+    ) {
+      setScreen(getHomeScreenForRole(currentUser.role));
+    }
     if (currentUser && screen !== "complete" && !visibleNavItems.some((item) => item.id === screen)) {
       setScreen(getHomeScreenForRole(currentUser.role));
     }
-  }, [currentUser, screen, visibleNavItems]);
+  }, [currentUser, screen, visibleNavItems, activeAudit, auditCompletionSummary]);
+
+  let inviteTokenFromUrl = "";
+  try {
+    inviteTokenFromUrl = new URLSearchParams(window.location.search).get("invite")?.trim() || "";
+  } catch {
+    inviteTokenFromUrl = "";
+  }
+  if (inviteTokenFromUrl) {
+    return <AppHostedOnboardingCompletion inviteToken={inviteTokenFromUrl} />;
+  }
 
   if (!currentUser) {
-    const inviteTok = new URLSearchParams(window.location.search).get("invite");
-    if (inviteTok?.trim()) {
-      return <AppHostedOnboardingCompletion inviteToken={inviteTok.trim()} />;
-    }
-
     const signInOuterClass = [
       shellPreviewClass,
       "flex min-h-[100dvh] w-full max-w-[100vw] flex-col items-center justify-center overflow-hidden px-3 py-4 sm:px-4 sm:py-5",
@@ -8757,6 +8719,20 @@ function App() {
   );
 }
 
+function DashboardBertFlowStrip({ variant }: { variant: "onDark" | "onLight" }) {
+  const shell =
+    variant === "onDark"
+      ? "rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] leading-snug text-slate-300"
+      : "rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-snug text-slate-600";
+  const lead = variant === "onDark" ? "font-semibold text-slate-100" : "font-semibold text-slate-800";
+  return (
+    <div className={`mt-3 ${shell}`}>
+      <span className={lead}>How work flows in bert.: </span>
+      Provision → Evaluate → Action → Verify → Report — connect the workspace, run audits, close corrective actions with evidence, then export or share the record.
+    </div>
+  );
+}
+
 function DashboardScreen({
   currentUser,
   workspaceName,
@@ -8851,6 +8827,7 @@ function DashboardScreen({
   onLoadDemoData: () => void;
   onClearDemoData: () => void;
 }) {
+  const [showDashboardOptions, setShowDashboardOptions] = useState(false);
   if (currentUser.role === "Auditor") {
     return (
       <AuditorTaskDashboard
@@ -8896,13 +8873,6 @@ function DashboardScreen({
     );
   }
 
-  if (currentUser.role === "Master") {
-    return null;
-  }
-
-  return null;
-  
-  const [showDashboardOptions, setShowDashboardOptions] = useState(false);
   const visibleSectionOrder = dashboardSectionOrder.filter((key) => dashboardPreferences[key]);
 
   const renderSection = (section: DashboardSectionKey) => {
@@ -8942,7 +8912,12 @@ function DashboardScreen({
                 <p className="mt-1 text-xs text-slate-500">{audit.siteArea} - {getDueWarning(audit.dueHours)}</p>
               </button>
             ))}
-            {assignedAudits.length === 0 && <EmptyPanel title="No upcoming audits" text="Linked and assigned audits will appear here." />}
+            {assignedAudits.length === 0 && (
+              <EmptyPanel
+                title="No audits in your queue yet"
+                text="When schedules and site access are assigned, upcoming field audits land here so you can plan the day before work starts."
+              />
+            )}
           </div>
         </section>
       );
@@ -8981,6 +8956,7 @@ function DashboardScreen({
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Live overview</p>
             <h2 className="mt-1 text-xl font-semibold tracking-tight">{workspaceName}</h2>
             <p className="mt-1 max-w-sm text-xs leading-5 text-slate-300">Dashboard controls and traffic status in one view.</p>
+            <DashboardBertFlowStrip variant="onDark" />
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setShowDashboardOptions((current) => !current)} className="h-8 rounded-lg bg-white/12 px-3 text-xs font-semibold text-white">
@@ -9239,6 +9215,7 @@ function AuditorTaskDashboard({
         <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Today&apos;s tasks</p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">Morning {currentUser.name.split(" ")[0]}</h2>
         <p className="mt-1 text-sm text-slate-500">What do you need to do now?</p>
+        <DashboardBertFlowStrip variant="onLight" />
         <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           <MiniMetric label="Outstanding" value={String(overdueCount)} tone="red" />
           <MiniMetric label="Due now" value={String(dueSoonCount)} tone="amber" />
@@ -9594,6 +9571,7 @@ function ManagerDashboard({
             ))}
           </div>
         )}
+        <DashboardBertFlowStrip variant="onDark" />
       </section>
       {(hasImmediateAttention || hasTodaysWork) && (
         <div className="grid gap-3 lg:grid-cols-2">
@@ -9736,6 +9714,7 @@ function AdminDashboard({
             ))}
           </div>
         )}
+        <DashboardBertFlowStrip variant="onDark" />
       </section>
       {visibleSectionOrder.map((section) => renderSection(section))}
     </div>
@@ -10531,9 +10510,11 @@ function SyncCentreScreen({
             <AppIcon name="sync" className="h-5 w-5" />
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Offline trust</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Operational trust</p>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight">Sync Centre</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-300">Every audit, action, evidence update, and schedule change is tracked until it safely syncs.</p>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              Field work, evidence, and admin edits stay visible here until they reach your company sheet in Google Drive—so you always know what still needs the network.
+            </p>
           </div>
         </div>
       </section>
@@ -10542,7 +10523,10 @@ function SyncCentreScreen({
         <MiniMetric label="Tracked sync items" value={String(syncQueue.length)} />
       </section>
       {syncQueue.length === 0 ? (
-        <EmptyPanel title="No sync items yet" text="Offline work and admin changes will appear here with status, retries, and errors." />
+        <EmptyPanel
+          title="Nothing queued for sync"
+          text="When you work offline or the app batches updates to Drive, each item appears here with status and retry history so supervisors can trust what reached the master sheet."
+        />
       ) : (
         <div className="space-y-3">
           {syncQueue.map((item) => (
@@ -10806,10 +10790,10 @@ function ReportsScreen({
             <AppIcon name="chart" className="h-5 w-5" />
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Report creator</p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight">Create audit packs and evidence reports</h2>
+            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Reporting outcomes</p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight">Turn completed work into audit-ready packs</h2>
             <p className="mt-2 text-sm leading-6 text-slate-300">
-              Export handover packs, PDF-style reports, and evidence summaries for {workspaceName}.
+              Reporting is the last step of the loop: consolidate what was evaluated and corrected for {workspaceName}, then export packs stakeholders can file, share, or archive.
             </p>
           </div>
         </div>
@@ -10875,7 +10859,7 @@ function ReportsScreen({
             icon="chart"
             eyebrow="Export centre"
             title="Report / Audit Pack Creator"
-            subtitle="Generate the output you need without cluttering the live dashboard."
+            subtitle="Package evidence and metrics for handover—stakeholders get a finished view, not a tour of every screen in the app."
           />
           <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
             Queue {offlineQueueCount}
@@ -11048,7 +11032,10 @@ function ReportsScreen({
         />
         <div className="mt-4 space-y-3">
           {reportInbox.length === 0 ? (
-            <EmptyPanel title="No reports generated yet" text="Select recipients and export a report to create the first report inbox item." />
+            <EmptyPanel
+              title="No reports in the inbox yet"
+              text="Generate a pack from the templates below—completed audits, actions, and evidence roll up into a single handover you can send to leadership or customers."
+            />
           ) : (
             reportInbox.map((report) => (
               <div key={report.id} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
