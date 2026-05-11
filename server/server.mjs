@@ -33,6 +33,11 @@ const requiredEnv = {
   SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || process.env.APP_BRAND_NAME || "Audit App",
 };
 const APP_BRAND_NAME = (process.env.APP_BRAND_NAME || "Audit App").trim();
+const ONBOARDING_INVITE_TTL_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.ONBOARDING_INVITE_TTL_MS || String(7 * 24 * 60 * 60 * 1000)),
+);
+const INVITE_STORE_PATH = path.join(sessionDir, "app-onboarding-invites.json");
 
 const scopes = [
   "openid",
@@ -1084,6 +1089,177 @@ async function readOnboardingSubmissions(auth, onboardingSource) {
   return {
     headers,
     records,
+  };
+}
+
+function readInviteStore() {
+  try {
+    const raw = fs.readFileSync(INVITE_STORE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeInviteStore(store) {
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+  }
+  fs.writeFileSync(INVITE_STORE_PATH, JSON.stringify(store, null, 2), "utf8");
+}
+
+function createInviteRecord(payload) {
+  const store = readInviteStore();
+  const id = crypto.randomBytes(24).toString("hex");
+  const now = Date.now();
+  const record = {
+    ...payload,
+    createdAt: now,
+    expiresAt: now + ONBOARDING_INVITE_TTL_MS,
+    consumedAt: null,
+  };
+  store[id] = record;
+  writeInviteStore(store);
+  return { id, record };
+}
+
+function getInviteRecord(id) {
+  const store = readInviteStore();
+  return store[id] || null;
+}
+
+function markInviteConsumed(id) {
+  const store = readInviteStore();
+  if (!store[id]) {
+    return false;
+  }
+  store[id] = { ...store[id], consumedAt: Date.now() };
+  writeInviteStore(store);
+  return true;
+}
+
+function buildAppOnboardingUrl(tokenId) {
+  const base = requiredEnv.FRONTEND_URL.replace(/\/$/, "");
+  return `${base}/?invite=${encodeURIComponent(tokenId)}`;
+}
+
+function buildAppOnboardingInviteMailto({ toEmail, subjectLine, invitedBy, onboardingUrl }) {
+  const body = [
+    `You have been invited to complete ${APP_BRAND_NAME} onboarding.`,
+    "",
+    `Invited by: ${invitedBy}`,
+    "",
+    "Open this link to finish setup in the app:",
+    onboardingUrl,
+  ].join("\n");
+  return `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subjectLine)}&body=${encodeURIComponent(body)}`;
+}
+
+async function sendAppHostedOnboardingEmail({ toEmail, subjectLine, invitedBy, onboardingUrl, htmlIntro }) {
+  if (!emailConfigured()) {
+    throw new Error("SMTP is not configured.");
+  }
+  const transporter = createSmtpTransport();
+  const from = requiredEnv.SMTP_FROM_NAME
+    ? `"${requiredEnv.SMTP_FROM_NAME}" <${requiredEnv.SMTP_FROM_EMAIL}>`
+    : requiredEnv.SMTP_FROM_EMAIL;
+  const textBody = [
+    `You have been invited to complete ${APP_BRAND_NAME} onboarding.`,
+    "",
+    `Invited by: ${invitedBy}`,
+    "",
+    "Open this link to finish setup in the app:",
+    onboardingUrl,
+  ].join("\n");
+  const htmlBody = `
+    <p>${htmlIntro}</p>
+    <p><strong>Invited by:</strong> ${invitedBy}</p>
+    <p><a href="${onboardingUrl}">Complete onboarding in ${APP_BRAND_NAME}</a></p>
+    <p style="word-break:break-all;font-size:12px;color:#64748b;">${onboardingUrl}</p>
+  `;
+  await transporter.sendMail({
+    from,
+    to: toEmail,
+    subject: subjectLine,
+    text: textBody,
+    html: htmlBody,
+  });
+}
+
+async function createDriveFolder(auth, name, parentId) {
+  const drive = google.drive({ version: "v3", auth });
+  const res = await drive.files.create({
+    supportsAllDrives: true,
+    requestBody: {
+      name,
+      mimeType: "application/vnd.google-apps.folder",
+      parents: [parentId],
+    },
+    fields: "id,name",
+  });
+  return res.data;
+}
+
+async function createBlankSpreadsheet(auth, name, parentId) {
+  const drive = google.drive({ version: "v3", auth });
+  const res = await drive.files.create({
+    supportsAllDrives: true,
+    requestBody: {
+      name,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      parents: [parentId],
+    },
+    fields: "id,name",
+  });
+  return res.data;
+}
+
+async function provisionNewCompanyWorkspace(auth, { companyName, adminEmail, adminFullName, password }) {
+  if (!requiredEnv.GOOGLE_SHARED_DRIVE_ID) {
+    throw new Error("GOOGLE_SHARED_DRIVE_ID is not configured on the server.");
+  }
+  const safeName = String(companyName || "New company")
+    .trim()
+    .slice(0, 120);
+  const root = await createDriveFolder(auth, safeName, requiredEnv.GOOGLE_SHARED_DRIVE_ID);
+  const auditForms = await createDriveFolder(auth, "02 Audit Forms", root.id);
+  const masterData = await createDriveFolder(auth, "03 Master Data Sheet", root.id);
+  await createDriveFolder(auth, "04 Evidence", root.id);
+  await createDriveFolder(auth, "05 Exports", root.id);
+  await createDriveFolder(auth, "06 Admin Notes", root.id);
+  const masterSheet = await createBlankSpreadsheet(auth, "Company Master Sheet", masterData.id);
+  await ensureTabsAndColumns(auth, masterSheet.id, {
+    companyId: root.id,
+    companyName: safeName,
+  });
+  const userId = `app-${String(adminEmail || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gi, "-")}`;
+  await writeCompanyUsers(auth, masterSheet.id, root.id, [
+    {
+      id: userId,
+      email: adminEmail,
+      role: "Admin",
+      name: adminFullName || adminEmail,
+      invitedBy: APP_BRAND_NAME,
+      senderEmail: "",
+      sentAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      syncStatus: "Synced",
+    },
+  ]);
+  const authKey = `UserAuth.${String(adminEmail || "").toLowerCase()}`;
+  await updateConfig(auth, masterSheet.id, {
+    ...(await getConfig(auth, masterSheet.id)),
+    [authKey]: password,
+  });
+  return {
+    companyFolderId: root.id,
+    companyFolderName: root.name,
+    masterSheetId: masterSheet.id,
+    auditFormsFolderId: auditForms.id,
+    masterDataFolderId: masterData.id,
   };
 }
 
@@ -2784,6 +2960,258 @@ app.post("/api/onboarding/invite", async (req, res) => {
         invitedBy,
         onboardingFormUrl,
       }),
+    });
+  }
+});
+
+app.post("/api/onboarding/app-invites/new-company", async (req, res) => {
+  const toEmail = String(req.body?.email || "").trim().toLowerCase();
+  const invitedBy = String(req.body?.invitedBy || APP_BRAND_NAME).trim();
+
+  if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
+    return res.status(400).json({ ok: false, error: "A valid email address is required." });
+  }
+
+  try {
+    const { id } = createInviteRecord({
+      kind: "new_company",
+      email: toEmail,
+      invitedBy,
+    });
+    const onboardingUrl = buildAppOnboardingUrl(id);
+    const subjectLine = `${APP_BRAND_NAME} — set up your company workspace`;
+    const manual = () =>
+      res.json({
+        ok: true,
+        delivery: "manual",
+        tokenId: id,
+        onboardingUrl,
+        mailtoUrl: buildAppOnboardingInviteMailto({
+          toEmail,
+          subjectLine,
+          invitedBy,
+          onboardingUrl,
+        }),
+      });
+    if (!emailConfigured()) {
+      return manual();
+    }
+    try {
+      await sendAppHostedOnboardingEmail({
+        toEmail,
+        subjectLine,
+        invitedBy,
+        onboardingUrl,
+        htmlIntro: `You have been invited to create a new company workspace in <strong>${APP_BRAND_NAME}</strong>.`,
+      });
+      return res.json({ ok: true, delivery: "smtp", tokenId: id, onboardingUrl });
+    } catch (err) {
+      console.warn("[smtp] app new-company invite failed; manual fallback", err);
+      return manual();
+    }
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to create onboarding invite.",
+    });
+  }
+});
+
+app.post("/api/onboarding/app-invites/company-user", async (req, res) => {
+  const toEmail = String(req.body?.email || "").trim().toLowerCase();
+  const inviteRole = String(req.body?.role || "").trim();
+  const invitedBy = String(req.body?.invitedBy || APP_BRAND_NAME).trim();
+  const companyFolderId = String(req.body?.companyFolderId || "").trim();
+  const masterSheetId = String(req.body?.masterSheetId || "").trim();
+  const companyName = String(req.body?.companyName || "").trim();
+
+  if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
+    return res.status(400).json({ ok: false, error: "A valid email address is required." });
+  }
+  if (!["Admin", "Manager", "Auditor"].includes(inviteRole)) {
+    return res.status(400).json({ ok: false, error: "Role must be Admin, Manager, or Auditor." });
+  }
+  if (!companyFolderId || !masterSheetId) {
+    return res.status(400).json({
+      ok: false,
+      error: "companyFolderId and masterSheetId are required.",
+    });
+  }
+
+  try {
+    const { id } = createInviteRecord({
+      kind: "company_user",
+      email: toEmail,
+      role: inviteRole,
+      invitedBy,
+      companyFolderId,
+      masterSheetId,
+      companyName,
+    });
+    const onboardingUrl = buildAppOnboardingUrl(id);
+    const subjectLine = `${APP_BRAND_NAME} — join ${companyName || "your company"}`;
+    const manual = () =>
+      res.json({
+        ok: true,
+        delivery: "manual",
+        tokenId: id,
+        onboardingUrl,
+        mailtoUrl: buildAppOnboardingInviteMailto({
+          toEmail,
+          subjectLine,
+          invitedBy,
+          onboardingUrl,
+        }),
+      });
+    if (!emailConfigured()) {
+      return manual();
+    }
+    try {
+      await sendAppHostedOnboardingEmail({
+        toEmail,
+        subjectLine,
+        invitedBy,
+        onboardingUrl,
+        htmlIntro: `You have been invited to join <strong>${companyName || "your company"}</strong> in ${APP_BRAND_NAME} as <strong>${inviteRole}</strong>.`,
+      });
+      return res.json({ ok: true, delivery: "smtp", tokenId: id, onboardingUrl });
+    } catch (err) {
+      console.warn("[smtp] app company-user invite failed; manual fallback", err);
+      return manual();
+    }
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to create onboarding invite.",
+    });
+  }
+});
+
+app.get("/api/onboarding/app-invites/:tokenId", async (req, res) => {
+  const tokenId = String(req.params.tokenId || "").trim();
+  if (!tokenId) {
+    return res.status(400).json({ ok: false, error: "Invite token is required." });
+  }
+  const record = getInviteRecord(tokenId);
+  if (!record) {
+    return res.status(404).json({ ok: false, error: "This invite link is not valid." });
+  }
+  if (record.consumedAt) {
+    return res.status(410).json({ ok: false, error: "This invite has already been used." });
+  }
+  if (Date.now() > record.expiresAt) {
+    return res.status(410).json({ ok: false, error: "This invite has expired." });
+  }
+  const payload =
+    record.kind === "new_company"
+      ? {
+          ok: true,
+          kind: "new_company",
+          email: record.email,
+          invitedBy: record.invitedBy || "",
+        }
+      : {
+          ok: true,
+          kind: "company_user",
+          email: record.email,
+          role: record.role,
+          invitedBy: record.invitedBy || "",
+          companyName: record.companyName || "",
+        };
+  return res.json(payload);
+});
+
+app.post("/api/onboarding/app-invites/:tokenId/complete", async (req, res) => {
+  const authed = getAuthedClient();
+  const tokenId = String(req.params.tokenId || "").trim();
+  const password = String(req.body?.password || "");
+  const fullName = String(req.body?.fullName || "").trim();
+  const companyName = String(req.body?.companyName || "").trim();
+  const confirmPassword = String(req.body?.confirmPassword || "");
+
+  if (!tokenId) {
+    return res.status(400).json({ ok: false, error: "Invite token is required." });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ ok: false, error: "Password must be at least 8 characters." });
+  }
+  if (confirmPassword && confirmPassword !== password) {
+    return res.status(400).json({ ok: false, error: "Password confirmation does not match." });
+  }
+  if (!fullName) {
+    return res.status(400).json({ ok: false, error: "Full name is required." });
+  }
+
+  const record = getInviteRecord(tokenId);
+  if (!record) {
+    return res.status(404).json({ ok: false, error: "This invite link is not valid." });
+  }
+  if (record.consumedAt) {
+    return res.status(410).json({ ok: false, error: "This invite has already been used." });
+  }
+  if (Date.now() > record.expiresAt) {
+    return res.status(410).json({ ok: false, error: "This invite has expired." });
+  }
+
+  if (!envConfigured() || !authed) {
+    return res.status(401).json({
+      ok: false,
+      error: "Google connection is required on the server to finish onboarding. Ask your administrator to stay signed in to Google on the backend, then try again.",
+    });
+  }
+
+  try {
+    if (record.kind === "new_company") {
+      if (!companyName) {
+        return res.status(400).json({ ok: false, error: "Company name is required." });
+      }
+      const result = await provisionNewCompanyWorkspace(authed, {
+        companyName,
+        adminEmail: record.email,
+        adminFullName: fullName,
+        password,
+      });
+      markInviteConsumed(tokenId);
+      return res.json({
+        ok: true,
+        outcome: "new_company",
+        companyFolderId: result.companyFolderId,
+        masterSheetId: result.masterSheetId,
+        folderUrl: `https://drive.google.com/drive/folders/${result.companyFolderId}`,
+      });
+    }
+
+    if (record.kind === "company_user") {
+      const userId = `app-${String(record.email || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/gi, "-")}-${String(record.role || "").toLowerCase()}`;
+      await writeCompanyUsers(authed, record.masterSheetId, record.companyFolderId, [
+        {
+          id: userId,
+          email: record.email,
+          role: record.role,
+          name: fullName,
+          invitedBy: record.invitedBy || APP_BRAND_NAME,
+          senderEmail: "",
+          sentAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          syncStatus: "Synced",
+        },
+      ]);
+      const authKey = `UserAuth.${String(record.email || "").toLowerCase()}`;
+      await updateConfig(authed, record.masterSheetId, {
+        ...(await getConfig(authed, record.masterSheetId)),
+        [authKey]: password,
+      });
+      markInviteConsumed(tokenId);
+      return res.json({ ok: true, outcome: "company_user" });
+    }
+
+    return res.status(400).json({ ok: false, error: "Unknown invite type." });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to complete onboarding.",
     });
   }
 });

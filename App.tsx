@@ -46,6 +46,7 @@ type UserInvite = {
   sentAt: string;
   status: "Invite sent";
   mailtoUrl?: string;
+  appOnboardingUrl?: string;
 };
 
 type AuditQuestion = {
@@ -2020,7 +2021,11 @@ function createSiteId(name: string) {
 }
 
 function resolveUserSiteAssignmentKey(user: User, invitedUsers: UserInvite[]): string {
-  const invite = invitedUsers.find((inv) => normalizeIdentity(inv.email.split("@")[0]) === normalizeIdentity(user.username));
+  const invite = invitedUsers.find(
+    (inv) =>
+      normalizeIdentity(inv.email.split("@")[0]) === normalizeIdentity(user.username) ||
+      normalizeIdentity(inv.email) === normalizeIdentity(user.username),
+  );
   if (invite) return normalizeIdentity(invite.email);
   if (user.name.includes("@")) return normalizeIdentity(user.name);
   return normalizeIdentity(`${user.username}@qmsprecast.co.uk`);
@@ -2132,8 +2137,14 @@ function canAccessSchedules(role: Role) {
   return role === "Master" || role === "Admin" || role === "Manager";
 }
 
-function canAccessOnboarding(role: Role) {
-  return role === "Master";
+/** Master or Admin may use the in-app onboarding workspace tab (folder linking, user invites). */
+function canAccessAdminOnboardingWorkspace(role: Role) {
+  return role === "Master" || role === "Admin";
+}
+
+/** Dedicated “Onboarding” menu screen — company admins only (God Mode uses Control). */
+function canAccessOnboardingNav(role: Role) {
+  return role === "Admin";
 }
 
 function canAccessReports(role: Role) {
@@ -2152,8 +2163,8 @@ function canAccessAuditsCentre(role: Role) {
   return role !== "Auditor";
 }
 
-function canSubmitIncidents(role: Role) {
-  return role === "Master" || role === "Admin" || role === "Manager" || role === "Auditor";
+function canSubmitIncidents(_role: Role) {
+  return true;
 }
 
 function canInvestigateIncidents(role: Role) {
@@ -2166,10 +2177,11 @@ function canEditLegalName(role: Role) {
 
 function canRoleAccessNavItem(role: Role, itemId: NavItemId) {
   if (itemId === "admin") return canAccessAdmin(role);
-  if (itemId === "onboarding") return role === "Master" ? false : canAccessOnboarding(role);
+  if (itemId === "onboarding") return canAccessOnboardingNav(role);
   if (itemId === "schedules") return canAccessSchedules(role);
   if (itemId === "reports") return canAccessReports(role);
-  if (itemId === "actions" || itemId === "nonConformance" || itemId === "incidents") return canAccessActions(role);
+  if (itemId === "incidents") return canSubmitIncidents(role);
+  if (itemId === "actions" || itemId === "nonConformance") return canAccessActions(role);
   if (itemId === "audits") return canAccessAuditsCentre(role);
   return true;
 }
@@ -2257,6 +2269,22 @@ function parseRole(value: string): Role | null {
     return "Auditor";
   }
   return null;
+}
+
+function parseCompanyConfigPasswords(records: Record<string, string>[]) {
+  const out: Record<string, string> = {};
+  for (const row of records) {
+    const key = String(row.Key || row.key || "").trim();
+    const val = String(row.Value || row.value || "").trim();
+    if (!key.toLowerCase().startsWith("userauth.") || !val) {
+      continue;
+    }
+    const emailKey = key.slice("UserAuth.".length).trim();
+    if (emailKey) {
+      out[normalizeIdentity(emailKey)] = val;
+    }
+  }
+  return out;
 }
 
 function parseCompanySheetUsers(records: Record<string, string>[]) {
@@ -3000,6 +3028,213 @@ function DataFlowBackground({ className = "", showBase = true }: { className?: s
   );
 }
 
+type AppInviteDetails =
+  | { ok: true; kind: "new_company"; email: string; invitedBy: string }
+  | { ok: true; kind: "company_user"; email: string; role: Role; invitedBy: string; companyName: string };
+
+function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string }) {
+  const [details, setDetails] = useState<AppInviteDetails | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState<{ title: string; message: string } | null>(null);
+  const [submitError, setSubmitError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}`);
+        const payload = (await response.json()) as AppInviteDetails & { ok?: boolean; error?: string };
+        if (cancelled) return;
+        if (!response.ok || !payload.ok) {
+          setLoadError(payload.error || "This invite link is not valid.");
+          return;
+        }
+        setDetails(payload as AppInviteDetails);
+      } catch {
+        if (!cancelled) {
+          setLoadError("Unable to load invite details. Check your connection and try again.");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteToken]);
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitError("");
+    if (password.length < 8) {
+      setSubmitError("Password must be at least 8 characters.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setSubmitError("Passwords do not match.");
+      return;
+    }
+    if (!fullName.trim()) {
+      setSubmitError("Full name is required.");
+      return;
+    }
+    if (details?.kind === "new_company" && !companyName.trim()) {
+      setSubmitError("Company name is required.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await fetch(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          companyName: details?.kind === "new_company" ? companyName.trim() : undefined,
+          password,
+          confirmPassword,
+        }),
+      });
+      const payload = (await response.json()) as { ok?: boolean; error?: string; folderUrl?: string; outcome?: string };
+      if (!response.ok || !payload.ok) {
+        setSubmitError(payload.error || "Unable to complete onboarding.");
+        return;
+      }
+      if (payload.outcome === "new_company") {
+        setDone({
+          title: "Company workspace created",
+          message: payload.folderUrl
+            ? `Your company folder is ready. You can sign in with your email and the password you chose. Drive folder: ${payload.folderUrl}`
+            : "You can sign in with your email and the password you chose.",
+        });
+      } else {
+        setDone({
+          title: "Account ready",
+          message: "You can sign in with your email address and the password you chose.",
+        });
+      }
+      window.history.replaceState({}, "", window.location.pathname);
+    } catch {
+      setSubmitError("Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className={[
+        "min-h-[100dvh] px-4 py-8",
+        "bg-[radial-gradient(circle_at_top,#0f172a,transparent_40%),linear-gradient(180deg,#020617_0%,#0f172a_100%)]",
+        "text-slate-100",
+      ].join(" ")}
+    >
+      <div className="mx-auto max-w-lg">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-300 to-teal-500 text-lg font-bold text-slate-950">
+            QMS
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-teal-300/90">Onboarding</p>
+            <h1 className="text-2xl font-semibold tracking-tight text-white">
+              {!details
+                ? "Complete onboarding"
+                : details.kind === "company_user"
+                  ? `Join ${details.companyName || "your company"}`
+                  : "New company setup"}
+            </h1>
+          </div>
+        </div>
+
+        {loadError && (
+          <div className="rounded-2xl border border-rose-500/40 bg-rose-950/40 p-4 text-sm text-rose-100">{loadError}</div>
+        )}
+
+        {done && (
+          <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/30 p-5 text-sm leading-6 text-emerald-50">
+            <p className="text-base font-semibold text-white">{done.title}</p>
+            <p className="mt-2">{done.message}</p>
+            <a
+              href="/"
+              className="mt-4 inline-flex h-11 items-center justify-center rounded-xl bg-teal-400 px-4 text-sm font-semibold text-slate-950 no-underline"
+            >
+              Go to sign in
+            </a>
+          </div>
+        )}
+
+        {!loadError && !done && details && (
+          <form onSubmit={handleSubmit} className="space-y-4 rounded-[1.75rem] border border-white/10 bg-slate-950/60 p-6 shadow-[0_24px_60px_rgba(2,6,23,0.45)] backdrop-blur-xl">
+            <p className="text-sm text-slate-300">
+              {details.kind === "new_company"
+                ? `Create your company workspace and administrator account for ${details.email}.`
+                : `Join ${details.companyName || "your company"} as ${details.role}. You will sign in with ${details.email}.`}
+            </p>
+            {details.invitedBy && (
+              <p className="text-xs text-slate-500">
+                Invited by {details.invitedBy}
+              </p>
+            )}
+            {details.kind === "new_company" && (
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Company name</label>
+                <input
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-teal-400/60"
+                  placeholder="Acme Precast Ltd"
+                  autoComplete="organization"
+                />
+              </div>
+            )}
+            <div>
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Your full name</label>
+              <input
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-teal-400/60"
+                placeholder="Jane Smith"
+                autoComplete="name"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Choose password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-teal-400/60"
+                placeholder="At least 8 characters"
+                autoComplete="new-password"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Confirm password</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-4 text-sm text-white outline-none focus:border-teal-400/60"
+                autoComplete="new-password"
+              />
+            </div>
+            {submitError && <p className="text-sm text-rose-300">{submitError}</p>}
+            <button
+              type="submit"
+              disabled={submitting}
+              className="h-12 w-full rounded-2xl bg-teal-400 text-sm font-semibold text-slate-950 disabled:opacity-50"
+            >
+              {submitting ? "Saving…" : "Complete onboarding"}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const actionsPersistReadyRef = useRef(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("light");
@@ -3115,6 +3350,8 @@ function App() {
   const [inviteEmailInput, setInviteEmailInput] = useState("");
   const [inviteRoleInput, setInviteRoleInput] = useState<Role>("Manager");
   const [invitedUsers, setInvitedUsers] = useState<UserInvite[]>(storedWorkspaceState?.invitedUsers || []);
+  const [godModeAppInviteEmail, setGodModeAppInviteEmail] = useState("");
+  const [companyAuthPasswords, setCompanyAuthPasswords] = useState<Record<string, string>>({});
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [companySheetSync, setCompanySheetSync] = useState<CompanySheetSyncStatus | null>(storedWorkspaceState?.companySheetSync || null);
   const [selectedReportTemplate, setSelectedReportTemplate] = useState<ReportTemplateType>("Executive summary");
@@ -3430,14 +3667,16 @@ function App() {
     }
     const filtered = navItems.filter((item) => {
       const baselineVisible = canRoleAccessNavItem(currentUser.role, item.id);
+      if (item.id === "incidents") {
+        return baselineVisible;
+      }
       const matrixVisible = roleNavVisibility[currentUser.role]?.[item.id] ?? baselineVisible;
       return baselineVisible && matrixVisible;
     });
 
     // Safety net: always surface onboarding when role has onboarding access.
     if (
-      currentUser.role !== "Master" &&
-      canAccessOnboarding(currentUser.role) &&
+      canAccessOnboardingNav(currentUser.role) &&
       (roleNavVisibility[currentUser.role]?.["onboarding"] ?? true) &&
       !filtered.some((item) => item.id === "onboarding")
     ) {
@@ -3478,7 +3717,7 @@ function App() {
         role: user.role,
       }));
     const invited = invitedUsers.map((invite) => ({
-      username: invite.email.split("@")[0],
+      username: invite.email.toLowerCase(),
       email: invite.email,
       name: invite.email,
       role: invite.role,
@@ -3501,8 +3740,11 @@ function App() {
 
   const loginUsers = useMemo(() => {
     const invitedLoginUsers = invitedUsers.map((invite) => ({
-      username: invite.email.split("@")[0].toLowerCase(),
-      password: onboardingPasswordByEmail.get(normalizeIdentity(invite.email)) || "demo",
+      username: invite.email.toLowerCase(),
+      password:
+        companyAuthPasswords[normalizeIdentity(invite.email)] ||
+        onboardingPasswordByEmail.get(normalizeIdentity(invite.email)) ||
+        "demo",
       role: invite.role,
       name: invite.email,
     }));
@@ -3511,7 +3753,7 @@ function App() {
       (user, index, list) =>
         list.findIndex((item) => item.username === user.username && item.role === user.role) === index,
     );
-  }, [invitedUsers, onboardingPasswordByEmail]);
+  }, [invitedUsers, onboardingPasswordByEmail, companyAuthPasswords]);
 
   const availableScheduleAudits = useMemo(() => {
     const templateOptions = templates
@@ -4462,6 +4704,11 @@ function App() {
         return [...remaining, ...parseCompanySheetActions(payload.data.Actions ?? [], folderId)];
       });
 
+      setCompanyAuthPasswords((current) => ({
+        ...current,
+        ...parseCompanyConfigPasswords(payload.data.Config ?? []),
+      }));
+
       return payload;
     } catch (error) {
       setCompanySheetSync(null);
@@ -4531,6 +4778,11 @@ function App() {
         const remaining = current.filter((item) => item.companyId !== companyFolderId);
         return [...remaining, ...parseCompanySheetActions(payload.data.Actions ?? [], companyFolderId)];
       });
+
+      setCompanyAuthPasswords((current) => ({
+        ...current,
+        ...parseCompanyConfigPasswords(payload.data.Config ?? []),
+      }));
 
       return payload;
     } catch (error) {
@@ -4713,7 +4965,13 @@ function App() {
       if (user.username === loginIdentity) {
         return true;
       }
-      return `${user.username}@qmsprecast.co.uk` === loginIdentity;
+      if (normalizeIdentity(user.username) === normalizeIdentity(loginIdentity)) {
+        return true;
+      }
+      if (`${user.username}@qmsprecast.co.uk` === loginIdentity) {
+        return true;
+      }
+      return false;
     });
     if (!match) {
       pushToast("Sign in failed", "Please check your username and password.", "warning");
@@ -4773,7 +5031,7 @@ function App() {
   };
 
   const handleToggleRoleNavVisibility = (role: Role, navItemId: NavItemId) => {
-    if (navItemId === "dashboard" || navItemId === "account") {
+    if (navItemId === "dashboard" || navItemId === "account" || navItemId === "incidents") {
       return;
     }
     if (!canRoleAccessNavItem(role, navItemId)) {
@@ -4793,6 +5051,48 @@ function App() {
       ...current,
       [role]: !(current[role] ?? true),
     }));
+  };
+
+  const handleSendGodModeAppCompanyInvite = async () => {
+    if (!currentUser || currentUser.role !== "Master") {
+      return;
+    }
+    const trimmed = godModeAppInviteEmail.trim().toLowerCase();
+    if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      pushToast("Email required", "Enter a valid email address for the new company administrator.", "warning");
+      return;
+    }
+    try {
+      const response = await fetch("/api/onboarding/app-invites/new-company", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: trimmed, invitedBy: currentUser.name }),
+      });
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        delivery?: "smtp" | "manual";
+        onboardingUrl?: string;
+        mailtoUrl?: string;
+      };
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "Unable to send invite.");
+      }
+      setGodModeAppInviteEmail("");
+      pushToast(
+        payload.delivery === "manual" ? "Invite draft ready" : "Invite sent",
+        payload.delivery === "manual"
+          ? "SMTP is not configured. Use the generated mail draft or share the onboarding link manually."
+          : `App onboarding link sent to ${trimmed}.`,
+        "success",
+      );
+    } catch (error) {
+      pushToast(
+        "Invite failed",
+        error instanceof Error ? error.message : "Unable to send new company invite.",
+        "warning",
+      );
+    }
   };
 
   const handleInviteUser = async () => {
@@ -4828,16 +5128,27 @@ function App() {
       return;
     }
 
-    if (!onboardingSource?.formId) {
-      pushToast("Onboarding form unavailable", "Configure or reconnect Google so the onboarding form can be sent.", "warning");
+    const sheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput);
+    const companyFolderId = selectedFolder?.id || extractGoogleResourceId(folderIdInput);
+    if (!googleConnected) {
+      pushToast("Google not connected", "Connect Google on the server before sending app onboarding invites.", "warning");
+      return;
+    }
+    if (!sheetId || !companyFolderId) {
+      pushToast(
+        "Workspace required",
+        "Select a company folder and ensure the master sheet is loaded before sending invites.",
+        "warning",
+      );
       return;
     }
 
     let inviteDelivery: "smtp" | "manual" = "smtp";
     let inviteMailtoUrl = "";
     let inviteSenderEmail = "";
+    let appOnboardingUrl = "";
     try {
-      const response = await fetch("/api/onboarding/invite", {
+      const response = await fetch("/api/onboarding/app-invites/company-user", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -4846,10 +5157,19 @@ function App() {
           email: trimmedEmail,
           role: inviteRole,
           invitedBy: currentUser.name,
-          onboardingFormId: onboardingSource.formId,
+          companyFolderId,
+          masterSheetId: sheetId,
+          companyName: selectedFolder?.name || "",
         }),
       });
-      const payload = (await response.json()) as { ok?: boolean; error?: string; delivery?: "smtp" | "manual"; mailtoUrl?: string; senderEmail?: string };
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        delivery?: "smtp" | "manual";
+        mailtoUrl?: string;
+        senderEmail?: string;
+        onboardingUrl?: string;
+      };
 
       if (!response.ok || !payload.ok) {
         throw new Error(payload.error || "Unable to send onboarding invite email.");
@@ -4857,6 +5177,7 @@ function App() {
       inviteDelivery = payload.delivery || "smtp";
       inviteMailtoUrl = payload.mailtoUrl || "";
       inviteSenderEmail = payload.senderEmail || "";
+      appOnboardingUrl = payload.onboardingUrl || "";
     } catch (error) {
       pushToast(
         "Invite send failed",
@@ -4875,6 +5196,7 @@ function App() {
       sentAt: formatStamp(),
       status: "Invite sent",
       mailtoUrl: inviteMailtoUrl || undefined,
+      appOnboardingUrl: appOnboardingUrl || undefined,
     };
     const nextInvitedUsers = [createdInvite, ...invitedUsers];
     setInvitedUsers(nextInvitedUsers);
@@ -4902,16 +5224,19 @@ function App() {
 
   const handleResendInvite = async (invite: UserInvite) => {
     if (!currentUser) return;
-    if (!onboardingSource?.formId) {
-      pushToast("Onboarding form unavailable", "Configure or reconnect Google so the onboarding form can be sent.", "warning");
+    const sheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput);
+    const companyFolderId = selectedFolder?.id || extractGoogleResourceId(folderIdInput);
+    if (!googleConnected || !sheetId || !companyFolderId) {
+      pushToast("Workspace required", "Connect Google and select a company folder before resending invites.", "warning");
       return;
     }
 
     let inviteDelivery: "smtp" | "manual" = "smtp";
     let inviteMailtoUrl = invite.mailtoUrl || "";
     let inviteSenderEmail = invite.senderEmail || "";
+    let appOnboardingUrl = invite.appOnboardingUrl || "";
     try {
-      const response = await fetch("/api/onboarding/invite", {
+      const response = await fetch("/api/onboarding/app-invites/company-user", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -4920,16 +5245,26 @@ function App() {
           email: invite.email,
           role: invite.role,
           invitedBy: currentUser.name,
-          onboardingFormId: onboardingSource.formId,
+          companyFolderId,
+          masterSheetId: sheetId,
+          companyName: selectedFolder?.name || "",
         }),
       });
-      const payload = (await response.json()) as { ok?: boolean; error?: string; delivery?: "smtp" | "manual"; mailtoUrl?: string; senderEmail?: string };
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        delivery?: "smtp" | "manual";
+        mailtoUrl?: string;
+        senderEmail?: string;
+        onboardingUrl?: string;
+      };
       if (!response.ok || !payload.ok) {
         throw new Error(payload.error || "Unable to resend onboarding invite email.");
       }
       inviteDelivery = payload.delivery || "smtp";
       inviteMailtoUrl = payload.mailtoUrl || inviteMailtoUrl;
       inviteSenderEmail = payload.senderEmail || inviteSenderEmail;
+      appOnboardingUrl = payload.onboardingUrl || appOnboardingUrl;
     } catch (error) {
       pushToast(
         "Resend failed",
@@ -4948,6 +5283,7 @@ function App() {
             invitedBy: currentUser.name,
             senderEmail: inviteSenderEmail || undefined,
             mailtoUrl: inviteMailtoUrl || undefined,
+            appOnboardingUrl: appOnboardingUrl || undefined,
           }
         : item,
     );
@@ -7129,7 +7465,7 @@ function App() {
     if (currentUser?.role === "Master" && screen === "onboarding") {
       setScreen("admin");
     }
-    if (currentUser && !canAccessOnboarding(currentUser.role) && screen === "onboarding") {
+    if (currentUser && !canAccessOnboardingNav(currentUser.role) && screen === "onboarding") {
       setScreen("dashboard");
     }
     if (currentUser && !canAccessSchedules(currentUser.role) && screen === "schedules") {
@@ -7156,6 +7492,10 @@ function App() {
   }, [currentUser, screen, visibleNavItems]);
 
   if (!currentUser) {
+    const inviteTok = new URLSearchParams(window.location.search).get("invite");
+    if (inviteTok?.trim()) {
+      return <AppHostedOnboardingCompletion inviteToken={inviteTok.trim()} />;
+    }
     return (
       <div
         className={[
@@ -7809,7 +8149,7 @@ function App() {
 
             {(screen === "admin" || screen === "onboarding") &&
               canAccessAdmin(currentUser.role) &&
-              (screen !== "onboarding" || canAccessOnboarding(currentUser.role)) && (
+              (screen !== "onboarding" || canAccessAdminOnboardingWorkspace(currentUser.role)) && (
               <AdminScreen
                 currentUser={currentUser}
                 googleConnected={googleConnected}
@@ -7914,6 +8254,9 @@ function App() {
                 onAddSite={handleAddSite}
                 onArchiveSite={handleArchiveSite}
                 standaloneOnboarding={screen === "onboarding"}
+                godModeAppInviteEmail={godModeAppInviteEmail}
+                onGodModeAppInviteEmailChange={setGodModeAppInviteEmail}
+                onSendGodModeAppCompanyInvite={handleSendGodModeAppCompanyInvite}
                 scheduleNameInput={scheduleNameInput}
                 scheduleAreaInput={scheduleAreaInput}
                 scheduleOwnerInput={scheduleOwnerInput}
@@ -9257,13 +9600,15 @@ function GodModeDashboard({
                 <div className="flex flex-wrap gap-2">
                   {configurableNavItems.map((item) => {
                     const baselineVisible = canRoleAccessNavItem(role, item.id);
-                    const enabled = baselineVisible && (roleNavVisibility[role]?.[item.id] ?? false);
+                    const enabled = item.id === "incidents"
+                      ? baselineVisible
+                      : baselineVisible && (roleNavVisibility[role]?.[item.id] ?? false);
                     return (
                       <button
                         key={`${role}-${item.id}`}
                         type="button"
                         onClick={() => onToggleRoleNavVisibility(role, item.id)}
-                        disabled={!baselineVisible}
+                        disabled={!baselineVisible || item.id === "incidents"}
                         className={[
                           "rounded-full border px-3 py-1 text-xs font-semibold transition",
                           !baselineVisible
@@ -9272,7 +9617,13 @@ function GodModeDashboard({
                               ? "border-emerald-300 bg-emerald-100 text-emerald-800"
                               : "border-slate-300 bg-white text-slate-600",
                         ].join(" ")}
-                        title={baselineVisible ? `Toggle ${item.label}` : `${item.label} is blocked by baseline role permissions`}
+                        title={
+                          item.id === "incidents"
+                            ? `${item.label} is always enabled for all roles`
+                            : baselineVisible
+                              ? `Toggle ${item.label}`
+                              : `${item.label} is blocked by baseline role permissions`
+                        }
                       >
                         {item.label}
                       </button>
@@ -11844,6 +12195,9 @@ function AdminScreen({
   onAddSite,
   onArchiveSite,
   standaloneOnboarding = false,
+  godModeAppInviteEmail,
+  onGodModeAppInviteEmailChange,
+  onSendGodModeAppCompanyInvite,
 }: {
   currentUser: User;
   googleConnected: boolean;
@@ -11962,6 +12316,9 @@ function AdminScreen({
   onAddSite: () => void;
   onArchiveSite: (siteId: string) => void;
   standaloneOnboarding?: boolean;
+  godModeAppInviteEmail: string;
+  onGodModeAppInviteEmailChange: (value: string) => void;
+  onSendGodModeAppCompanyInvite: () => void;
 }) {
   const adminOnly = !canAccessAdmin(currentUser.role);
   const masterOnly = currentUser.role !== "Master";
@@ -11972,7 +12329,8 @@ function AdminScreen({
   const [adminView, setAdminView] = useState<"overview" | "onboarding">(standaloneOnboarding ? "onboarding" : "overview");
   const [showAdvancedOnboardingActions, setShowAdvancedOnboardingActions] = useState(false);
   const [pendingAdminScrollTarget, setPendingAdminScrollTarget] = useState<string | null>(null);
-  const onboardingMode = standaloneOnboarding || (canAccessOnboarding(currentUser.role) && adminView === "onboarding");
+  const onboardingMode =
+    standaloneOnboarding || (canAccessAdminOnboardingWorkspace(currentUser.role) && adminView === "onboarding");
   const godModeFullVisibility = currentUser.role === "Master";
   useEffect(() => {
     if (!pendingAdminScrollTarget) {
@@ -12071,7 +12429,34 @@ function AdminScreen({
         </section>
       )}
 
-      {canAccessOnboarding(currentUser.role) && (onboardingMode || godModeFullVisibility) && (
+      {!masterOnly && (
+        <section className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.24)]">
+          <SectionHeader
+            icon="spark"
+            eyebrow="New tenant"
+            title="Invite new company (app onboarding)"
+            subtitle="Send a secure in-app link — the recipient creates the Drive workspace and their Admin account."
+          />
+          <div className="rounded-[1.5rem] bg-slate-900 p-4">
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Administrator email</label>
+            <input
+              value={godModeAppInviteEmail}
+              onChange={(event) => onGodModeAppInviteEmailChange(event.target.value)}
+              placeholder="admin@newcompany.com"
+              className="h-12 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 text-sm text-white outline-none focus:border-sky-400"
+            />
+            <button
+              type="button"
+              onClick={onSendGodModeAppCompanyInvite}
+              className={`mt-3 h-11 w-full rounded-2xl bg-slate-100 text-sm font-semibold text-slate-900 ${slatePrimaryCtaInteract}`}
+            >
+              Send app onboarding link
+            </button>
+          </div>
+        </section>
+      )}
+
+      {currentUser.role === "Master" && (onboardingMode || godModeFullVisibility) && (
         <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
           {!standaloneOnboarding && (
             <div className="mb-3">
@@ -12580,7 +12965,7 @@ function AdminScreen({
                   onClick={onInviteUser}
                   className={`mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white active:scale-[0.99] ${slatePrimaryCtaInteract}`}
                 >
-                  Send onboarding link
+                  Send app onboarding link
                 </button>
                 <button
                   onClick={onResyncUsers}
@@ -12606,7 +12991,17 @@ function AdminScreen({
                         </p>
                         {invite.senderEmail && <p className="truncate text-xs text-slate-300">From {invite.senderEmail}</p>}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {invite.appOnboardingUrl && (
+                          <a
+                            href={invite.appOnboardingUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center justify-center rounded-xl border border-sky-400/50 bg-sky-500/15 px-3 py-2 text-xs font-semibold text-sky-200 no-underline"
+                          >
+                            Open link
+                          </a>
+                        )}
                         {invite.mailtoUrl && (
                           <a href={invite.mailtoUrl} className={`inline-flex items-center justify-center rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white no-underline ${slatePrimaryCtaInteract}`}>
                             Open email
@@ -12659,7 +13054,7 @@ function AdminScreen({
             Enable browser notifications
           </button>
           <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            Invite emails open as mail drafts from the device, while live alerts use browser notifications.
+            Invite emails use the in-app onboarding page. If SMTP is not configured, use the mail draft or copy the link from the toast.
           </div>
         </div>
               </section>
