@@ -1,7 +1,7 @@
 {
-  "name": "BERT — Business Evaluation & Review Tool",
-  "short_name": "BERT",
-  "description": "Business Evaluation & Review Tool — audits, actions, evidence, and schedules for your company.",
+  "name": "bert. — Business. Evaluation. Reporting. Tool.",
+  "short_name": "bert.",
+  "description": "Business. Evaluation. Reporting. Tool. — audits, actions, evidence, and schedules for your company.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -10,13 +10,13 @@
   "theme_color": "#1d4ed8",
   "icons": [
     {
-      "src": "/qms-icon.svg",
+      "src": "/bert-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
     },
     {
-      "src": "/qms-maskable-icon.svg",
+      "src": "/bert-maskable-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "maskable"

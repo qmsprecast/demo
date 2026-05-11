@@ -1,4 +1,5 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { BertLogo } from "./src/components/BertLogo";
 
 type Role = "Master" | "Admin" | "Manager" | "Auditor";
 type AuditStatus = "green" | "amber" | "red";
@@ -609,7 +610,7 @@ type AuditCompletionSummaryState = {
 };
 
 const companyName = (import.meta.env.VITE_APP_NAME || "BERT").trim();
-const PRODUCT_TAGLINE = "Business Evaluation & Review Tool";
+const PRODUCT_TAGLINE = "Business. Evaluation. Reporting. Tool.";
 const PRODUCT_BRAND_FULL = `${companyName} — ${PRODUCT_TAGLINE}`;
 function isDemoRoleSwitchEnabled() {
   const rawValue = String(import.meta.env.VITE_ENABLE_DEMO_ROLE_SWITCH || "").trim().toLowerCase();
@@ -2145,6 +2146,18 @@ function canAccessAdmin(role: Role) {
   return role === "Master" || role === "Admin";
 }
 
+/** Control (admin) workspace tab — company Admin only; God Mode uses Onboarding only. */
+function canAccessControlScreen(role: Role) {
+  return role === "Admin";
+}
+
+function getHomeScreenForRole(role: Role): Screen {
+  if (role === "Master") {
+    return "onboarding";
+  }
+  return "dashboard";
+}
+
 function canAccessSchedules(role: Role) {
   return role === "Master" || role === "Admin" || role === "Manager";
 }
@@ -2154,9 +2167,9 @@ function canAccessAdminOnboardingWorkspace(role: Role) {
   return role === "Master" || role === "Admin";
 }
 
-/** Dedicated “Onboarding” menu screen — company admins only (God Mode uses Control). */
+/** Dedicated Onboarding menu — company Admin and God Mode (platform setup). */
 function canAccessOnboardingNav(role: Role) {
-  return role === "Admin";
+  return role === "Admin" || role === "Master";
 }
 
 function canAccessReports(role: Role) {
@@ -2188,7 +2201,10 @@ function canEditLegalName(role: Role) {
 }
 
 function canRoleAccessNavItem(role: Role, itemId: NavItemId) {
-  if (itemId === "admin") return canAccessAdmin(role);
+  if (role === "Master") {
+    return itemId === "onboarding" || itemId === "account";
+  }
+  if (itemId === "admin") return canAccessControlScreen(role);
   if (itemId === "onboarding") return canAccessOnboardingNav(role);
   if (itemId === "schedules") return canAccessSchedules(role);
   if (itemId === "reports") return canAccessReports(role);
@@ -3144,13 +3160,10 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
       ].join(" ")}
     >
       <div className="mx-auto max-w-lg">
-        <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-400 to-orange-600 text-sm font-bold leading-tight text-slate-950">
-            BERT
-          </div>
-          <div>
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-8">
+          <BertLogo variant="full" tone="onDark" size="md" className="shrink-0" />
+          <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.28em] text-blue-400/90">Onboarding</p>
-            <p className="mt-1 text-xs text-slate-500">{PRODUCT_TAGLINE}</p>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">
               {!details
                 ? "Complete onboarding"
@@ -3657,7 +3670,7 @@ function App() {
       return "";
     }
     if (currentUser.role === "Master") {
-      return "God Mode access for platform setup, company provisioning, and full control";
+      return "Onboarding — connect Google, link the company workspace, and go live";
     }
     if (currentUser.role === "Admin") {
       return "Platform configuration and template control";
@@ -4994,7 +5007,7 @@ function App() {
     setAccountNameInput(match.name);
     setAccountPhotoUrl(getStoredProfilePhoto(match));
     window.localStorage.setItem(userStorageKey, JSON.stringify(match));
-    setScreen("dashboard");
+    setScreen(getHomeScreenForRole(match.role));
     setUsername("");
     setPassword("");
     pushToast("Welcome back", `Signed in as ${getRoleDisplayName(match.role)}.`, "success");
@@ -5005,7 +5018,7 @@ function App() {
     setAccountNameInput(user.name);
     setAccountPhotoUrl(getStoredProfilePhoto(user));
     window.localStorage.setItem(userStorageKey, JSON.stringify(user));
-    setScreen("dashboard");
+    setScreen(getHomeScreenForRole(user.role));
     pushToast("Profile switched", `Now viewing as ${getRoleDisplayName(user.role)}.`, "success");
   };
 
@@ -6299,7 +6312,7 @@ function App() {
 
   const handleAddSite = () => {
     if (!canAccessAdmin(currentUser?.role || "Auditor")) {
-      pushToast("Access restricted", "Only Admin and God Mode can add sites.", "warning");
+      pushToast("Access restricted", "Only company administrators with full workspace rights can add sites.", "warning");
       return;
     }
     const input = window.prompt("New site name");
@@ -6334,7 +6347,7 @@ function App() {
 
   const handleToggleUserSiteAssignment = (email: string, siteId: string) => {
     if (!canAccessAdmin(currentUser?.role || "Auditor")) {
-      pushToast("Access restricted", "Only Admin and God Mode can change site assignments.", "warning");
+      pushToast("Access restricted", "Only company administrators with full workspace rights can change site assignments.", "warning");
       return;
     }
     const key = normalizeIdentity(email);
@@ -6528,7 +6541,7 @@ function App() {
     setTemplates(demo.templates);
     setCompanySheetSync(demo.companySheetSync);
     setSyncState("Synced");
-    setScreen("dashboard");
+    setScreen(getHomeScreenForRole(currentUser?.role || "Admin"));
     pushToast("Demo data loaded", "Realistic precast demo data is now active for review.", "success");
   };
 
@@ -6547,7 +6560,7 @@ function App() {
     setSyncQueue((current) => current.filter((item) => !item.id.startsWith("sync-demo-") && !item.localId.includes("demo")));
     setTemplates((current) => current.filter((template) => !template.id.startsWith("template-demo-")));
     setCompanySheetSync((current) => (current?.sheetId === "demo-master-sheet" ? null : current));
-    setScreen("dashboard");
+    setScreen(getHomeScreenForRole(currentUser?.role || "Admin"));
     pushToast("Demo data cleared", "Demo-only records were removed from this tablet.", "neutral");
   };
 
@@ -6696,7 +6709,7 @@ function App() {
 
   const handleAddAnswerPromptToDraftQuestion = (questionId: string, answer: Answer) => {
     if (!currentUser || !canAccessAdmin(currentUser.role)) {
-      pushToast("Access restricted", "Only Admin and God Mode can configure answer prompts.", "warning");
+      pushToast("Access restricted", "Only company administrators with full workspace rights can configure answer prompts.", "warning");
       return;
     }
     const promptText = window.prompt("Add action prompt for this answer");
@@ -7472,35 +7485,32 @@ function App() {
   }, [googleConnected]);
 
   useEffect(() => {
-    if (currentUser && !canAccessAdmin(currentUser.role) && screen === "admin") {
-      setScreen("dashboard");
-    }
-    if (currentUser?.role === "Master" && screen === "onboarding") {
-      setScreen("admin");
+    if (currentUser && !canAccessControlScreen(currentUser.role) && screen === "admin") {
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessOnboardingNav(currentUser.role) && screen === "onboarding") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessSchedules(currentUser.role) && screen === "schedules") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessReports(currentUser.role) && screen === "reports") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessActions(currentUser.role) && screen === "actions") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessActions(currentUser.role) && screen === "nonConformance") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canSubmitIncidents(currentUser.role) && screen === "incidents") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessAuditsCentre(currentUser.role) && screen === "audits") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && screen !== "complete" && !visibleNavItems.some((item) => item.id === screen)) {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
   }, [currentUser, screen, visibleNavItems]);
 
@@ -7557,19 +7567,14 @@ function App() {
               </div>
 
               <div className="relative z-10 grid h-full min-h-0 w-full grid-cols-1 items-center gap-3 sm:grid-cols-2 sm:gap-4">
-                <div className="flex flex-col justify-center gap-2 px-1 py-0 sm:px-2">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 to-orange-600 text-xs font-bold leading-tight text-slate-950 shadow-[0_8px_20px_rgba(249,115,22,0.22)] sm:h-12 sm:w-12 sm:rounded-2xl sm:text-sm">
-                      BERT
-                    </div>
-                    <div className="min-w-0">
-                      <h1 className="text-2xl font-semibold leading-tight tracking-tight text-white sm:text-3xl">BERT</h1>
-                      <p className="mt-0.5 text-xs leading-snug text-slate-400 sm:text-sm">
-                        {PRODUCT_TAGLINE}
-                      </p>
-                    </div>
-                  </div>
-                  <p className="text-xs font-medium text-slate-400 sm:text-sm sm:text-slate-300">Secure • Reliable • Compliant</p>
+                <div className="flex flex-col justify-center gap-3 px-1 py-0 sm:px-2">
+                  <BertLogo
+                    variant="full"
+                    tone={themeMode === "dark" ? "onDark" : "onLight"}
+                    size="lg"
+                    className="w-full"
+                  />
+                  <p className="text-xs font-medium text-slate-500 sm:text-sm sm:text-slate-400">Secure • Reliable • Compliant</p>
                 </div>
 
                 <div className="flex min-h-0 items-center">
@@ -7691,6 +7696,7 @@ function App() {
             </div>
             <div className="flex items-center gap-1">
               {demoRoleSwitchEnabled && <div className="hidden items-center gap-1 lg:flex">
+                {currentUser.role !== "Admin" && (
                 <button
                   type="button"
                   onClick={() => handleQuickRoleSwitch("Master", "God Mode")}
@@ -7698,6 +7704,7 @@ function App() {
                 >
                   GOD
                 </button>
+                )}
                 <button
                   type="button"
                   onClick={() => handleQuickRoleSwitch("Admin", "Admin")}
@@ -7722,7 +7729,7 @@ function App() {
               </div>}
               <button
                 type="button"
-                onClick={() => setScreen("dashboard")}
+                onClick={() => setScreen(getHomeScreenForRole(currentUser.role))}
                 className={["rounded-full border px-1.5 py-0 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-orange-50"].join(" ")}
               >
                 Layout options
@@ -7743,6 +7750,13 @@ function App() {
           </div>
           <div className="qms-app-header-main">
             <div className="flex items-center gap-2">
+              <div className="hidden shrink-0 pr-0.5 sm:block">
+                <BertLogo
+                  variant="wordmark"
+                  tone={themeMode === "dark" ? "onDark" : "onLight"}
+                  size="sm"
+                />
+              </div>
               <button
                 onClick={handleLogout}
                 className={`h-6 shrink-0 rounded-md bg-[var(--bert-signal-orange)] px-2 text-[9px] font-semibold text-[var(--qms-navy-950)] shadow-sm ${slatePrimaryCtaInteract}`}
@@ -7940,10 +7954,6 @@ function App() {
                 onRepairWorkspace={repairWorkspace}
                 onLoadDemoData={handleLoadDemoData}
                 onClearDemoData={handleClearDemoData}
-                roleNavVisibility={roleNavVisibility}
-                onToggleRoleNavVisibility={handleToggleRoleNavVisibility}
-                roleSiteSelectorVisibility={roleSiteSelectorVisibility}
-                onToggleRoleSiteSelectorVisibility={handleToggleRoleSiteSelectorVisibility}
               />
             )}
 
@@ -8163,9 +8173,8 @@ function App() {
               />
             )}
 
-            {(screen === "admin" || screen === "onboarding") &&
-              canAccessAdmin(currentUser.role) &&
-              (screen !== "onboarding" || canAccessAdminOnboardingWorkspace(currentUser.role)) && (
+            {((screen === "admin" && canAccessControlScreen(currentUser.role)) ||
+              (screen === "onboarding" && canAccessAdminOnboardingWorkspace(currentUser.role))) && (
               <AdminScreen
                 currentUser={currentUser}
                 googleConnected={googleConnected}
@@ -8531,10 +8540,6 @@ function DashboardScreen({
   onRepairWorkspace,
   onLoadDemoData,
   onClearDemoData,
-  roleNavVisibility,
-  onToggleRoleNavVisibility,
-  roleSiteSelectorVisibility,
-  onToggleRoleSiteSelectorVisibility,
 }: {
   currentUser: User;
   workspaceName: string;
@@ -8584,10 +8589,6 @@ function DashboardScreen({
   onRepairWorkspace: () => void;
   onLoadDemoData: () => void;
   onClearDemoData: () => void;
-  roleNavVisibility: RoleNavVisibilityMatrix;
-  onToggleRoleNavVisibility: (role: Role, navItemId: NavItemId) => void;
-  roleSiteSelectorVisibility: RoleSiteSelectorVisibility;
-  onToggleRoleSiteSelectorVisibility: (role: Role) => void;
 }) {
   if (currentUser.role === "Auditor") {
     return (
@@ -8635,23 +8636,7 @@ function DashboardScreen({
   }
 
   if (currentUser.role === "Master") {
-    return (
-      <GodModeDashboard
-        workspaceValidation={workspaceValidation}
-        selectedFolder={selectedFolder}
-        reportUsersCount={reportUsersCount}
-        activeSchedulesCount={activeSchedulesCount}
-        templatesCount={templatesCount}
-        onValidateWorkspace={onValidateWorkspace}
-        onRepairWorkspace={onRepairWorkspace}
-        onLoadDemoData={onLoadDemoData}
-        onClearDemoData={onClearDemoData}
-        roleNavVisibility={roleNavVisibility}
-        onToggleRoleNavVisibility={onToggleRoleNavVisibility}
-        roleSiteSelectorVisibility={roleSiteSelectorVisibility}
-        onToggleRoleSiteSelectorVisibility={onToggleRoleSiteSelectorVisibility}
-      />
-    );
+    return null;
   }
 
   return null;
@@ -9464,190 +9449,6 @@ function AdminDashboard({
           <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">Pending sync {pendingSyncCount}</div>
           <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Failed sync {failedSyncCount}</div>
           <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Conflicts {failedSyncCount}</div>
-        </div>
-      </section>
-    );
-  };
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
-          <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
-            Layout options
-          </button>
-        </div>
-        {showLayoutOptions && (
-          <div className="mt-2 space-y-2">
-            {sectionOrder.map((section, index) => (
-              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
-                <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
-                <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-      {visibleSectionOrder.map((section) => renderSection(section))}
-    </div>
-  );
-}
-
-function GodModeDashboard({
-  workspaceValidation,
-  selectedFolder,
-  reportUsersCount,
-  activeSchedulesCount,
-  templatesCount,
-  onValidateWorkspace,
-  onRepairWorkspace,
-  onLoadDemoData,
-  onClearDemoData,
-  roleNavVisibility,
-  onToggleRoleNavVisibility,
-  roleSiteSelectorVisibility,
-  onToggleRoleSiteSelectorVisibility,
-}: {
-  workspaceValidation: WorkspaceValidation | null;
-  selectedFolder: CompanyFolder | null;
-  reportUsersCount: number;
-  activeSchedulesCount: number;
-  templatesCount: number;
-  onValidateWorkspace: () => void;
-  onRepairWorkspace: () => void;
-  onLoadDemoData: () => void;
-  onClearDemoData: () => void;
-  roleNavVisibility: RoleNavVisibilityMatrix;
-  onToggleRoleNavVisibility: (role: Role, navItemId: NavItemId) => void;
-  roleSiteSelectorVisibility: RoleSiteSelectorVisibility;
-  onToggleRoleSiteSelectorVisibility: (role: Role) => void;
-}) {
-  const {
-    showLayoutOptions,
-    setShowLayoutOptions,
-    sectionOrder,
-    sectionVisibility,
-    visibleSectionOrder,
-    toggleSection,
-    moveSection,
-  } = useDashboardSectionLayout("qms-precast-layout-godmode", ["workspaceHealth", "roleMatrix", "repairActions", "companySetup"]);
-
-  const renderSection = (section: string) => {
-    if (section === "workspaceHealth") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="shield" eyebrow="Workspace health" title="Workspace health" subtitle="Validation and configuration status." />
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <FolderCheckRow label="Google folder connected" ok={Boolean(selectedFolder)} />
-            <FolderCheckRow label="Master sheet valid" ok={Boolean(workspaceValidation?.folders.companyFolder)} />
-            <FolderCheckRow label="Required tabs present" ok={(workspaceValidation?.missingTabs.length || 0) === 0} />
-            <FolderCheckRow label="Schema version valid" ok={Boolean(workspaceValidation?.ok)} />
-          </div>
-        </section>
-      );
-    }
-    if (section === "roleMatrix") {
-      const roles: Role[] = ["Master", "Admin", "Manager", "Auditor"];
-      const configurableNavItems = navItems.filter((item) => item.id !== "dashboard" && item.id !== "account");
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="checklist" eyebrow="Profile access" title="Role visibility matrix" subtitle="Choose which tabs each role can see in their profile." />
-          <div className="mt-3 space-y-3">
-            {roles.map((role) => (
-              <div key={role} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-sm font-semibold text-slate-900">{getRoleDisplayName(role)}</p>
-                  <p className="text-xs text-slate-500">Dashboard and Account are always visible.</p>
-                </div>
-                <div className="mb-2">
-                  <button
-                    type="button"
-                    onClick={() => onToggleRoleSiteSelectorVisibility(role)}
-                    className={[
-                      "rounded-full border px-3 py-1 text-xs font-semibold transition",
-                      roleSiteSelectorVisibility[role] ? "border-blue-300 bg-blue-100 text-blue-900" : "border-slate-300 bg-white text-slate-600",
-                    ].join(" ")}
-                  >
-                    Site selector
-                  </button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {configurableNavItems.map((item) => {
-                    const baselineVisible = canRoleAccessNavItem(role, item.id);
-                    const enabled = item.id === "incidents"
-                      ? baselineVisible
-                      : baselineVisible && (roleNavVisibility[role]?.[item.id] ?? false);
-                    return (
-                      <button
-                        key={`${role}-${item.id}`}
-                        type="button"
-                        onClick={() => onToggleRoleNavVisibility(role, item.id)}
-                        disabled={!baselineVisible || item.id === "incidents"}
-                        className={[
-                          "rounded-full border px-3 py-1 text-xs font-semibold transition",
-                          !baselineVisible
-                            ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                            : enabled
-                              ? "border-blue-300 bg-blue-100 text-blue-900"
-                              : "border-slate-300 bg-white text-slate-600",
-                        ].join(" ")}
-                        title={
-                          item.id === "incidents"
-                            ? `${item.label} is always enabled for all roles`
-                            : baselineVisible
-                              ? `Toggle ${item.label}`
-                              : `${item.label} is blocked by baseline role permissions`
-                        }
-                      >
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      );
-    }
-    if (section === "repairActions") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="sync" eyebrow="Repair actions" title="Repair actions" subtitle="Validate and repair the current workspace." />
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button onClick={onValidateWorkspace} className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>Validate workspace</button>
-            <button onClick={onRepairWorkspace} className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700">Repair workspace</button>
-            <button
-              type="button"
-              onClick={onLoadDemoData}
-              className="h-11 rounded-xl border border-sky-200 bg-sky-50 px-4 text-sm font-semibold text-sky-800"
-            >
-              Load Demo Data
-            </button>
-            <button
-              type="button"
-              onClick={onClearDemoData}
-              className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700"
-            >
-              Clear Demo Data
-            </button>
-          </div>
-          <p className="mt-2 text-xs text-slate-500">
-            Demo data is local-only and for review; it does not overwrite a linked Google company sheet.
-          </p>
-        </section>
-      );
-    }
-    return (
-      <section key={section} className="rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-[0_10px_24px_rgba(2,6,23,0.35)]">
-        <SectionHeader icon="chart" eyebrow="Company setup" title="Company setup status" subtitle="Provisioning completeness snapshot." />
-        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <div className="rounded-xl border border-[rgba(249,115,22,0.45)] bg-[rgba(219,234,254,0.92)] px-3 py-2"><p className="text-xs text-blue-900">Users created</p><p className="text-lg font-semibold text-blue-950">{reportUsersCount}</p></div>
-          <div className="rounded-xl border border-[rgba(249,115,22,0.45)] bg-[rgba(219,234,254,0.92)] px-3 py-2"><p className="text-xs text-blue-900">Schedules active</p><p className="text-lg font-semibold text-blue-950">{activeSchedulesCount}</p></div>
-          <div className="rounded-xl border border-[rgba(249,115,22,0.45)] bg-[rgba(219,234,254,0.92)] px-3 py-2"><p className="text-xs text-blue-900">Templates present</p><p className="text-lg font-semibold text-blue-950">{templatesCount}</p></div>
         </div>
       </section>
     );
@@ -12322,7 +12123,7 @@ function AdminScreen({
 
   return (
     <div className="space-y-4">
-      {(!onboardingMode || godModeFullVisibility) && (
+      {(!onboardingMode || godModeFullVisibility) && currentUser.role !== "Master" && (
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
         <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div>
@@ -12365,7 +12166,7 @@ function AdminScreen({
             </button>
           ))}
         </div>
-        {(currentUser.role === "Master" || currentUser.role === "Admin") && (
+        {currentUser.role === "Admin" && (
           <div className="mt-3 rounded-xl border border-sky-100 bg-sky-50/80 p-3">
             <button
               type="button"
@@ -12389,18 +12190,41 @@ function AdminScreen({
         </section>
       )}
 
-      {masterOnly && (
+      {currentUser.role === "Master" && (
+        <section className="rounded-2xl border border-sky-200 bg-sky-50/90 p-4 shadow-sm">
+          <p className="text-sm font-semibold text-sky-950">Local review data</p>
+          <p className="mt-1 text-xs text-sky-900/85">Optional sample payloads for demos — stored on this device only; does not write to linked Google Sheets.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onLoadDemoData}
+              className="h-11 rounded-xl border border-sky-200 bg-white px-4 text-sm font-semibold text-sky-900 shadow-sm"
+            >
+              Load Demo Data
+            </button>
+            <button
+              type="button"
+              onClick={onClearDemoData}
+              className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm"
+            >
+              Clear Demo Data
+            </button>
+          </div>
+        </section>
+      )}
+
+      {masterOnly && currentUser.role !== "Admin" && (
         <section className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.24)]">
           <SectionHeader
             icon="shield"
             eyebrow="Platform control"
-            title="God Mode only"
-            subtitle="Company provisioning, Google connection, and live app population are restricted to platform control."
+            title="Platform setup only"
+            subtitle="Company provisioning, Google connection, and live app population are restricted to the platform setup account."
           />
           <div className="rounded-[1.5rem] bg-slate-900 p-4">
-            <p className="text-sm font-semibold text-white">Platform setup is managed in God Mode</p>
+            <p className="text-sm font-semibold text-white">This workspace is managed centrally</p>
             <p className="mt-2 text-sm leading-6 text-slate-300">
-              Google connection, company folder linking, and app population are only available from the God Mode account.
+              Google connection, company folder linking, and app population are only available from the platform setup account.
             </p>
           </div>
         </section>
@@ -12743,7 +12567,9 @@ function AdminScreen({
           <section id="admin-user-management" className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-sm">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">God Mode</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                  {currentUser.role === "Master" ? "Platform control" : "Company admin"}
+                </p>
                 <h3 className="mt-1 text-base font-semibold text-white">Company setup</h3>
                 <p className="text-sm text-slate-300">
                   Use this section for one-time company provisioning before inviting users.
@@ -12791,7 +12617,7 @@ function AdminScreen({
                 <h3 className="text-base font-semibold text-white">User management</h3>
                 <p className="text-sm text-slate-300">
                   {currentUser.role === "Master"
-                    ? "God Mode can create Admin, Manager, and Auditor users."
+                    ? "Platform control can create Admin, Manager, and Auditor users."
                     : currentUser.role === "Admin"
                       ? "Admins can create Admin, Manager, and Auditor users."
                       : "User creation is not available on this account."}
