@@ -987,6 +987,17 @@ const appMotionStyles = `
     justify-content: center;
   }
 
+  /* Sign-in: drop fixed portrait aspect + allow scroll so the CTA is never clipped. */
+  .qms-tablet-device.qms-tablet-device--signin {
+    aspect-ratio: auto;
+    width: min(92vw, 42rem);
+    max-height: min(96dvh, 56rem);
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .qms-tablet-device {
     position: relative;
     width: min(92vw, 41rem);
@@ -7508,11 +7519,11 @@ function App() {
       >
         <style>{appMotionStyles}</style>
         <div className="qms-tablet-stage">
-          <div className="qms-tablet-device">
+          <div className="qms-tablet-device qms-tablet-device--signin">
             <div
               data-qms-theme={themeMode}
               className={[
-                "qms-login-shell qms-login-card relative flex h-full overflow-hidden rounded-[2.2rem] border p-6 backdrop-blur",
+                "qms-login-shell qms-login-card relative flex min-h-0 w-full flex-col overflow-y-auto overflow-x-hidden rounded-[2.2rem] border p-5 backdrop-blur sm:p-6",
                 themeMode === "dark"
                   ? "border-slate-800/80 bg-slate-950/80 shadow-[0_32px_90px_rgba(2,6,23,0.58)] text-white"
                   : "border-slate-200/85 bg-white/90 shadow-[0_28px_80px_rgba(15,23,42,0.14)] text-slate-900",
@@ -7543,8 +7554,8 @@ function App() {
                 </button>
               </div>
 
-              <div className="relative z-10 grid h-full w-full grid-cols-1 gap-6 lg:grid-cols-2">
-                <div className="flex flex-col justify-between p-8">
+              <div className="relative z-10 grid min-h-0 w-full grid-cols-1 gap-4 sm:gap-6 lg:h-full lg:grid-cols-2">
+                <div className="flex flex-col justify-between p-5 sm:p-8">
                   <div>
                     <div className="flex items-center gap-4">
                       <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-300 to-teal-500 text-xl font-bold text-slate-950 shadow-[0_12px_28px_rgba(20,211,166,0.26)]">
@@ -7559,10 +7570,10 @@ function App() {
                   <p className="text-sm font-medium text-slate-300">Secure • Reliable • Compliant</p>
                 </div>
 
-                <div className="flex items-center">
-                  <div className="w-full rounded-[1.8rem] border border-white/10 bg-white/[0.06] p-8 shadow-[0_24px_60px_rgba(2,6,23,0.45)] backdrop-blur-xl">
-                    <h2 className="text-center text-2xl font-semibold text-white">Sign in to your account</h2>
-                    <form className="mt-7 space-y-5" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
+                <div className="flex min-h-0 items-stretch lg:items-center">
+                  <div className="w-full rounded-[1.8rem] border border-white/10 bg-white/[0.06] p-5 shadow-[0_24px_60px_rgba(2,6,23,0.45)] backdrop-blur-xl sm:p-8">
+                    <h2 className="text-center text-xl font-semibold text-white sm:text-2xl">Sign in to your account</h2>
+                    <form className="mt-5 space-y-4 sm:mt-7 sm:space-y-5" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
                       <div>
                         <label className="mb-2 block text-sm font-medium text-slate-100">Username or email</label>
                         <div className="relative">
