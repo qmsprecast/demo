@@ -1,9 +1,46 @@
 @import "tailwindcss";
 
+/* BERT — Ink / Cobalt / Signal Orange (central brand tokens) */
 :root {
-  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-family: "Inter", "Segoe UI", sans-serif;
   color: #0f172a;
   background: #f8fafc;
+  --bert-ink: #020617;
+  --bert-graphite: #18181b;
+  --bert-cobalt: #1d4ed8;
+  --bert-cobalt-dark: #1e40af;
+  --bert-cobalt-light: #dbeafe;
+  --bert-signal-orange: #f97316;
+  --bert-orange-dark: #c2410c;
+  --bert-stone: #f8fafc;
+  --bert-white: #ffffff;
+  /* Readable cobalt-tinted text/icons on dark chrome (sidebar labels, etc.) */
+  --bert-chrome-accent: #93c5fd;
+
+  /* Legacy names kept so existing `var(--qms-*)` across the app map to the new scheme */
+  --qms-navy-950: var(--bert-ink);
+  --qms-navy-900: var(--bert-graphite);
+  --qms-navy-850: #27272a;
+  --qms-navy-800: #3f3f46;
+  --qms-slate-100: #f1f5f9;
+  --qms-slate-200: #e2e8f0;
+  /* Primary CTA / focus / filled controls (was teal) */
+  --qms-teal-500: var(--bert-signal-orange);
+  /* Brand cool accent on dark chrome & links (was mint teal) */
+  --qms-teal-400: var(--bert-chrome-accent);
+
+  --qms-shell-dark-radial: rgba(29, 78, 216, 0.14);
+  --qms-shell-dark-start: #020617;
+  --qms-shell-dark-mid: #0f172a;
+  --qms-shell-dark-end: #1e1b4b;
+  --qms-shell-light-radial: rgba(29, 78, 216, 0.07);
+  --qms-shell-light-start: #f8fafc;
+  --qms-shell-light-mid: #ffffff;
+  --qms-shell-light-end: #dbeafe;
+  --qms-hover-overlay-light: rgb(15 23 42 / 0.12);
+  --qms-hover-overlay-dark: rgb(255 255 255 / 0.12);
+  --qms-active-overlay-light: rgb(15 23 42 / 0.18);
+  --qms-active-overlay-dark: rgb(255 255 255 / 0.18);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -31,133 +68,4 @@ input,
 textarea,
 select {
   font: inherit;
-}
-
-/* --- A4 print layout (catalogue) — keep these rules together for PDF output --- */
-@media print {
-  @page {
-    size: A4 portrait;
-    margin: 12mm;
-  }
-
-  html,
-  body,
-  #root {
-    background: #fff !important;
-    color: #0f172a !important;
-    width: 100%;
-    min-height: auto;
-    height: auto;
-  }
-
-  .no-print {
-    display: none !important;
-  }
-
-  /* One catalogue page width ≈ A4 content box */
-  main {
-    max-width: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-  }
-
-  .catalogue-print-root {
-    display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    gap: 10mm !important;
-    width: 100%;
-  }
-
-  .product-card {
-    border: 0.35pt solid #cbd5e1 !important;
-    border-radius: 4px !important;
-    box-shadow: none !important;
-    page-break-inside: avoid;
-    break-inside: avoid;
-  }
-
-  .product-card__media {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-
-  img {
-    max-width: 100% !important;
-    page-break-inside: avoid;
-  }
-
-  /* Strip on-screen A4 preview chrome; keep catalogue content for PDF */
-  .a4-preview-shell .a4-preview-viewport {
-    aspect-ratio: unset !important;
-    overflow: visible !important;
-    border: none !important;
-    box-shadow: none !important;
-    border-radius: 0 !important;
-    margin: 0 !important;
-    display: block !important;
-    max-width: none !important;
-  }
-
-  .a4-preview-shell .a4-preview-scaler {
-    width: 100% !important;
-    max-width: none !important;
-    transform: none !important;
-  }
-
-  .a4-preview-shell .a4-preview-page {
-    min-height: 0 !important;
-    padding: 0 !important;
-  }
-
-  .a4-preview-shell .a4-preview-placeholder {
-    display: none !important;
-  }
-}
-
-/* --- On-screen A4 catalogue preview (scoped; print resets in @media print above) --- */
-.a4-preview-shell .a4-preview-viewport {
-  container-type: inline-size;
-  display: flex;
-  justify-content: center;
-  width: 100%;
-  max-width: 100%;
-  aspect-ratio: 210 / 297;
-  margin-inline: auto;
-  border: 1px solid #cbd5e1;
-  border-radius: 0.5rem;
-  background: #fff;
-  box-shadow:
-    0 10px 15px -3px rgb(15 23 42 / 0.06),
-    0 4px 6px -4px rgb(15 23 42 / 0.06);
-  overflow: auto;
-}
-
-/* 210mm logical page; shrink when the frame is narrower than A4 width */
-.a4-preview-shell .a4-preview-scaler {
-  box-sizing: border-box;
-  flex: 0 0 auto;
-  width: 210mm;
-  max-width: 100%;
-  transform: none;
-  transform-origin: top center;
-}
-
-@supports (width: 1cqi) {
-  .a4-preview-shell .a4-preview-scaler {
-    max-width: none;
-    transform: scale(min(1, calc(100cqi / 210mm)));
-  }
-}
-
-.a4-preview-shell .a4-preview-page {
-  box-sizing: border-box;
-  min-height: 100%;
-  padding: 12mm;
-}
-
-.a4-preview-shell .a4-preview-page:has(.a4-preview-placeholder) {
-  display: flex;
-  min-height: 297mm;
-  align-items: center;
-  justify-content: center;
 }

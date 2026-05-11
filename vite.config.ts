@@ -1,25 +1,18 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 export default defineConfig({
-  resolve: {
-    alias: {
-      "@shared": path.resolve(__dirname, "shared"),
-    },
-  },
   plugins: [react(), tailwindcss()],
   server: {
     allowedHosts: true,
+    // Bind on all interfaces so http://127.0.0.1:5173 and http://localhost:5173 work reliably.
     host: true,
     port: 5173,
     strictPort: false,
     proxy: {
       "/api": "http://127.0.0.1:8787",
+      "/auth": "http://127.0.0.1:8787",
     },
   },
 });
