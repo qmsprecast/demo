@@ -493,6 +493,8 @@ type SyncQueueItem = {
   status: SyncStatus;
   createdAt: string;
   updatedAt: string;
+  /** ISO or display stamp when a sync attempt last started (optional for older persisted queue rows). */
+  attemptedAt?: string;
   retryCount: number;
   lastError: string;
   payload: Record<string, unknown>;
@@ -2000,6 +2002,7 @@ function buildDemoPrecastWorkspace(): {
       status: "Failed",
       createdAt: "Today 10:20",
       updatedAt: "Today 10:21",
+      attemptedAt: "Today 10:21",
       retryCount: 1,
       lastError: "Evidence upload failed: network timeout",
       payload: {},
@@ -2994,9 +2997,34 @@ function DataFlowBackground({ className = "", showBase = true }: { className?: s
   );
 }
 
+type AppInviteProvisionMeta = {
+  provisionStatus?: string;
+  provisionStartedAt?: number | null;
+  provisionFinishedAt?: number | null;
+  provisionError?: string;
+};
+
 type AppInviteDetails =
-  | { ok: true; kind: "new_company"; email: string; invitedBy: string }
-  | { ok: true; kind: "company_user"; email: string; role: Role; invitedBy: string; companyName: string };
+  | ({ ok: true; kind: "new_company"; email: string; invitedBy: string } & AppInviteProvisionMeta)
+  | ({ ok: true; kind: "company_user"; email: string; role: Role; invitedBy: string; companyName: string } & AppInviteProvisionMeta);
+
+type AppInviteStatusPayload = AppInviteProvisionMeta & {
+  ok?: boolean;
+  error?: string;
+  kind?: string;
+  outcome?: "new_company" | "company_user";
+  folderUrl?: string;
+  email?: string;
+};
+
+function syncTrustLabel(status: SyncStatus): string {
+  if (status === "Pending Sync") return "Queued";
+  if (status === "Syncing") return "Syncing";
+  if (status === "Synced") return "Synced";
+  if (status === "Failed") return "Failed";
+  if (status === "Conflict") return "Failed (conflict)";
+  return status;
+}
 
 function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string }) {
   const [details, setDetails] = useState<AppInviteDetails | null>(null);
@@ -3067,7 +3095,61 @@ function AppHostedOnboardingCompletion({ inviteToken }: { inviteToken: string })
         }),
         signal: controller.signal,
       });
-      const payload = (await parseJsonApiResponse(response)) as { ok?: boolean; error?: string; folderUrl?: string; outcome?: string };
+      const payload = (await parseJsonApiResponse(response)) as AppInviteStatusPayload & {
+        ok?: boolean;
+        folderUrl?: string;
+        outcome?: string;
+      };
+
+      if (response.status === 202) {
+        const serverMsg = payload.error || "Provisioning already in progress.";
+        setSubmitError(`${serverMsg} Waiting for the other request to finish…`);
+        const pollUntil = Date.now() + completeTimeoutMs;
+        while (Date.now() < pollUntil) {
+          if (controller.signal.aborted) break;
+          await new Promise((resolve) => {
+            window.setTimeout(resolve, 2000);
+          });
+          const pr = await fetch(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}`, {
+            signal: controller.signal,
+          });
+          const pp = (await parseJsonApiResponse(pr)) as AppInviteStatusPayload;
+          if (
+            pr.status === 410 &&
+            pp.outcome &&
+            (pp.provisionStatus === "succeeded" || pp.provisionStatus === undefined)
+          ) {
+            setSubmitError("");
+            if (pp.outcome === "new_company") {
+              setDone({
+                title: "Company workspace created",
+                message: pp.folderUrl
+                  ? `Your company folder is ready. You can sign in with your email and the password you chose. Drive folder: ${pp.folderUrl}`
+                  : "You can sign in with your email and the password you chose.",
+              });
+            } else {
+              setDone({
+                title: "Account ready",
+                message: "You can sign in with your email address and the password you chose.",
+              });
+            }
+            window.history.replaceState({}, "", window.location.pathname);
+            return;
+          }
+          if (pr.ok && pp.provisionStatus === "failed") {
+            const errText = pp.provisionError || pp.error || "Provisioning failed.";
+            setSubmitError(
+              `${errText} Fix the issue if you can, then use Complete onboarding again.`,
+            );
+            return;
+          }
+        }
+        setSubmitError(
+          "Provisioning is still in progress or we could not confirm completion in time. Wait a few minutes, refresh this page, or try Complete onboarding again if your workspace was not created.",
+        );
+        return;
+      }
+
       if (!response.ok || !payload.ok) {
         const serverMsg = payload.error || `The server returned HTTP ${response.status}.`;
         setSubmitError(
@@ -4606,6 +4688,7 @@ function App() {
   };
 
   const updateSyncItemStatus = (localId: string, status: SyncStatus, lastError = "") => {
+    const stamp = formatStamp();
     setSyncQueue((current) =>
       current.map((item) =>
         item.localId === localId
@@ -4613,8 +4696,10 @@ function App() {
               ...item,
               status,
               lastError,
+              attemptedAt:
+                status === "Syncing" || status === "Failed" || status === "Conflict" ? stamp : item.attemptedAt,
               retryCount: status === "Failed" ? item.retryCount + 1 : item.retryCount,
-              updatedAt: formatStamp(),
+              updatedAt: stamp,
             }
           : item,
       ),
@@ -10535,10 +10620,13 @@ function SyncCentreScreen({
                 <div>
                   <p className="text-sm font-semibold text-slate-900">{item.itemType}</p>
                   <p className="mt-1 text-xs text-slate-500">Local ID: {item.localId}</p>
-                  <p className="mt-1 text-xs text-slate-500">Created {item.createdAt} • Updated {item.updatedAt}</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Created {item.createdAt}
+                    {item.attemptedAt ? ` · Last attempt ${item.attemptedAt}` : ""} · Updated {item.updatedAt}
+                  </p>
                   {item.lastError ? <p className="mt-2 text-xs font-semibold text-rose-600">{item.lastError}</p> : null}
                 </div>
-                <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{item.status}</div>
+                <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{syncTrustLabel(item.status)}</div>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 <div className="rounded-full bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">Retries {item.retryCount}</div>

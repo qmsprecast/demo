@@ -1277,9 +1277,12 @@ function patchInviteRecord(id, partial) {
 
 function normalizeInviteProvisionFields(record) {
   if (!record) return null;
+  const provisionStatus =
+    record.provisionStatus ||
+    (record.consumedAt ? "succeeded" : "idle");
   return {
     ...record,
-    provisionStatus: record.provisionStatus || "idle",
+    provisionStatus,
     provisionStartedAt: record.provisionStartedAt ?? null,
     provisionFinishedAt: record.provisionFinishedAt ?? null,
     provisionError: record.provisionError ?? null,
