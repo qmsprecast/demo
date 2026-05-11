@@ -1178,6 +1178,8 @@ const appMotionStyles = `
 `;
 
 const userStorageKey = "qms-precast-current-user";
+/** When set, Master session is limited to company onboarding (no other nav or tools). Cleared on staff sign-in or logout. */
+const masterCompanySetupSessionKey = "bert-master-company-setup-session";
 const offlineQueueStorageKey = "qms-precast-offline-submissions";
 const themeStorageKey = "qms-precast-theme";
 const previewOrientationStorageKey = "qms-precast-preview-orientation";
@@ -3273,6 +3275,20 @@ function App() {
     }
   });
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [companySetupLoginPortal, setCompanySetupLoginPortal] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get("setup") === "master";
+    } catch {
+      return false;
+    }
+  });
+  const [godCompanySetupSession, setGodCompanySetupSession] = useState(() => {
+    try {
+      return window.localStorage.getItem(masterCompanySetupSessionKey) === "1";
+    } catch {
+      return false;
+    }
+  });
   const workspaceBootstrapRef = useRef<ReturnType<typeof getWorkspaceBootstrap> | null>(null);
   if (!workspaceBootstrapRef.current) {
     workspaceBootstrapRef.current = getWorkspaceBootstrap();
@@ -3665,9 +3681,14 @@ function App() {
     [siteScopedAudits, siteScopedActions, syncQueue],
   );
 
+  const godCompanySetupOnlyShell = Boolean(currentUser?.role === "Master" && godCompanySetupSession);
+
   const roleLabel = useMemo(() => {
     if (!currentUser) {
       return "";
+    }
+    if (currentUser.role === "Master" && godCompanySetupSession) {
+      return "Company workspace onboarding only — sign out when finished";
     }
     if (currentUser.role === "Master") {
       return "Onboarding — connect Google, link the company workspace, and go live";
@@ -3685,11 +3706,15 @@ function App() {
       return "";
     }
     return userNicknames[currentUser.username]?.trim() || currentUser.name;
-  }, [currentUser, userNicknames]);
+  }, [currentUser, userNicknames, godCompanySetupSession]);
 
   const visibleNavItems = useMemo(() => {
     if (!currentUser) {
       return [];
+    }
+    if (currentUser.role === "Master" && godCompanySetupSession) {
+      const onboardingOnly = navItems.find((item) => item.id === "onboarding");
+      return onboardingOnly ? [onboardingOnly] : [];
     }
     const filtered = navItems.filter((item) => {
       const baselineVisible = canRoleAccessNavItem(currentUser.role, item.id);
@@ -3718,7 +3743,7 @@ function App() {
     }
 
     return filtered;
-  }, [currentUser, roleNavVisibility]);
+  }, [currentUser, roleNavVisibility, godCompanySetupSession]);
   const showSiteSelectorForRole = currentUser ? (roleSiteSelectorVisibility[currentUser.role] ?? true) : true;
 
   const creatableRoles = useMemo(
@@ -4105,6 +4130,18 @@ function App() {
         setCurrentUser(matchedUser);
         setAccountNameInput(matchedUser.name);
         setAccountPhotoUrl(getStoredProfilePhoto(matchedUser));
+        try {
+          if (matchedUser.role === "Master" && window.localStorage.getItem(masterCompanySetupSessionKey) === "1") {
+            setGodCompanySetupSession(true);
+          } else {
+            if (matchedUser.role !== "Master") {
+              window.localStorage.removeItem(masterCompanySetupSessionKey);
+            }
+            setGodCompanySetupSession(false);
+          }
+        } catch {
+          setGodCompanySetupSession(false);
+        }
       } else {
         window.localStorage.removeItem(userStorageKey);
       }
@@ -4112,6 +4149,18 @@ function App() {
       window.localStorage.removeItem(userStorageKey);
     }
   }, [loginUsers]);
+
+  useEffect(() => {
+    const syncSetupPortalFromUrl = () => {
+      try {
+        setCompanySetupLoginPortal(new URLSearchParams(window.location.search).get("setup") === "master");
+      } catch {
+        setCompanySetupLoginPortal(false);
+      }
+    };
+    window.addEventListener("popstate", syncSetupPortalFromUrl);
+    return () => window.removeEventListener("popstate", syncSetupPortalFromUrl);
+  }, []);
 
   useEffect(() => {
     const storedQueue = window.localStorage.getItem(offlineQueueStorageKey);
@@ -5003,6 +5052,26 @@ function App() {
       pushToast("Sign in failed", "Please check your username and password.", "warning");
       return;
     }
+    if (companySetupLoginPortal && match.role !== "Master") {
+      pushToast("Master only", "Company setup sign-in is only for the platform Master account.", "warning");
+      return;
+    }
+    try {
+      if (match.role === "Master") {
+        if (companySetupLoginPortal) {
+          window.localStorage.setItem(masterCompanySetupSessionKey, "1");
+          setGodCompanySetupSession(true);
+        } else {
+          window.localStorage.removeItem(masterCompanySetupSessionKey);
+          setGodCompanySetupSession(false);
+        }
+      } else {
+        window.localStorage.removeItem(masterCompanySetupSessionKey);
+        setGodCompanySetupSession(false);
+      }
+    } catch {
+      setGodCompanySetupSession(false);
+    }
     setCurrentUser(match);
     setAccountNameInput(match.name);
     setAccountPhotoUrl(getStoredProfilePhoto(match));
@@ -5010,10 +5079,26 @@ function App() {
     setScreen(getHomeScreenForRole(match.role));
     setUsername("");
     setPassword("");
+    setCompanySetupLoginPortal(false);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("setup");
+      window.history.replaceState({}, "", url.pathname + (url.search ? url.search : "") + url.hash);
+    } catch {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
     pushToast("Welcome back", `Signed in as ${getRoleDisplayName(match.role)}.`, "success");
   };
 
   const switchUserSession = (user: User) => {
+    if (user.role !== "Master") {
+      try {
+        window.localStorage.removeItem(masterCompanySetupSessionKey);
+      } catch {
+        /* ignore */
+      }
+      setGodCompanySetupSession(false);
+    }
     setCurrentUser(user);
     setAccountNameInput(user.name);
     setAccountPhotoUrl(getStoredProfilePhoto(user));
@@ -5420,6 +5505,20 @@ function App() {
 
   const handleLogout = () => {
     fetch("/auth/google/logout", { method: "POST" }).catch(() => undefined);
+    try {
+      window.localStorage.removeItem(masterCompanySetupSessionKey);
+    } catch {
+      /* ignore */
+    }
+    setGodCompanySetupSession(false);
+    setCompanySetupLoginPortal(false);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("setup");
+      window.history.replaceState({}, "", url.pathname + (url.search ? url.search : "") + url.hash);
+    } catch {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
     window.localStorage.removeItem(userStorageKey);
     setCurrentUser(null);
     setAccountNameInput("");
@@ -7519,30 +7618,149 @@ function App() {
     if (inviteTok?.trim()) {
       return <AppHostedOnboardingCompletion inviteToken={inviteTok.trim()} />;
     }
+
+    const signInOuterClass = [
+      shellPreviewClass,
+      "flex min-h-[100dvh] w-full max-w-[100vw] flex-col items-center justify-center overflow-hidden px-3 py-4 sm:px-4 sm:py-5",
+      themeMode === "dark" ? `${qmsDarkShellGradient} text-slate-100` : `${qmsLightShellGradient} text-slate-900`,
+    ].join(" ");
+
+    const signInShellClass = [
+      "qms-login-shell qms-login-card relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[2.2rem] border p-3 backdrop-blur sm:p-4",
+      themeMode === "dark"
+        ? "border-slate-800/80 bg-slate-950/80 shadow-[0_32px_90px_rgba(2,6,23,0.58)] text-white"
+        : "border-slate-200/85 bg-white/90 shadow-[0_28px_80px_rgba(15,23,42,0.14)] text-slate-900",
+    ].join(" ");
+
+    if (companySetupLoginPortal) {
+      return (
+        <div className={signInOuterClass}>
+          <style>{appMotionStyles}</style>
+          <div className="qms-tablet-stage">
+            <div className="qms-tablet-device qms-tablet-device--signin">
+              <div data-qms-theme={themeMode} className={signInShellClass}>
+                <DataFlowBackground />
+                <div className="relative z-10 grid h-full min-h-0 w-full grid-cols-1 items-center gap-3 sm:grid-cols-2 sm:gap-4">
+                  <div className="flex flex-col justify-center gap-3 px-1 py-0 sm:px-2">
+                    <BertLogo variant="full" tone={themeMode === "dark" ? "onDark" : "onLight"} size="lg" className="w-full" />
+                    <p className="text-xs font-medium text-slate-500 sm:text-sm sm:text-slate-400">
+                      Platform Master — company workspace onboarding only
+                    </p>
+                  </div>
+                  <div className="flex min-h-0 items-center">
+                    <div className="w-full rounded-2xl border border-white/10 bg-white/[0.06] p-3 shadow-[0_16px_40px_rgba(2,6,23,0.4)] backdrop-blur-xl sm:rounded-[1.5rem] sm:p-4">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            const url = new URL(window.location.href);
+                            url.searchParams.delete("setup");
+                            window.history.replaceState({}, "", url.pathname + (url.search ? url.search : "") + url.hash);
+                          } catch {
+                            window.history.replaceState({}, "", window.location.pathname);
+                          }
+                          setCompanySetupLoginPortal(false);
+                        }}
+                        className="mb-3 text-left text-xs font-semibold text-blue-400 transition hover:text-orange-200 sm:text-sm"
+                      >
+                        ← Staff sign-in
+                      </button>
+                      <h2 className="text-center text-base font-semibold text-white sm:text-lg">Company setup (Master)</h2>
+                      <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs leading-snug text-slate-300 sm:text-sm">
+                        Sign in with the platform Master account only. You will stay in{" "}
+                        <span className="font-semibold text-white">Onboarding</span> until you sign out — no other areas of the app
+                        are available from here.
+                      </p>
+                      <p className="mt-2 text-center text-[11px] text-slate-400 sm:text-xs">
+                        Username: <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span> — use the password configured for
+                        Master (default <span className="font-semibold text-white">demo</span> unless changed in environment).
+                      </p>
+                      <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Username or email</label>
+                          <div className="relative">
+                            <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 fill-none stroke-slate-400 sm:left-3.5 sm:h-5 sm:w-5" strokeWidth="2">
+                              <path d="M20 21a8 8 0 0 0-16 0" />
+                              <circle cx="12" cy="7" r="4" />
+                            </svg>
+                            <input
+                              value={username}
+                              onChange={(event) => setUsername(event.target.value)}
+                              placeholder="Master username"
+                              className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/45 pl-10 pr-3 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 sm:h-12 sm:rounded-2xl sm:pl-11 sm:pr-4 sm:text-base"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Password</label>
+                          <div className="relative">
+                            <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 fill-none stroke-slate-400 sm:left-3.5 sm:h-5 sm:w-5" strokeWidth="2">
+                              <rect x="4" y="11" width="16" height="10" rx="2" />
+                              <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+                            </svg>
+                            <input
+                              type={showPassword ? "text" : "password"}
+                              value={password}
+                              onChange={(event) => setPassword(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  handleLogin();
+                                }
+                              }}
+                              placeholder="Master password"
+                              className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/45 pl-10 pr-11 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 sm:h-12 sm:rounded-2xl sm:pl-11 sm:pr-12 sm:text-base"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword((current) => !current)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition hover:text-blue-400 sm:right-3.5"
+                              aria-label={showPassword ? "Hide password" : "Show password"}
+                            >
+                              {showPassword ? (
+                                <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                                  <path d="M3 3l18 18" />
+                                  <path d="M10.6 10.6a2 2 0 1 0 2.8 2.8" />
+                                  <path d="M9.9 4.2A10.2 10.2 0 0 1 21 12a10.9 10.9 0 0 1-4.1 5.2" />
+                                  <path d="M6.5 6.5A11.3 11.3 0 0 0 3 12a10.9 10.9 0 0 0 9 6 9.8 9.8 0 0 0 3.2-.5" />
+                                </svg>
+                              ) : (
+                                <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                                  <path d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z" />
+                                  <circle cx="12" cy="12" r="3" />
+                                </svg>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        <button
+                          type="submit"
+                          className={`h-11 w-full rounded-xl bg-gradient-to-r from-orange-400 to-orange-600 text-sm font-semibold text-slate-950 shadow-[0_10px_22px_rgba(249,115,22,0.22)] active:scale-[0.99] sm:h-12 sm:rounded-2xl sm:text-base ${slatePrimaryCtaInteract}`}
+                        >
+                          Sign in for company setup
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <ToastStack toasts={toasts} />
+        </div>
+      );
+    }
+
     return (
-      <div
-        className={[
-          shellPreviewClass,
-          "flex min-h-[100dvh] w-full max-w-[100vw] flex-col items-center justify-center overflow-hidden px-3 py-4 sm:px-4 sm:py-5",
-          themeMode === "dark"
-            ? `${qmsDarkShellGradient} text-slate-100`
-            : `${qmsLightShellGradient} text-slate-900`,
-        ].join(" ")}
-      >
+      <div className={signInOuterClass}>
         <style>{appMotionStyles}</style>
         <div className="qms-tablet-stage">
           <div className="qms-tablet-device qms-tablet-device--signin">
             <div
               data-qms-theme={themeMode}
-              className={[
-                "qms-login-shell qms-login-card relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[2.2rem] border p-3 backdrop-blur sm:p-4",
-                themeMode === "dark"
-                  ? "border-slate-800/80 bg-slate-950/80 shadow-[0_32px_90px_rgba(2,6,23,0.58)] text-white"
-                  : "border-slate-200/85 bg-white/90 shadow-[0_28px_80px_rgba(15,23,42,0.14)] text-slate-900",
-              ].join(" ")}
+              className={signInShellClass}
             >
               <DataFlowBackground />
-              <div className="absolute right-4 top-4 z-20 flex items-center gap-2 sm:right-6 sm:top-6">
+              <div className="absolute right-4 top-4 z-20 flex items-center gap-1.5 sm:right-6 sm:top-6">
                 <button
                   type="button"
                   className="rounded-full border border-slate-700 bg-slate-900/75 p-2 text-slate-300 transition hover:border-orange-400/60 hover:text-blue-400"
@@ -7552,6 +7770,27 @@ function App() {
                     <circle cx="12" cy="12" r="9" />
                     <path d="M9.5 9a2.5 2.5 0 1 1 4.2 1.8c-.8.7-1.7 1.2-1.7 2.2" />
                     <circle cx="12" cy="16.8" r="0.8" fill="currentColor" stroke="none" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  title="Company setup (Master only)"
+                  aria-label="Company setup sign-in for platform Master"
+                  onClick={() => {
+                    try {
+                      const url = new URL(window.location.href);
+                      url.searchParams.set("setup", "master");
+                      window.history.pushState({}, "", url.toString());
+                    } catch {
+                      window.history.pushState({}, "", "?setup=master");
+                    }
+                    setCompanySetupLoginPortal(true);
+                  }}
+                  className="rounded-full border border-slate-700/90 bg-slate-900/60 p-1.5 text-slate-400 transition hover:border-orange-400/55 hover:text-orange-300"
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="2">
+                    <path d="M12 3l7 4v5c0 4-2.5 7.5-7 8.5-4.5-1-7-4.5-7-8.5V7z" />
+                    <path d="M12 11v3M12 8h.01" strokeLinecap="round" />
                   </svg>
                 </button>
                 <button
@@ -7692,10 +7931,10 @@ function App() {
         <header className={["qms-app-header relative z-10 border-b px-3 pb-1 pt-1 backdrop-blur", themeMode === "dark" ? "border-white/10 bg-slate-950/58" : "border-slate-200/80 bg-white/72"].join(" ")}>
           <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[9px] font-semibold uppercase tracking-[0.16em]">
             <div className={["rounded-full px-2.5 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--bert-signal-orange)] bg-white font-semibold text-[var(--qms-navy-900)]"].join(" ")}>
-              Tablet workspace
+              {godCompanySetupOnlyShell ? "Company setup (Master)" : "Tablet workspace"}
             </div>
             <div className="flex items-center gap-1">
-              {demoRoleSwitchEnabled && <div className="hidden items-center gap-1 lg:flex">
+              {demoRoleSwitchEnabled && !godCompanySetupOnlyShell && <div className="hidden items-center gap-1 lg:flex">
                 {currentUser.role !== "Admin" && (
                 <button
                   type="button"
@@ -7727,6 +7966,7 @@ function App() {
                   AUDITOR
                 </button>
               </div>}
+              {!godCompanySetupOnlyShell && (
               <button
                 type="button"
                 onClick={() => setScreen(getHomeScreenForRole(currentUser.role))}
@@ -7734,12 +7974,15 @@ function App() {
               >
                 Layout options
               </button>
+              )}
+              {!godCompanySetupOnlyShell && (
               <button
                 onClick={() => setPreviewOrientation(previewOrientation === "landscape" ? "portrait" : "landscape")}
                 className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-orange-50"].join(" ")}
               >
                 {previewOrientation === "landscape" ? "Portrait preview" : "Landscape preview"}
               </button>
+              )}
               <div className={["rounded-full px-2 py-0.5", offlineMode ? "bg-amber-500/15 text-amber-600" : "bg-blue-500/12 text-blue-800"].join(" ")}>
                 {offlineMode ? "Offline" : "Online"}
               </div>
@@ -7780,7 +8023,7 @@ function App() {
                 <p className={["truncate text-[8px] leading-3 tracking-[0.08em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
                   {selectedFolder ? `Live company workspace · ${PRODUCT_TAGLINE}` : PRODUCT_BRAND_FULL}
                 </p>
-                {showSiteSelectorForRole && (
+                {showSiteSelectorForRole && !godCompanySetupOnlyShell && (
                 <div className="mt-1">
                   <select
                     value={selectedSiteId}
@@ -8279,6 +8522,7 @@ function App() {
                 onAddSite={handleAddSite}
                 onArchiveSite={handleArchiveSite}
                 standaloneOnboarding={screen === "onboarding"}
+                hideMasterLocalDemoTools={godCompanySetupOnlyShell}
                 godModeAppInviteEmail={godModeAppInviteEmail}
                 onGodModeAppInviteEmailChange={setGodModeAppInviteEmail}
                 onSendGodModeAppCompanyInvite={handleSendGodModeAppCompanyInvite}
@@ -11973,6 +12217,7 @@ function AdminScreen({
   onAddSite,
   onArchiveSite,
   standaloneOnboarding = false,
+  hideMasterLocalDemoTools = false,
   godModeAppInviteEmail,
   onGodModeAppInviteEmailChange,
   onSendGodModeAppCompanyInvite,
@@ -12094,6 +12339,7 @@ function AdminScreen({
   onAddSite: () => void;
   onArchiveSite: (siteId: string) => void;
   standaloneOnboarding?: boolean;
+  hideMasterLocalDemoTools?: boolean;
   godModeAppInviteEmail: string;
   onGodModeAppInviteEmailChange: (value: string) => void;
   onSendGodModeAppCompanyInvite: () => void;
@@ -12190,7 +12436,7 @@ function AdminScreen({
         </section>
       )}
 
-      {currentUser.role === "Master" && (
+      {currentUser.role === "Master" && !hideMasterLocalDemoTools && (
         <section className="rounded-2xl border border-sky-200 bg-sky-50/90 p-4 shadow-sm">
           <p className="text-sm font-semibold text-sky-950">Local review data</p>
           <p className="mt-1 text-xs text-sky-900/85">Optional sample payloads for demos — stored on this device only; does not write to linked Google Sheets.</p>
