@@ -21,6 +21,15 @@ function DashboardAppIcon({ name, className = "h-5 w-5" }: { name: string; class
           <rect x="3" y="13" width="8" height="8" rx="2" />
         </svg>
       );
+    case "grid":
+      return (
+        <svg {...shared}>
+          <rect x="3" y="3" width="6.5" height="6.5" rx="1.25" />
+          <rect x="14.5" y="3" width="6.5" height="6.5" rx="1.25" />
+          <rect x="3" y="14.5" width="6.5" height="6.5" rx="1.25" />
+          <rect x="14.5" y="14.5" width="6.5" height="6.5" rx="1.25" />
+        </svg>
+      );
     case "clipboard":
       return (
         <svg {...shared}>

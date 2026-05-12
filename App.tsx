@@ -596,6 +596,8 @@ function canCreatePreviewProfile() {
   return isDemoRoleSwitchEnabled();
 }
 const demoRoleSwitchEnabled = isDemoRoleSwitchEnabled();
+/** Sign-in / landing demo copy — display names only; internal `Role` values are unchanged (`Master`, etc.). */
+const roles = ["Platform owner", "Admin", "Manager", "Auditor"] as const;
 const CURRENT_SCHEMA_VERSION = "2.0.0";
 const REQUIRED_WORKSPACE_TABS = ["Onboarding", "Users", "Schedule", "Actions", "Notes", "Config"] as const;
 const ACTION_DUE_DAYS_BY_SEVERITY: Record<RiskLevel, number> = {
@@ -1142,6 +1144,15 @@ function AppIcon({ name, className = "h-5 w-5" }: { name: string; className?: st
           <rect x="13" y="3" width="8" height="5" rx="2" />
           <rect x="13" y="10" width="8" height="11" rx="2" />
           <rect x="3" y="13" width="8" height="8" rx="2" />
+        </svg>
+      );
+    case "grid":
+      return (
+        <svg {...shared}>
+          <rect x="3" y="3" width="6.5" height="6.5" rx="1.25" />
+          <rect x="14.5" y="3" width="6.5" height="6.5" rx="1.25" />
+          <rect x="3" y="14.5" width="6.5" height="6.5" rx="1.25" />
+          <rect x="14.5" y="14.5" width="6.5" height="6.5" rx="1.25" />
         </svg>
       );
     case "clipboard":
@@ -7322,10 +7333,11 @@ function App() {
                 {currentUser.role !== "Admin" && (
                 <button
                   type="button"
+                  title={roles[0]}
                   onClick={() => handleQuickRoleSwitch("Master", "Platform owner")}
                   className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
                 >
-                  GOD
+                  OWNER
                 </button>
                 )}
                 <button
