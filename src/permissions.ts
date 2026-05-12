@@ -21,40 +21,6 @@ export type NavItemId =
 
 export type HomeScreen = Extract<NavItemId, "dashboard" | "onboarding">;
 
-/** High-level capabilities — implemented by delegating to the same helpers as navigation. */
-export type PermissionCapability =
-  | "accessAdmin"
-  | "accessControlScreen"
-  | "accessSchedules"
-  | "accessAdminOnboardingWorkspace"
-  | "accessOnboardingNav"
-  | "accessReports"
-  | "accessActions"
-  | "accessCompletedNcrReports"
-  | "accessAuditsCentre"
-  | "submitIncidents"
-  | "investigateIncidents"
-  | "editLegalName"
-  | "nav:dashboard"
-  | "nav:audits"
-  | "nav:actions"
-  | "nav:nonConformance"
-  | "nav:incidents"
-  | "nav:reports"
-  | "nav:sync"
-  | "nav:schedules"
-  | "nav:admin"
-  | "nav:onboarding"
-  | "nav:account"
-  | "manageUsers"
-  | "manageSchedules"
-  | "manageTemplates"
-  | "assignActions"
-  | "verifyActions"
-  | "exportReports"
-  | "repairWorkspace"
-  | "viewAllReports";
-
 export interface RoleTaskPermissions {
   canManageUsers: boolean;
   canManageSchedules: boolean;
@@ -151,6 +117,128 @@ export function getRolePermissions(role: Role): RoleTaskPermissions {
   };
 }
 
+/** Dashboard tab — matches `canRoleAccessNavItem(role, "dashboard")`. */
+export function canViewDashboard(role: Role) {
+  return canRoleAccessNavItem(role, "dashboard");
+}
+
+/** Full Audit centre (traffic board, access matrix) — same as `canAccessAuditsCentre`. */
+export function canViewAudits(role: Role) {
+  return canAccessAuditsCentre(role);
+}
+
+/** Admin-side audit setup / management — same gate as full Audit centre (excludes Auditor-only field flow). */
+export function canCreateAudit(role: Role) {
+  return canAccessAuditsCentre(role);
+}
+
+/** Admin-side audit management — same gate as `canCreateAudit`. */
+export function canEditAudit(role: Role) {
+  return canAccessAuditsCentre(role);
+}
+
+export function canCompleteAuditAsAuditor(role: Role) {
+  return role === "Auditor";
+}
+
+/** Manager/Admin completion & sign-off path — non-Auditor roles only. */
+export function canSubmitAuditForReview(role: Role) {
+  return canAccessAuditsCentre(role);
+}
+
+export function canViewActions(role: Role) {
+  return canAccessActions(role);
+}
+
+export function canCreateAction(role: Role) {
+  return getRolePermissions(role).canAssignActions;
+}
+
+export function canEditAction(role: Role) {
+  return getRolePermissions(role).canAssignActions;
+}
+
+export function canVerifyAction(role: Role) {
+  return getRolePermissions(role).canVerifyActions;
+}
+
+export function canViewNcr(role: Role) {
+  return canAccessActions(role);
+}
+
+export function canCreateNcr(role: Role) {
+  return canAccessActions(role);
+}
+
+export function canEditNcr(role: Role) {
+  return canAccessActions(role);
+}
+
+export function canCloseNcr(role: Role) {
+  return canAccessActions(role);
+}
+
+export function canViewIncidents(role: Role) {
+  return canRoleAccessNavItem(role, "incidents");
+}
+
+export function canCreateIncident(_role: Role) {
+  return canSubmitIncidents(_role);
+}
+
+/** Singular alias — delegates to `canInvestigateIncidents` (same rules). */
+export function canInvestigateIncident(role: Role) {
+  return canInvestigateIncidents(role);
+}
+
+export function canViewSchedules(role: Role) {
+  return canAccessSchedules(role);
+}
+
+export function canManageSchedules(role: Role) {
+  return getRolePermissions(role).canManageSchedules;
+}
+
+export function canViewReports(role: Role) {
+  return canAccessReports(role);
+}
+
+export function canExportReports(role: Role) {
+  return getRolePermissions(role).canExportReports;
+}
+
+export function canViewSyncCentre(role: Role) {
+  return canRoleAccessNavItem(role, "sync");
+}
+
+/** Matches Sync Centre UI: retry is available to anyone who can reach the screen via nav rules. */
+export function canRetrySyncItem(role: Role) {
+  return canViewSyncCentre(role);
+}
+
+/** Company Control workspace tab — Admin only. */
+export function canViewControl(role: Role) {
+  return canAccessControlScreen(role);
+}
+
+export function canRepairWorkspace(role: Role) {
+  return getRolePermissions(role).canRepairWorkspace;
+}
+
+/** Company user invites (Admin/Master) plus Manager’s scoped invites. */
+export function canInviteUsers(role: Role) {
+  return canAccessAdmin(role) || role === "Manager";
+}
+
+/** Local-only demo payloads — Admin block or Master block in onboarding. */
+export function canLoadDemoData(role: Role) {
+  return role === "Admin" || role === "Master";
+}
+
+export function canViewAccount(role: Role) {
+  return canRoleAccessNavItem(role, "account");
+}
+
 export function getRoleDisplayName(role: Role) {
   return role === "Master" ? "God Mode" : role;
 }
@@ -163,93 +251,4 @@ export function getCreatableRoles(role: Role): Role[] {
     return ["Manager", "Auditor"];
   }
   return [];
-}
-
-const NAV_CAPABILITY_MAP: Record<NavItemId, PermissionCapability> = {
-  dashboard: "nav:dashboard",
-  audits: "nav:audits",
-  actions: "nav:actions",
-  nonConformance: "nav:nonConformance",
-  incidents: "nav:incidents",
-  reports: "nav:reports",
-  sync: "nav:sync",
-  schedules: "nav:schedules",
-  admin: "nav:admin",
-  onboarding: "nav:onboarding",
-  account: "nav:account",
-};
-
-/**
- * Typed capability checks — each case delegates to the same functions used for nav and UI gates.
- */
-export function can(role: Role, capability: PermissionCapability): boolean {
-  switch (capability) {
-    case "accessAdmin":
-      return canAccessAdmin(role);
-    case "accessControlScreen":
-      return canAccessControlScreen(role);
-    case "accessSchedules":
-      return canAccessSchedules(role);
-    case "accessAdminOnboardingWorkspace":
-      return canAccessAdminOnboardingWorkspace(role);
-    case "accessOnboardingNav":
-      return canAccessOnboardingNav(role);
-    case "accessReports":
-      return canAccessReports(role);
-    case "accessActions":
-      return canAccessActions(role);
-    case "accessCompletedNcrReports":
-      return canAccessCompletedNcrReports(role);
-    case "accessAuditsCentre":
-      return canAccessAuditsCentre(role);
-    case "submitIncidents":
-      return canSubmitIncidents(role);
-    case "investigateIncidents":
-      return canInvestigateIncidents(role);
-    case "editLegalName":
-      return canEditLegalName(role);
-    case "nav:dashboard":
-      return canRoleAccessNavItem(role, "dashboard");
-    case "nav:audits":
-      return canRoleAccessNavItem(role, "audits");
-    case "nav:actions":
-      return canRoleAccessNavItem(role, "actions");
-    case "nav:nonConformance":
-      return canRoleAccessNavItem(role, "nonConformance");
-    case "nav:incidents":
-      return canRoleAccessNavItem(role, "incidents");
-    case "nav:reports":
-      return canRoleAccessNavItem(role, "reports");
-    case "nav:sync":
-      return canRoleAccessNavItem(role, "sync");
-    case "nav:schedules":
-      return canRoleAccessNavItem(role, "schedules");
-    case "nav:admin":
-      return canRoleAccessNavItem(role, "admin");
-    case "nav:onboarding":
-      return canRoleAccessNavItem(role, "onboarding");
-    case "nav:account":
-      return canRoleAccessNavItem(role, "account");
-    case "manageUsers":
-      return getRolePermissions(role).canManageUsers;
-    case "manageSchedules":
-      return getRolePermissions(role).canManageSchedules;
-    case "manageTemplates":
-      return getRolePermissions(role).canManageTemplates;
-    case "assignActions":
-      return getRolePermissions(role).canAssignActions;
-    case "verifyActions":
-      return getRolePermissions(role).canVerifyActions;
-    case "exportReports":
-      return getRolePermissions(role).canExportReports;
-    case "repairWorkspace":
-      return getRolePermissions(role).canRepairWorkspace;
-    case "viewAllReports":
-      return getRolePermissions(role).canViewAllReports;
-  }
-}
-
-/** Map a nav item to its capability key for `can(role, …)`. */
-export function navItemToCapability(itemId: NavItemId): PermissionCapability {
-  return NAV_CAPABILITY_MAP[itemId];
 }

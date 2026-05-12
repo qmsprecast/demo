@@ -1,4 +1,4 @@
-export type BertLogoTone = "onDark" | "onLight";
+type BertLogoTone = "onDark" | "onLight";
 
 type BertLogoProps = {
   className?: string;

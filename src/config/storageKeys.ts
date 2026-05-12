@@ -1,0 +1,17 @@
+export const storageKeys = {
+  currentUser: "qms-precast-current-user",
+  masterCompanySetupSession: "bert-master-company-setup-session",
+  offlineSubmissions: "qms-precast-offline-submissions",
+  theme: "qms-precast-theme",
+  previewOrientation: "qms-precast-preview-orientation",
+  desktopSidebarCollapsed: "qms-precast-desktop-sidebar-collapsed",
+  dashboardPreferences: "qms-precast-dashboard-preferences",
+  dashboardSectionOrder: "qms-precast-dashboard-section-order",
+  folderLinks: "qms-precast-folder-links",
+  workspaceState: "qms-precast-workspace-state",
+  userProfilePhotos: "qms-precast-user-profile-photos",
+  userNicknames: "qms-precast-user-nicknames",
+  layoutManager: "qms-precast-layout-manager",
+  layoutAdmin: "qms-precast-layout-admin",
+  localDatabaseRoot: "qms-precast-local-db-v1",
+} as const;
