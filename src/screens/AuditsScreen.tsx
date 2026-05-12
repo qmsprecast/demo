@@ -89,8 +89,8 @@ function AccessMatrixTable({
       {filteredMatrixRows.length === 0 || visibleMatrixAuditColumns.length === 0 ? (
         <div className="mt-4">
           <EmptyPanel
-            title="No access matrix available yet"
-            text="Add live audits and users to this company workspace to generate the access matrix."
+            title="Nothing to show here yet"
+            text="When users and live audits exist in this workspace, you can manage who can open each audit from this matrix."
           />
         </div>
       ) : (
@@ -273,7 +273,12 @@ function TrafficLane({
           </button>
         ))}
         {hiddenCount > 0 && <div className="px-1 text-[10px] font-semibold text-slate-500">+{hiddenCount} more</div>}
-        {audits.length === 0 && <div className="rounded-xl bg-white/85 px-3 py-2 text-xs text-slate-500 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">No audits in this group.</div>}
+        {audits.length === 0 && (
+          <div className="rounded-xl bg-white/85 px-3 py-2 text-xs text-slate-500 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">
+            <p className="font-semibold text-slate-700">Nothing in this due window</p>
+            <p className="mt-0.5">Audits appear here when assigned and they match this lane.</p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -359,8 +364,8 @@ export function AuditsScreen({
 
       {audits.length === 0 && (
         <EmptyPanel
-          title="No audit templates live"
-          text="This blank version is ready for setup. Connect Google in Admin, select the company folder you want, verify the onboarding form, audit forms, and response sheet, then sync."
+          title="No audits loaded yet"
+          text="Nothing to open until this workspace is connected. In Admin, link Google and your company folder, then sync so audit templates appear here."
         />
       )}
     </div>

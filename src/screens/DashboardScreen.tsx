@@ -41,6 +41,7 @@ import {
   KpiCard,
   MetaPill,
   SectionHeader,
+  StartHereCard,
   StatusBadge,
   TrendBar,
 } from "../components/dashboard/DashboardPrimitives";
@@ -105,7 +106,12 @@ function TrafficLane({
           </button>
         ))}
         {hiddenCount > 0 && <div className="px-1 text-[10px] font-semibold text-slate-500">+{hiddenCount} more</div>}
-        {audits.length === 0 && <div className="rounded-xl bg-white/85 px-3 py-2 text-xs text-slate-500 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">No audits in this group.</div>}
+        {audits.length === 0 && (
+          <div className="rounded-xl bg-white/85 px-3 py-2 text-xs text-slate-500 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">
+            <p className="font-semibold text-slate-700">Nothing in this due window</p>
+            <p className="mt-0.5">Audits appear here when assigned and they match this lane.</p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -234,11 +240,19 @@ export function DashboardScreen({
 
   const visibleSectionOrder = dashboardSectionOrder.filter((key) => dashboardPreferences[key]);
 
+  const dashboardSectionDisplayNames: Record<DashboardSectionKey, string> = {
+    trafficBoard: "Needs attention",
+    upcomingAudits: "Today",
+    openActions: "Open work",
+    liveSummary: "Ready to report",
+    complianceSnapshot: "Workspace health",
+  };
+
   const renderSection = (section: DashboardSectionKey) => {
     if (section === "trafficBoard") {
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="dashboard" eyebrow="Live status" title="Traffic light audit board" subtitle="First-look status across live audits." />
+          <SectionHeader icon="dashboard" eyebrow="Needs attention" title="Audit traffic" subtitle="Overdue, due soon, and on-track audits at a glance." />
           <div className="mt-2 grid gap-2">
             <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red.slice(0, 1)} status="red" onOpenAudit={onOpenAudit} />
             <TrafficLane title="Amber" subtitle={`<${amberThresholdHours}h remaining`} audits={groupedAudits.amber.slice(0, 1)} status="amber" onOpenAudit={onOpenAudit} />
@@ -250,7 +264,7 @@ export function DashboardScreen({
     if (section === "liveSummary") {
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="chart" eyebrow="Live summary" title="Operations snapshot" subtitle="Quick KPI pulse for field and admin teams." />
+          <SectionHeader icon="chart" eyebrow="Ready to report" title="Key numbers" subtitle="Compliance, completion, open actions, and queue in one place." />
           <div className="mt-2 grid grid-cols-2 gap-2">
             <KpiCard title="Open actions" value={String(openActions.length)} tone={openActions.length ? "amber" : "green"} subtitle={`${overdueActions.length} overdue`} dark={themeMode === "dark"} />
             <KpiCard title="Compliance" value={`${compliance}%`} tone="green" subtitle={complianceDelta >= 0 ? `Up ${complianceDelta}%` : `Down ${Math.abs(complianceDelta)}%`} dark={themeMode === "dark"} />
@@ -263,7 +277,7 @@ export function DashboardScreen({
     if (section === "upcomingAudits") {
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="clipboard" eyebrow="Upcoming" title="Upcoming audits" subtitle="Prioritized from your assigned workload." />
+          <SectionHeader icon="clipboard" eyebrow="Today" title="Upcoming audits" subtitle="What to plan or open next from your assigned work." />
           <div className="mt-2 space-y-2">
             {assignedAudits.slice(0, 4).map((audit) => (
               <button key={audit.id} onClick={() => onOpenAudit(audit.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left transition hover:bg-white">
@@ -273,8 +287,8 @@ export function DashboardScreen({
             ))}
             {assignedAudits.length === 0 && (
               <EmptyPanel
-                title="No audits in your queue yet"
-                text="When schedules and site access are assigned, upcoming field audits land here so you can plan the day before work starts."
+                title="Nothing assigned yet"
+                text="No audits in your queue right now. When schedules and access are set, upcoming field work will land here."
               />
             )}
           </div>
@@ -284,7 +298,7 @@ export function DashboardScreen({
     if (section === "openActions") {
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="warningTriangle" eyebrow="Actions" title="Open actions" subtitle="Items needing progress or verification." />
+          <SectionHeader icon="warningTriangle" eyebrow="Open work" title="Open actions" subtitle="Items needing progress or verification." />
           <div className="mt-2 space-y-2">
             {actions.slice(0, 4).map((action) => (
               <button key={action.id} onClick={() => onAdvanceAction(action.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left transition hover:bg-white">
@@ -298,7 +312,7 @@ export function DashboardScreen({
     }
     return (
       <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-        <SectionHeader icon="shield" eyebrow="Compliance" title="Compliance snapshot" subtitle="Risk, closure, and recurring findings." />
+        <SectionHeader icon="shield" eyebrow="Workspace health" title="Risk & closure" subtitle="Critical or high actions and how quickly work closes." />
         <div className="mt-2 grid grid-cols-2 gap-2">
           <KpiCard title="Critical/high" value={String(criticalActions.length)} tone={criticalActions.length ? "red" : "green"} subtitle={`${riskSummary.criticalFindings} critical`} dark={themeMode === "dark"} />
           <KpiCard title="Closure rate" value={`${actionClosureRate}%`} tone={actionClosureRate > 79 ? "green" : "amber"} subtitle={`${averageActionClosureDays || 0} days avg`} dark={themeMode === "dark"} />
@@ -309,12 +323,13 @@ export function DashboardScreen({
 
   return (
     <div className="space-y-4">
+      {assignedAudits.length === 0 && <StartHereCard />}
       <section className="rounded-[1.4rem] bg-slate-950 p-3.5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Live overview</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Home</p>
             <h2 className="mt-1 text-xl font-semibold tracking-tight">{workspaceName}</h2>
-            <p className="mt-1 max-w-sm text-xs leading-5 text-slate-300">Dashboard controls and traffic status in one view.</p>
+            <p className="mt-1 max-w-sm text-xs leading-5 text-slate-300">Needs attention, today, open work, and reporting signals in one place.</p>
             <DashboardBertFlowStrip variant="onDark" />
           </div>
           <div className="flex items-center gap-2">
@@ -340,7 +355,7 @@ export function DashboardScreen({
             {dashboardSectionOrder.map((section, index) => (
               <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
                 <input type="checkbox" checked={dashboardPreferences[section]} onChange={() => onToggleDashboardSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
+                <span className="min-w-0 flex-1 text-sm text-slate-700">{dashboardSectionDisplayNames[section]}</span>
                 <button onClick={() => onMoveDashboardSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
                 <button onClick={() => onMoveDashboardSection(section, "down")} disabled={index === dashboardSectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
               </div>
@@ -356,9 +371,9 @@ export function DashboardScreen({
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <SectionHeader
           icon="chart"
-          eyebrow="Performance"
-          title="Trend dashboard"
-          subtitle="Live audit health across traffic-light status, completion, and action pressure."
+          eyebrow="Ready to report"
+          title="Progress trends"
+          subtitle="Audit traffic, completion, and where action work is piling up."
         />
         <div className="space-y-3">
           <TrendBar label="Green audits" value={groupedAudits.green.length} total={Math.max(1, groupedAudits.green.length + groupedAudits.amber.length + groupedAudits.red.length)} tone="green" />
@@ -373,21 +388,45 @@ export function DashboardScreen({
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <SectionHeader
           icon="warningTriangle"
-          eyebrow="Recurring issues"
-          title="Top recurring failures"
-          subtitle="Patterns in repeated failed questions and schedules needing intervention."
+          eyebrow="More detail"
+          title="Repeat issues & schedules"
+          subtitle="Repeated failed questions and schedules that need a nudge."
         />
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-[1.4rem] border border-slate-200/70 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
             <p className="text-sm font-semibold text-slate-900">Top 5 failed questions</p>
             <div className="mt-3 space-y-2">
-              {recurringFailedQuestions.length === 0 ? <p className="text-sm text-slate-500">No repeat failures yet.</p> : recurringFailedQuestions.map(([question, count]) => <div key={question} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"><span className="mr-3 text-sm text-slate-700">{question}</span><span className="text-xs font-semibold text-slate-500">{count}</span></div>)}
+              {recurringFailedQuestions.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  <span className="font-semibold text-slate-700">No repeat failures yet</span>
+                  <span className="mt-1 block font-normal">Nothing flagged — trends appear once the same question fails more than once.</span>
+                </p>
+              ) : (
+                recurringFailedQuestions.map(([question, count]) => (
+                  <div key={question} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                    <span className="mr-3 text-sm text-slate-700">{question}</span>
+                    <span className="text-xs font-semibold text-slate-500">{count}</span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
           <div className="rounded-[1.4rem] border border-slate-200/70 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
             <p className="text-sm font-semibold text-slate-900">Top 5 overdue schedules</p>
             <div className="mt-3 space-y-2">
-              {topOverdueSchedules.length === 0 ? <p className="text-sm text-slate-500">No overdue schedules.</p> : topOverdueSchedules.map((schedule) => <div key={schedule.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"><span className="mr-3 text-sm text-slate-700">{schedule.scheduleName}</span><span className="text-xs font-semibold text-rose-600">{schedule.healthState || computeScheduleHealthState(schedule)}</span></div>)}
+              {topOverdueSchedules.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  <span className="font-semibold text-slate-700">No overdue schedules</span>
+                  <span className="mt-1 block font-normal">Nothing late in this list — schedules show here when they need a nudge.</span>
+                </p>
+              ) : (
+                topOverdueSchedules.map((schedule) => (
+                  <div key={schedule.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                    <span className="mr-3 text-sm text-slate-700">{schedule.scheduleName}</span>
+                    <span className="text-xs font-semibold text-rose-600">{schedule.healthState || computeScheduleHealthState(schedule)}</span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -396,8 +435,8 @@ export function DashboardScreen({
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <SectionHeader
           icon="clipboard"
-          eyebrow="Work queue"
-          title="Active audit workload"
+          eyebrow="Open work"
+          title="Active audits"
           subtitle={
             canAccessAdmin(currentUser.role)
               ? "All open audits across the business"
@@ -409,8 +448,8 @@ export function DashboardScreen({
 
         {assignedAudits.length === 0 ? (
           <EmptyPanel
-            title="No audits live yet"
-            text="Connect your Google Drive root folder in Admin, refresh the company folders, and sync the verified audit forms to populate this workspace."
+            title="No audits loaded yet"
+            text="Nothing to open here until this workspace has audits. Connect Google and your company folder in Admin, then sync forms."
           />
         ) : (
           <div className="space-y-3">
@@ -451,14 +490,14 @@ export function DashboardScreen({
       <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
         <SectionHeader
           icon="chart"
-          eyebrow="History"
-          title="Completed audit history"
-          subtitle="Most recent completions and outcomes"
+          eyebrow="Ready to report"
+          title="Recent completions"
+          subtitle="Latest finished audits and outcomes."
         />
         {history.length === 0 ? (
           <EmptyPanel
             title="No completion history yet"
-            text="Completed audits will appear here once your first company folder is synced and inspections are submitted."
+            text="Nothing finished to show — completed audits will list here after work is submitted and synced."
           />
         ) : (
           <div className="space-y-3">

@@ -676,8 +676,8 @@ export function ReportsScreen({
         <div className="mt-4 space-y-3">
           {reportInbox.length === 0 ? (
             <EmptyPanel
-              title="No reports in the inbox yet"
-              text="Generate a pack from the templates below—completed audits, actions, and evidence roll up into a single handover you can send to leadership or customers."
+              title="No reports yet"
+              text="Nothing shared here until someone generates a pack. Reports can build from audits, actions, and NCRs as that history grows."
             />
           ) : (
             reportInbox.map((report) => (

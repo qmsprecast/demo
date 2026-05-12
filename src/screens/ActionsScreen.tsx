@@ -141,7 +141,10 @@ export function ActionsScreen({
       </section>
 
       {actions.length === 0 ? (
-        <EmptyPanel title="No corrective actions in this view" text="Failed answers and flagged issues will create actions here automatically." />
+        <EmptyPanel
+          title="No open actions"
+          text="Nothing needs follow-up here right now. Failed or flagged answers from audits can create actions automatically — you can also add one when a finding needs tracking."
+        />
       ) : (
         <div className="space-y-3">
           {actions.map((action) => (

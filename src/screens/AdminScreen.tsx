@@ -163,8 +163,8 @@ export function AdminScreen({
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
         <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div>
-            <h2 className="text-lg font-semibold tracking-tight text-slate-900">Workspace control</h2>
-            <p className="mt-1 text-sm text-slate-500">Tools and configuration based on your access level.</p>
+            <h2 className="text-lg font-semibold tracking-tight text-slate-900">Admin &amp; setup</h2>
+            <p className="mt-1 text-sm text-slate-500">Shortcuts to the tools you are allowed to use.</p>
           </div>
           <div className="flex items-center gap-3">
             <div className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700">
@@ -253,14 +253,14 @@ export function AdminScreen({
         <section className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.24)]">
           <SectionHeader
             icon="shield"
-            eyebrow="Platform control"
-            title="Platform setup only"
-            subtitle="Company provisioning, Google connection, and live app population are restricted to the platform setup account."
+            eyebrow="Setup"
+            title="Setup account only"
+            subtitle="Workspace setup, connecting Google, and loading live data are limited to the setup account."
           />
           <div className="rounded-[1.5rem] bg-slate-900 p-4">
             <p className="text-sm font-semibold text-white">This workspace is managed centrally</p>
             <p className="mt-2 text-sm leading-6 text-slate-300">
-              Google connection, company folder linking, and app population are only available from the platform setup account.
+              Connecting Google, linking the company folder, and loading live data are only available from the setup account.
             </p>
           </div>
         </section>
@@ -271,7 +271,7 @@ export function AdminScreen({
           <SectionHeader
             icon="spark"
             eyebrow="New tenant"
-            title="Invite new company (app onboarding)"
+            title="Invite new company (workspace setup)"
             subtitle="Send a secure in-app link — the recipient creates the Drive workspace and their Admin account."
           />
           <div className="rounded-[1.5rem] bg-slate-900 p-4">
@@ -287,7 +287,7 @@ export function AdminScreen({
               onClick={onSendGodModeAppCompanyInvite}
               className={`mt-3 h-11 w-full rounded-2xl bg-slate-100 text-sm font-semibold text-slate-900 ${slatePrimaryCtaInteract}`}
             >
-              Send app onboarding link
+              Send company setup link
             </button>
           </div>
         </section>
@@ -310,15 +310,15 @@ export function AdminScreen({
               <AppIcon name="shield" className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Company setup onboarding</p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight">Onboard new company workspace</h2>
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Workspace setup</p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight">Set up a new company workspace</h2>
               <p className="mt-2 text-sm leading-6 text-slate-300">
-                Complete the platform setup steps below to connect Google Drive, link the company folder, and make the app live.
+                Complete the steps below to connect Google Drive, link the company folder, and make the app live.
               </p>
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            <MiniPill label={backendConfigured ? "Platform ready" : "Platform setup needed"} active={backendConfigured} />
+            <MiniPill label={backendConfigured ? "Server ready" : "Finish server setup"} active={backendConfigured} />
             <MiniPill label={googleConnected ? "Google Drive connected" : "Google Drive not connected"} active={googleConnected} />
             <MiniPill
               label={selectedFolder ? `${selectedFolder.name} linked` : "Company folder not linked"}
@@ -327,12 +327,12 @@ export function AdminScreen({
             <MiniPill label={syncState === "Synced" ? "App live" : "App not live"} active={syncState === "Synced"} />
           </div>
           <div className="mt-5 rounded-[1.5rem] bg-white/6 p-4">
-            <p className="text-sm font-semibold text-white">Onboarding status</p>
+            <p className="text-sm font-semibold text-white">Setup progress</p>
             <p className="mt-1 text-sm leading-6 text-slate-300">
               {!backendConfigured
-                ? "The platform backend needs to be configured before Google Drive can be connected."
+                ? "Finish server setup before Google Drive can be connected."
                 : !googleConnected
-                  ? "Step 1: connect the platform owner account to Google Drive."
+                  ? "Step 1: connect Google Drive with the account you use for setup."
                   : !selectedFolder
                     ? "Step 2: paste the company Google Drive links below."
                     : syncState !== "Synced"
@@ -434,7 +434,7 @@ export function AdminScreen({
                     : "bg-sky-300 text-slate-900 shadow-[0_14px_28px_rgba(14,165,233,0.25)] active:scale-[0.99]",
                 ].join(" ")}
               >
-                Run onboarding (one click)
+                Run workspace setup (one click)
               </button>
               <div className="flex flex-wrap items-center gap-3">
                 {googleConnected && (
@@ -475,7 +475,7 @@ export function AdminScreen({
                       ? "Checking Google Drive..."
                       : !googleConnected
                         ? "Connect Google Drive"
-                        : "Start onboarding setup"}
+                        : "Continue workspace setup"}
                   </button>
                   {selectedFolder && (
                     <a
@@ -604,11 +604,11 @@ export function AdminScreen({
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  {currentUser.role === "Master" ? "Platform control" : "Company admin"}
+                  {currentUser.role === "Master" ? "Setup" : "Company admin"}
                 </p>
                 <h3 className="mt-1 text-base font-semibold text-white">Company setup</h3>
                 <p className="text-sm text-slate-300">
-                  Use this section for one-time company provisioning before inviting users.
+                  Use this section for one-time workspace setup before you invite users.
                 </p>
               </div>
               <div className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 ring-1 ring-slate-700">
@@ -618,9 +618,9 @@ export function AdminScreen({
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 1</p>
-                <p className="mt-1 text-sm font-semibold text-white">Platform & Google</p>
+                <p className="mt-1 text-sm font-semibold text-white">Connect Google</p>
                 <p className="mt-1 text-xs text-slate-300">
-                  {backendConfigured && googleConnected ? "Connected" : "Connect Google Drive from onboarding controls."}
+                  {backendConfigured && googleConnected ? "Connected" : "Finish server setup, then connect Google Drive from the steps above."}
                 </p>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
@@ -634,12 +634,12 @@ export function AdminScreen({
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 3</p>
                 <p className="mt-1 text-sm font-semibold text-white">Populate app</p>
                 <p className="mt-1 text-xs text-slate-300">
-                  {syncState === "Synced" ? "App has been populated from company sheet." : "Run onboarding (one click)."}
+                  {syncState === "Synced" ? "App has been populated from company sheet." : "Run workspace setup (one click)."}
                 </p>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 4</p>
-                <p className="mt-1 text-sm font-semibold text-white">Validate readiness</p>
+                <p className="mt-1 text-sm font-semibold text-white">Check everything is ready</p>
                 <p className="mt-1 text-xs text-slate-300">
                   {folderInspection?.blockingItems.length ? "Resolve blocking items shown below." : "Ready for user invites."}
                 </p>
@@ -653,7 +653,7 @@ export function AdminScreen({
                 <h3 className="text-base font-semibold text-white">User management</h3>
                 <p className="text-sm text-slate-300">
                   {currentUser.role === "Master"
-                    ? "Platform control can create Admin, Manager, and Auditor users."
+                    ? "The setup account can create Admin, Manager, and Auditor users."
                     : currentUser.role === "Admin"
                       ? "Admins can create Admin, Manager, and Auditor users."
                       : "User creation is not available on this account."}
@@ -804,7 +804,7 @@ export function AdminScreen({
                   onClick={onInviteUser}
                   className={`mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white active:scale-[0.99] ${slatePrimaryCtaInteract}`}
                 >
-                  Send app onboarding link
+                  Send invite link
                 </button>
                 <button
                   onClick={onResyncUsers}
@@ -816,8 +816,8 @@ export function AdminScreen({
 
               {invitedUsers.length === 0 ? (
                 <EmptyPanel
-                  title="No user invites sent yet"
-                  text="Use this area to send onboarding links for the roles you are allowed to create."
+                  title="No invites sent yet"
+                  text="Nothing listed until you send invite links. Use the form above for roles you are allowed to create."
                 />
               ) : (
                 <div className="space-y-3">
@@ -893,7 +893,7 @@ export function AdminScreen({
             Enable browser notifications
           </button>
           <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            Invite emails use the in-app onboarding page. If SMTP is not configured, use the mail draft or copy the link from the toast.
+            Invite emails use the in-app invite page. If email sending is not configured, use the mail draft or copy the link from the toast.
           </div>
         </div>
               </section>
@@ -926,8 +926,8 @@ export function AdminScreen({
           </div>
         ) : (
           <EmptyPanel
-            title="No company sheet data synced yet"
-            text="Populate the app from a company folder that contains a Company Master Sheet with Users and Schedule tabs."
+            title="Company sheet not synced yet"
+            text="Setup needed — link a company folder with a master sheet in Admin, then populate so row counts and tabs can show here."
           />
         )}
               </section>
@@ -937,8 +937,8 @@ export function AdminScreen({
           <SectionHeader
             icon="shield"
             eyebrow="Workspace health"
-            title="Google workspace validator"
-            subtitle="Checks tabs, schema version, and connected folders before the live company workspace is relied on in the field."
+            title="Check workspace"
+            subtitle="Checks tabs, sheet format, and linked folders before you rely on this workspace in the field."
           />
           <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
             {workspaceValidation?.ok ? "Healthy" : "Check needed"}
@@ -947,9 +947,9 @@ export function AdminScreen({
         {workspaceValidation ? (
           <div className="space-y-3">
             <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-semibold text-slate-900">Schema version</p>
+              <p className="text-sm font-semibold text-slate-900">Sheet format</p>
               <p className="mt-1 text-sm text-slate-500">
-                Found {workspaceValidation.schemaVersion || "none"} • app expects {workspaceValidation.currentSchemaVersion}
+                On sheet: {workspaceValidation.schemaVersion || "none"} • this app expects {workspaceValidation.currentSchemaVersion}
               </p>
               {workspaceValidation.warnings.length > 0 ? (
                 <div className="mt-3 space-y-2">
@@ -992,16 +992,16 @@ export function AdminScreen({
           </div>
         ) : (
           <EmptyPanel
-            title="No validation run yet"
-            text="Run a workspace check after linking the company resources to confirm tabs, schema version, and folders are all ready."
+            title="No workspace check yet"
+            text="After you link folders, tap Check workspace to confirm tabs, columns, and folder links before go-live."
           />
         )}
         <div className="mt-4 flex flex-wrap gap-3">
           <button onClick={onValidateWorkspace} className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-            {workspaceValidationLoading ? "Validating..." : "Validate workspace"}
+            {workspaceValidationLoading ? "Checking..." : "Check workspace"}
           </button>
           <button onClick={onRepairWorkspace} className="h-12 rounded-2xl bg-blue-50 px-5 text-sm font-semibold text-blue-800">
-            Repair / upgrade workspace
+            Fix workspace
           </button>
         </div>
               </section>
@@ -1128,7 +1128,10 @@ export function AdminScreen({
         </div>
         <div className="mt-4 space-y-3">
           {templates.length === 0 ? (
-            <EmptyPanel title="No templates yet" text="Google Drive forms and local templates will appear here once they are available." />
+            <EmptyPanel
+              title="No templates yet"
+              text="Nothing to pick from until Drive forms or local templates load into this workspace after sync."
+            />
           ) : (
             templates.slice(0, 8).map((template) => (
               <div key={template.id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { canCompleteAuditAsAuditor } from "../permissions";
 import type { NonConformanceScreenProps } from "../types/nonConformanceScreenProps";
+import { EmptyPanel } from "../components/dashboard/DashboardPrimitives";
 import { slatePrimaryCtaInteract } from "../styles/interactions";
 
 function parseNcrSequence(reference: string) {
@@ -62,7 +63,10 @@ export function NonConformanceScreen({
       <section className="rounded-[1.6rem] border border-slate-200 bg-white p-4 shadow-sm">
         <div className="grid gap-2">
           {visible.length === 0 ? (
-            <p className="text-sm text-slate-500">No NCR records yet.</p>
+            <EmptyPanel
+              title="No NCRs recorded"
+              text="Nothing in the register yet. NCRs appear when raised from audits or other quality work so you can investigate and close them out."
+            />
           ) : (
             visible.map((item) => (
               <button key={item.id} onClick={() => setSelectedId(item.id)} className={`grid grid-cols-6 gap-2 rounded-xl border px-3 py-2 text-left ${selectedId === item.id ? "border-slate-900 bg-slate-50" : "border-slate-200 bg-white"}`}>
@@ -143,7 +147,10 @@ export function NonConformanceScreen({
           <h3 className="text-base font-semibold text-slate-900">Completed NCR reports</h3>
           <div className="mt-2 space-y-2">
             {completed.length === 0 ? (
-              <p className="text-sm text-slate-500">No completed NCR reports yet.</p>
+              <EmptyPanel
+                title="No completed NCRs yet"
+                text="Finished reports show here after you mark an NCR complete from the list above."
+              />
             ) : (
               completed.map((item) => (
                 <div key={item.id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">

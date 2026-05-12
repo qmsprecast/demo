@@ -597,7 +597,7 @@ function canCreatePreviewProfile() {
 }
 const demoRoleSwitchEnabled = isDemoRoleSwitchEnabled();
 /** Sign-in / landing demo copy — display names only; internal `Role` values are unchanged (`Master`, etc.). */
-const roles = ["Platform owner", "Admin", "Manager", "Auditor"] as const;
+const roles = ["Workspace setup", "Admin", "Manager", "Auditor"] as const;
 const CURRENT_SCHEMA_VERSION = "2.0.0";
 const REQUIRED_WORKSPACE_TABS = ["Onboarding", "Users", "Schedule", "Actions", "Notes", "Config"] as const;
 const ACTION_DUE_DAYS_BY_SEVERITY: Record<RiskLevel, number> = {
@@ -2455,7 +2455,7 @@ function defaultDashboardPreferences(): DashboardPreferences {
 }
 
 function defaultDashboardSectionOrder(): DashboardSectionKey[] {
-  return ["trafficBoard", "liveSummary", "upcomingAudits", "openActions", "complianceSnapshot"];
+  return ["trafficBoard", "upcomingAudits", "openActions", "liveSummary", "complianceSnapshot"];
 }
 
 function readStoredDashboardPreferences(): DashboardPreferences {
@@ -3058,19 +3058,19 @@ function App() {
       return "";
     }
     if (currentUser.role === "Master" && godCompanySetupSession) {
-      return "Company workspace onboarding only — sign out when finished";
+      return "Workspace setup only — sign out when finished";
     }
     if (currentUser.role === "Master") {
-      return "Onboarding — connect Google, link the company workspace, and go live";
+      return "Setup — connect Google, link the company workspace, and go live";
     }
     if (currentUser.role === "Admin") {
-      return "Platform configuration and template control";
+      return "Admin, templates, invites, and workspace checks";
     }
     if (currentUser.role === "Manager") {
       return "Review actions, overdue items, and compliance risk";
     }
     return "Complete assigned audits and capture site outcomes";
-  }, [currentUser]);
+  }, [currentUser, godCompanySetupSession]);
   const currentUserAppName = useMemo(() => {
     if (!currentUser) {
       return "";
@@ -4049,7 +4049,7 @@ function App() {
       setOnboardingSource(payload.onboardingSource ?? null);
 
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Unable to load Google status.");
+        throw new Error(payload.error || "Unable to check the Google connection.");
       }
 
       if (payload.connected && payload.companies) {
@@ -4061,8 +4061,8 @@ function App() {
     } catch (error) {
       if (!options?.silent) {
         pushToast(
-          "Backend unavailable",
-          error instanceof Error ? error.message : "Unable to reach the Google integration server.",
+          "Setup server unavailable",
+          error instanceof Error ? error.message : "Unable to reach the setup server. Check your network and try again.",
           "warning",
         );
       }
@@ -4094,8 +4094,8 @@ function App() {
     } catch (error) {
       if (!options?.silent) {
         pushToast(
-          "Onboarding source unavailable",
-          error instanceof Error ? error.message : "Unable to load onboarding submissions.",
+          "Company sign-up list unavailable",
+          error instanceof Error ? error.message : "Unable to load company sign-up responses.",
           "warning",
         );
       }
@@ -4331,13 +4331,13 @@ function App() {
       });
       const payload = (await response.json()) as WorkspaceValidation & { error?: string };
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Unable to validate the workspace.");
+        throw new Error(payload.error || "Unable to check the workspace.");
       }
       setWorkspaceValidation(payload);
       return payload;
     } catch (error) {
       if (!options?.silent) {
-        pushToast("Workspace validation failed", error instanceof Error ? error.message : "Unable to validate the workspace.", "warning");
+        pushToast("Check workspace failed", error instanceof Error ? error.message : "Unable to check the workspace.", "warning");
       }
       return null;
     } finally {
@@ -4351,7 +4351,7 @@ function App() {
     const sheetId = extractGoogleResourceId(masterSheetInput) || companySheetSync?.sheetId || selectedFolder?.responseSheetId || "";
     const companyFolderId = extractGoogleResourceId(folderIdInput) || selectedFolder?.id || "";
     if (!sheetId || !companyFolderId) {
-      pushToast("Workspace link required", "A company folder and Company Master Sheet must be linked before repair.", "warning");
+      pushToast("Workspace link required", "Link a company folder and Company Master Sheet before running Fix workspace.", "warning");
       return;
     }
     setWorkspaceValidationLoading(true);
@@ -4370,12 +4370,12 @@ function App() {
       });
       const payload = (await response.json()) as { ok: boolean; validation: WorkspaceValidation; error?: string };
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Unable to repair the workspace.");
+        throw new Error(payload.error || "Unable to fix the workspace.");
       }
       setWorkspaceValidation(payload.validation);
-      pushToast("Workspace repaired", "Missing tabs and columns were added safely with a backup copy created first.", "success");
+      pushToast("Workspace updated", "Missing tabs and columns were added safely with a backup copy created first.", "success");
     } catch (error) {
-      pushToast("Workspace repair failed", error instanceof Error ? error.message : "Unable to repair the workspace.", "warning");
+      pushToast("Fix workspace failed", error instanceof Error ? error.message : "Unable to fix the workspace.", "warning");
     } finally {
       setWorkspaceValidationLoading(false);
     }
@@ -4435,7 +4435,7 @@ function App() {
       return;
     }
     if (companySetupLoginPortal && match.role !== "Master") {
-      pushToast("Master only", "Company setup sign-in is only for the platform Master account.", "warning");
+      pushToast("Master only", "Company setup sign-in is only for the workspace setup (Master) account.", "warning");
       return;
     }
     try {
@@ -4575,8 +4575,8 @@ function App() {
       pushToast(
         payload.delivery === "manual" ? "Invite draft ready" : "Invite sent",
         payload.delivery === "manual"
-          ? "SMTP is not configured. Use the generated mail draft or share the onboarding link manually."
-          : `App onboarding link sent to ${trimmed}.`,
+          ? "Email is not configured. Use the generated mail draft or share the invite link manually."
+          : `Invite link sent to ${trimmed}.`,
         "success",
       );
     } catch (error) {
@@ -4612,19 +4612,19 @@ function App() {
 
     const trimmedEmail = inviteEmailInput.trim().toLowerCase();
     if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      pushToast("Email required", "Enter a valid email address to send the onboarding link.", "warning");
+      pushToast("Email required", "Enter a valid email address to send the invite link.", "warning");
       return;
     }
 
     if (invitedUsers.some((invite) => invite.email === trimmedEmail && invite.role === inviteRole)) {
-      pushToast("Invite already sent", "That user and role already has an active onboarding invite.", "warning");
+      pushToast("Invite already sent", "That user and role already has an active invite.", "warning");
       return;
     }
 
     const sheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput);
     const companyFolderId = selectedFolder?.id || extractGoogleResourceId(folderIdInput);
     if (!googleConnected) {
-      pushToast("Google not connected", "Connect Google on the server before sending app onboarding invites.", "warning");
+      pushToast("Google not connected", "Connect Google in Setup before sending invite links.", "warning");
       return;
     }
     if (!sheetId || !companyFolderId) {
@@ -4665,7 +4665,7 @@ function App() {
       };
 
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Unable to send onboarding invite email.");
+        throw new Error(payload.error || "Unable to send invite email.");
       }
       inviteDelivery = payload.delivery || "smtp";
       inviteMailtoUrl = payload.mailtoUrl || "";
@@ -4674,7 +4674,7 @@ function App() {
     } catch (error) {
       pushToast(
         "Invite send failed",
-        error instanceof Error ? error.message : "Unable to send onboarding invite email.",
+        error instanceof Error ? error.message : "Unable to send invite email.",
         "warning",
       );
       return;
@@ -4706,13 +4706,13 @@ function App() {
     }
     setInviteEmailInput("");
     pushToast(
-      inviteDelivery === "manual" ? "Invite draft ready" : "Onboarding link sent",
+      inviteDelivery === "manual" ? "Invite draft ready" : "Invite link sent",
       inviteDelivery === "manual"
         ? `SMTP is not configured. Open email draft for ${trimmedEmail}.`
         : `${inviteRole} invite sent to ${trimmedEmail}.`,
       "success",
     );
-    triggerNotification("User onboarding invite", `${trimmedEmail} has been invited as ${inviteRole}.`);
+    triggerNotification("User invite", `${trimmedEmail} has been invited as ${inviteRole}.`);
   };
 
   const handleResendInvite = async (invite: UserInvite) => {
@@ -4720,7 +4720,7 @@ function App() {
     const sheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput);
     const companyFolderId = selectedFolder?.id || extractGoogleResourceId(folderIdInput);
     if (!googleConnected || !sheetId || !companyFolderId) {
-      pushToast("Workspace required", "Connect Google and select a company folder before resending invites.", "warning");
+      pushToast("Workspace required", "Connect Google and pick a company folder before resending invites.", "warning");
       return;
     }
 
@@ -4752,7 +4752,7 @@ function App() {
         onboardingUrl?: string;
       };
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Unable to resend onboarding invite email.");
+        throw new Error(payload.error || "Unable to resend invite email.");
       }
       inviteDelivery = payload.delivery || "smtp";
       inviteMailtoUrl = payload.mailtoUrl || inviteMailtoUrl;
@@ -4761,7 +4761,7 @@ function App() {
     } catch (error) {
       pushToast(
         "Resend failed",
-        error instanceof Error ? error.message : "Unable to resend onboarding invite email.",
+        error instanceof Error ? error.message : "Unable to resend invite email.",
         "warning",
       );
       return;
@@ -5613,8 +5613,8 @@ function App() {
   const handleGoogleConnect = () => {
     if (!backendConfigured) {
       pushToast(
-        "Backend setup required",
-        "Add your Google OAuth credentials to the backend before connecting the Google Drive root folder.",
+        "Setup required",
+        "Add your Google client ID and secret on the setup server (see `.env`) before connecting Drive.",
         "warning",
       );
       return;
@@ -6076,7 +6076,7 @@ function App() {
         openActions: true,
         complianceSnapshot: false,
       });
-      setDashboardSectionOrder(["trafficBoard", "liveSummary", "openActions", "upcomingAudits", "complianceSnapshot"]);
+      setDashboardSectionOrder(["trafficBoard", "upcomingAudits", "openActions", "liveSummary", "complianceSnapshot"]);
       return;
     }
     if (preset === "operations") {
@@ -7039,7 +7039,7 @@ function App() {
                   <div className="flex flex-col justify-center gap-3 px-1 py-0 sm:px-2">
                     <BertLogo variant="full" tone={themeMode === "dark" ? "onDark" : "onLight"} size="lg" className="w-full" />
                     <p className="text-xs font-medium text-slate-500 sm:text-sm sm:text-slate-400">
-                      Platform Master — company workspace onboarding only
+                      Workspace setup — new company sign-in only
                     </p>
                   </div>
                   <div className="flex min-h-0 items-center">
@@ -7060,10 +7060,10 @@ function App() {
                       >
                         ← Staff sign-in
                       </button>
-                      <h2 className="text-center text-base font-semibold text-white sm:text-lg">Company setup (Master)</h2>
+                      <h2 className="text-center text-base font-semibold text-white sm:text-lg">Workspace setup (Master)</h2>
                       <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs leading-snug text-slate-300 sm:text-sm">
-                        Sign in with the platform Master account only. You will stay in{" "}
-                        <span className="font-semibold text-white">Onboarding</span> until you sign out — no other areas of the app
+                        Sign in with the workspace setup (Master) account only. You will stay in{" "}
+                        <span className="font-semibold text-white">Setup</span> until you sign out — no other areas of the app
                         are available from here.
                       </p>
                       <p className="mt-2 text-center text-[11px] text-slate-400 sm:text-xs">
@@ -7169,8 +7169,8 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  title="Company setup (Master only)"
-                  aria-label="Company setup sign-in for platform Master"
+                  title="Workspace setup (Master only)"
+                  aria-label="Company setup sign-in for workspace setup (Master)"
                   onClick={() => {
                     try {
                       const url = new URL(window.location.href);
@@ -7326,7 +7326,7 @@ function App() {
         <header className={["qms-app-header relative z-10 border-b px-3 pb-1 pt-1 backdrop-blur", themeMode === "dark" ? "border-white/10 bg-slate-950/58" : "border-slate-200/80 bg-white/72"].join(" ")}>
           <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[9px] font-semibold uppercase tracking-[0.16em]">
             <div className={["rounded-full px-2.5 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--bert-signal-orange)] bg-white font-semibold text-[var(--qms-navy-900)]"].join(" ")}>
-              {godCompanySetupOnlyShell ? "Company setup (Master)" : "Tablet workspace"}
+              {godCompanySetupOnlyShell ? "Workspace setup (Master)" : "Tablet workspace"}
             </div>
             <div className="flex items-center gap-1">
               {demoRoleSwitchEnabled && !godCompanySetupOnlyShell && <div className="hidden items-center gap-1 lg:flex">
@@ -7334,7 +7334,7 @@ function App() {
                 <button
                   type="button"
                   title={roles[0]}
-                  onClick={() => handleQuickRoleSwitch("Master", "Platform owner")}
+                  onClick={() => handleQuickRoleSwitch("Master", "Workspace setup")}
                   className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
                 >
                   OWNER

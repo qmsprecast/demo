@@ -4,7 +4,7 @@ import type { ManagerDashboardProps } from "../../types/dashboardScreenProps";
 import type { Audit, AuditStatus } from "../../types/reportsScreenProps";
 import { amberThresholdHours, getAuditTrafficStatus, getDueWarning, statusStyles } from "../../utils/dashboardHealth";
 import { isEscalated, isOverdue, isStuck } from "../../utils/managerDashboard";
-import { DashboardBertFlowStrip, SectionHeader, StatusBadge, TrendBar } from "./DashboardPrimitives";
+import { DashboardBertFlowStrip, SectionHeader, StartHereCard, StatusBadge, TrendBar } from "./DashboardPrimitives";
 
 export function ManagerDashboard({
   groupedAudits,
@@ -54,11 +54,19 @@ export function ManagerDashboard({
     moveSection,
   } = useDashboardSectionLayout(storageKeys.layoutManager, ["immediateAttention", "todaysWork", "liveBoard", "liveGraphs", "repeatIssues"]);
 
+  const managerLayoutSectionLabels: Record<string, string> = {
+    immediateAttention: "Needs attention",
+    todaysWork: "Today",
+    liveBoard: "Audit traffic",
+    liveGraphs: "Charts",
+    repeatIssues: "Repeat issues",
+  };
+
   const renderSection = (section: string) => {
     if (section === "immediateAttention") {
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="shield" eyebrow="Immediate attention" title="Immediate attention" subtitle="Items that need action now." />
+          <SectionHeader icon="shield" eyebrow="Needs attention" title="Needs attention" subtitle="Items that need action now." />
           <div className="mt-2 flex flex-wrap gap-2">
             <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue actions {overdueActions.length}</div>
             <div className="rounded-full bg-rose-200 px-3 py-1 text-xs font-semibold text-rose-900">Escalated {escalatedActions.length}</div>
@@ -85,7 +93,7 @@ export function ManagerDashboard({
     if (section === "todaysWork") {
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="clock" eyebrow="Today's work" title="Today's work" subtitle="Audits and actions due today." />
+          <SectionHeader icon="clock" eyebrow="Today" title="Today" subtitle="Audits and actions due today." />
           <div className="mt-2 grid gap-3 lg:grid-cols-2">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Audits due today</p>
@@ -124,7 +132,7 @@ export function ManagerDashboard({
     if (section === "liveBoard") {
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="dashboard" eyebrow="Live audit board" title="Live audit board" subtitle="Red, amber, green grouped audits." />
+          <SectionHeader icon="dashboard" eyebrow="Open work" title="Audit traffic" subtitle="Red, amber, and green audits side by side." />
           <div className="mt-2 grid gap-2">
             <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red.slice(0, 1)} status="red" onOpenAudit={onOpenAudit} />
             <TrafficLane title="Amber" subtitle={`<${amberThresholdHours}h remaining`} audits={groupedAudits.amber.slice(0, 1)} status="amber" onOpenAudit={onOpenAudit} />
@@ -156,7 +164,7 @@ export function ManagerDashboard({
               ];
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="chart" eyebrow="Live graphs" title="Live performance graphs" subtitle="Real-time compliance and action movement." />
+          <SectionHeader icon="chart" eyebrow="More detail" title="Charts" subtitle="Optional views of audits, actions, and risk pressure." />
           <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Graph view</p>
@@ -223,7 +231,7 @@ export function ManagerDashboard({
     }
     return (
       <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-        <SectionHeader icon="warningTriangle" eyebrow="Repeat issues" title="Top repeated failures" subtitle="Most frequent failed findings this week." />
+        <SectionHeader icon="warningTriangle" eyebrow="More detail" title="Repeat issues" subtitle="Most frequent failed findings this week." />
         {repeatedTop3.length === 0 ? (
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">All clear - no repeated failures.</div>
         ) : (
@@ -245,9 +253,10 @@ export function ManagerDashboard({
 
   return (
     <div className="space-y-4">
+      {assignedAudits.length === 0 && <StartHereCard />}
       <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
+          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Home</p>
           <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
             Layout options
           </button>
@@ -257,7 +266,7 @@ export function ManagerDashboard({
             {sectionOrder.map((section, index) => (
               <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
+                <span className="min-w-0 flex-1 text-sm text-slate-700">{managerLayoutSectionLabels[section] ?? section}</span>
                 <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
                 <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
               </div>
@@ -268,14 +277,14 @@ export function ManagerDashboard({
       </section>
       {(hasImmediateAttention || hasTodaysWork) && (
         <div className="grid gap-3 lg:grid-cols-2">
-          {hasTodaysWork && (
-            <div className="lg:h-[21rem] [&>section]:h-full [&>section]:overflow-y-auto">
-              {renderSection("todaysWork")}
-            </div>
-          )}
           {hasImmediateAttention && (
             <div className="lg:h-[21rem] [&>section]:h-full [&>section]:overflow-y-auto">
               {renderSection("immediateAttention")}
+            </div>
+          )}
+          {hasTodaysWork && (
+            <div className="lg:h-[21rem] [&>section]:h-full [&>section]:overflow-y-auto">
+              {renderSection("todaysWork")}
             </div>
           )}
         </div>

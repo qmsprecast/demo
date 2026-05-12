@@ -494,6 +494,146 @@ function envConfigured() {
   );
 }
 
+const DEFAULT_SESSION_SECRET = "qms-local-dev-secret";
+
+function nodeEnvLabel() {
+  return String(process.env.NODE_ENV || "development").trim() || "development";
+}
+
+function isProductionRuntime() {
+  return nodeEnvLabel() === "production";
+}
+
+/**
+ * Production-only gates. Warnings are logged; blocking issues fail boot in production.
+ * @returns {{ isProduction: boolean, blockingIssues: string[], warnings: string[] }}
+ */
+function evaluateProductionEnvironment() {
+  const blockingIssues = [];
+  const warnings = [];
+  if (!isProductionRuntime()) {
+    return { isProduction: false, blockingIssues, warnings };
+  }
+
+  const secret = String(process.env.SESSION_SECRET || "").trim();
+  if (!secret || secret === DEFAULT_SESSION_SECRET) {
+    blockingIssues.push("SESSION_SECRET must be set to a strong secret (not the local default) when NODE_ENV=production.");
+  } else if (secret.length < 24) {
+    blockingIssues.push("SESSION_SECRET is too short for production (use at least 24 random characters).");
+  }
+
+  if (parseBooleanEnv(process.env.ALLOW_INSECURE_OAUTH_STATE)) {
+    blockingIssues.push("ALLOW_INSECURE_OAUTH_STATE must not be true in production.");
+  }
+
+  if (!envConfigured()) {
+    blockingIssues.push(
+      `Google server environment is incomplete. Missing: ${collectMissingGoogleEnvKeys().join(", ") || "(see GOOGLE_* vars)"}.`,
+    );
+  }
+
+  const fe = String(requiredEnv.FRONTEND_URL || "").trim();
+  if (fe.startsWith("http://")) {
+    const loopbackOk = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(fe);
+    if (!loopbackOk) {
+      warnings.push("FRONTEND_URL uses http:// for a non-loopback host; use https behind TLS in production.");
+    }
+  }
+
+  const redirect = String(requiredEnv.GOOGLE_REDIRECT_URI || "").trim();
+  if (redirect.startsWith("http://")) {
+    const loopbackOk = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(redirect);
+    if (!loopbackOk) {
+      warnings.push("GOOGLE_REDIRECT_URI uses http:// for a non-loopback host; Google OAuth should use https in production.");
+    }
+  }
+
+  return { isProduction: true, blockingIssues, warnings };
+}
+
+function assertSafeProductionBoot() {
+  const evaluation = evaluateProductionEnvironment();
+  for (const w of evaluation.warnings) {
+    console.warn(`[api][production] ${w}`);
+  }
+  if (evaluation.isProduction && evaluation.blockingIssues.length > 0) {
+    console.error("[api] Refusing to start API in production with blocking configuration issues:");
+    for (const issue of evaluation.blockingIssues) {
+      console.error(`  - ${issue}`);
+    }
+    process.exit(1);
+  }
+}
+
+function sessionStoreWritable() {
+  try {
+    fs.accessSync(sessionDir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function smtpStartupLogPayload() {
+  const config = smtpConfigSummary();
+  const diag = smtpCredentialDiagnostics();
+  if (isProductionRuntime()) {
+    return {
+      smtpConfigured: emailConfigured(),
+      hostSet: Boolean(config.host),
+      port: config.port,
+      secure: config.secure,
+      fromSet: Boolean(config.from),
+      passwordProvided: diag.passwordProvided,
+    };
+  }
+  return {
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    user: config.user,
+    from: config.from,
+    ...diag,
+  };
+}
+
+function getHealthPayload() {
+  return {
+    ok: true,
+    service: "bert-api",
+    version: APP_VERSION,
+    environment: nodeEnvLabel(),
+    /** @deprecated use googleEnvConfigured */
+    configured: envConfigured(),
+    googleEnvConfigured: envConfigured(),
+    sharedDriveConfigured: Boolean(requiredEnv.GOOGLE_SHARED_DRIVE_ID),
+    uptimeSeconds: Math.round(process.uptime()),
+  };
+}
+
+function getReadinessPayload() {
+  const evaluation = evaluateProductionEnvironment();
+  const writable = sessionStoreWritable();
+  const googleOk = envConfigured();
+  const productionOk = !evaluation.isProduction || evaluation.blockingIssues.length === 0;
+  const ready = googleOk && writable && productionOk;
+  return {
+    ok: ready,
+    ready,
+    service: "bert-api",
+    version: APP_VERSION,
+    environment: nodeEnvLabel(),
+    checks: {
+      googleEnvConfigured: googleOk,
+      sessionStoreWritable: writable,
+      productionEnvOk: productionOk,
+    },
+    missingGoogleKeys: googleOk ? [] : collectMissingGoogleEnvKeys(),
+    warnings: evaluation.warnings,
+    errors: evaluation.blockingIssues,
+  };
+}
+
 function collectMissingGoogleEnvKeys() {
   const missing = [];
   if (!requiredEnv.GOOGLE_CLIENT_ID) missing.push("GOOGLE_CLIENT_ID");
@@ -2448,10 +2588,12 @@ async function validateWorkspace(auth, input) {
       validation.lastRepairedAt = config.lastRepairedAt || "";
 
       if (!validation.schemaVersion) {
-        validation.repairableIssues.push("The Config tab does not store a schemaVersion yet.");
+        validation.repairableIssues.push("The Config tab does not record the sheet format version yet.");
       } else if (validation.schemaVersion !== CURRENT_SCHEMA_VERSION) {
-        validation.warnings.push(`Schema version mismatch: found ${validation.schemaVersion}, expected ${CURRENT_SCHEMA_VERSION}.`);
-        validation.repairableIssues.push("The Company Master Sheet schema version is behind the app version.");
+        validation.warnings.push(
+          `Company sheet format mismatch: on sheet ${validation.schemaVersion}, this app expects ${CURRENT_SCHEMA_VERSION}.`,
+        );
+        validation.repairableIssues.push("The company master sheet format is older than this app version.");
       }
 
       const tabColumnEntries = Object.entries(TAB_COLUMNS);
@@ -2606,7 +2748,7 @@ app.get("/api/onboarding/submissions", async (_req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before loading onboarding submissions.",
+      error: "Please connect Google before loading onboarding submissions.",
     });
   }
 
@@ -2634,7 +2776,7 @@ app.get("/api/company-folder/:folderId", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before checking the company folder.",
+      error: "Please connect Google before checking the company folder.",
     });
   }
 
@@ -2655,7 +2797,7 @@ app.get("/api/google-file/:fileId", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before checking Google Drive items.",
+      error: "Please connect Google before checking Google Drive items.",
     });
   }
 
@@ -2676,7 +2818,7 @@ app.get("/api/google-forms-folder/:folderId", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before checking the audit forms folder.",
+      error: "Please connect Google before checking the audit forms folder.",
     });
   }
 
@@ -2701,7 +2843,7 @@ app.get("/api/company-sheet/:folderId", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before loading the company master sheet.",
+      error: "Please connect Google before loading the company master sheet.",
     });
   }
 
@@ -2722,7 +2864,7 @@ app.get("/api/google-sheet-by-id/:sheetId", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before loading the company master sheet.",
+      error: "Please connect Google before loading the company master sheet.",
     });
   }
 
@@ -2743,7 +2885,7 @@ app.post("/api/google-sheet-by-id/:sheetId/schedules", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving schedules.",
+      error: "Please connect Google before saving schedules.",
     });
   }
 
@@ -2774,7 +2916,7 @@ app.post("/api/google-sheet-by-id/:sheetId/users", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving users.",
+      error: "Please connect Google before saving users.",
     });
   }
 
@@ -2805,7 +2947,7 @@ app.post("/api/google-sheet-by-id/:sheetId/actions", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving actions.",
+      error: "Please connect Google before saving actions.",
     });
   }
 
@@ -2836,7 +2978,7 @@ app.post("/api/google-sheet-by-id/:sheetId/action-comments", async (req, res) =>
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving action history.",
+      error: "Please connect Google before saving action history.",
     });
   }
 
@@ -2867,7 +3009,7 @@ app.post("/api/google-sheet-by-id/:sheetId/audit-results", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving audit results.",
+      error: "Please connect Google before saving audit results.",
     });
   }
 
@@ -2898,7 +3040,7 @@ app.post("/api/google-sheet-by-id/:sheetId/audit-findings", async (req, res) => 
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving audit findings.",
+      error: "Please connect Google before saving audit findings.",
     });
   }
 
@@ -2929,7 +3071,7 @@ app.post("/api/google-sheet-by-id/:sheetId/evidence", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving evidence.",
+      error: "Please connect Google before saving evidence.",
     });
   }
 
@@ -2961,7 +3103,7 @@ app.post("/api/google-sheet-by-id/:sheetId/incidents", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving incidents.",
+      error: "Please connect Google before saving incidents.",
     });
   }
 
@@ -2992,7 +3134,7 @@ app.post("/api/google-sheet-by-id/:sheetId/incident-actions", async (req, res) =
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving incident actions.",
+      error: "Please connect Google before saving incident actions.",
     });
   }
 
@@ -3023,7 +3165,7 @@ app.post("/api/google-sheet-by-id/:sheetId/sync-log", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving sync history.",
+      error: "Please connect Google before saving sync history.",
     });
   }
 
@@ -3054,7 +3196,7 @@ app.post("/api/google-sheet-by-id/:sheetId/audit-bundle", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before syncing audits.",
+      error: "Please connect Google before syncing audits.",
     });
   }
 
@@ -3089,7 +3231,7 @@ app.post("/api/google-sheet-by-id/:sheetId/validate", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before validating the workspace.",
+      error: "Please connect Google before checking the workspace.",
     });
   }
 
@@ -3106,7 +3248,7 @@ app.post("/api/google-sheet-by-id/:sheetId/validate", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       ok: false,
-      error: error instanceof Error ? error.message : "Unable to validate the workspace.",
+      error: error instanceof Error ? error.message : "Unable to check the workspace.",
     });
   }
 });
@@ -3117,7 +3259,7 @@ app.post("/api/google-sheet-by-id/:sheetId/repair", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before repairing the workspace.",
+      error: "Please connect Google before fixing the workspace.",
     });
   }
 
@@ -3139,7 +3281,7 @@ app.post("/api/google-sheet-by-id/:sheetId/repair", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       ok: false,
-      error: error instanceof Error ? error.message : "Unable to repair the workspace.",
+      error: error instanceof Error ? error.message : "Unable to fix the workspace.",
     });
   }
 });
@@ -3464,7 +3606,7 @@ app.post("/api/onboarding/app-invites/:tokenId/complete", async (req, res) => {
       const frontend = requiredEnv.FRONTEND_URL.replace(/\/$/, "");
       return res.status(401).json({
         ok: false,
-        error: `Invite completion uses the API server's Google account to create Drive folders and sheet rows. On the machine where the API runs, sign in once: open http://127.0.0.1:${port}/auth/google/login and complete consent (OAuth redirect must match GOOGLE_REDIRECT_URI). If you use Vite dev with the proxy, ${frontend}/auth/google/login also works while \`npm run dev\` and \`npm run server\` are both running. Then click Complete onboarding again.`,
+        error: `Invite completion uses the API server's Google account to create Drive folders and sheet rows. On the machine where the API runs, sign in once: open http://127.0.0.1:${port}/auth/google/login and finish consent. The return URL must match GOOGLE_REDIRECT_URI in your server settings. If you use Vite dev with the proxy, ${frontend}/auth/google/login also works while \`npm run dev\` and \`npm run server\` are both running. Then click Complete onboarding again.`,
       });
     }
 
@@ -3509,7 +3651,7 @@ app.post("/api/onboarding/app-invites/:tokenId/complete", async (req, res) => {
           res.status(202).json({
             ok: false,
             provisionStatus: "running",
-            error: "Provisioning already in progress.",
+            error: "Workspace setup is already in progress. Please try again shortly.",
           });
           return;
         }
@@ -3517,7 +3659,7 @@ app.post("/api/onboarding/app-invites/:tokenId/complete", async (req, res) => {
           provisionStatus: "failed",
           provisionFinishedAt: Date.now(),
           provisionError:
-            "The previous provisioning attempt appears stuck or timed out. You can try completing onboarding again.",
+            "The previous workspace setup attempt appears stuck or timed out. You can try completing onboarding again.",
         });
       }
 
@@ -3794,7 +3936,7 @@ app.post("/api/incidents/notify", async (req, res) => {
 
 app.get("/auth/google/login", (req, res) => {
   if (!envConfigured()) {
-    return res.status(400).send("Google OAuth environment variables are missing.");
+    return res.status(400).send("Google sign-in environment variables are missing.");
   }
 
   const auth = createOAuthClient();
@@ -3860,10 +4002,10 @@ app.get("/auth/google/callback", async (req, res) => {
       redirectUrl: `${requiredEnv.FRONTEND_URL.replace(/\/$/, "")}/?google=connected`,
     });
   } catch (error) {
-    console.error("Google OAuth callback failed:", error);
+    console.error("Google sign-in callback failed:", error);
     return sendCallbackPage(res, {
       title: "Google connection failed",
-      message: error instanceof Error ? error.message : "Google OAuth callback failed.",
+      message: error instanceof Error ? error.message : "Google sign-in could not be completed.",
       success: false,
     });
   }
@@ -3885,12 +4027,16 @@ app.post("/auth/google/logout", async (_req, res) => {
   res.json({ ok: true });
 });
 
+assertSafeProductionBoot();
+
 app.get("/api/health", (_req, res) => {
-  res.json({
-    ok: true,
-    configured: envConfigured(),
-    sharedDriveId: requiredEnv.GOOGLE_SHARED_DRIVE_ID || "",
-  });
+  res.json(getHealthPayload());
+});
+
+app.get("/api/readiness", (_req, res) => {
+  const body = getReadinessPayload();
+  const statusCode = body.ready ? 200 : isProductionRuntime() ? 503 : 200;
+  res.status(statusCode).json(body);
 });
 
 app.use((err, req, res, _next) => {
@@ -3905,19 +4051,17 @@ app.use((err, req, res, _next) => {
 });
 
 const httpServer = app.listen(port, "0.0.0.0", () => {
-  console.log(`[api] listening on http://127.0.0.1:${port} and http://0.0.0.0:${port} (${APP_BRAND_NAME})`);
+  console.log(
+    `[api] listening on http://127.0.0.1:${port} (NODE_ENV=${nodeEnvLabel()}, googleEnvConfigured=${envConfigured()}, sessionStoreWritable=${sessionStoreWritable()})`,
+  );
   console.log(`[api] PORT env: ${process.env.PORT || "(unset, using 8787)"}`);
-  const config = smtpConfigSummary();
-  console.log("[smtp] config", {
-    host: config.host,
-    port: config.port,
-    secure: config.secure,
-    user: config.user,
-    from: config.from,
-    ...smtpCredentialDiagnostics(),
-  });
+  console.log("[smtp] startup", smtpStartupLogPayload());
   void verifySmtpTransport().then((result) => {
-    console.log("[smtp] verify", result);
+    if (isProductionRuntime()) {
+      console.log("[smtp] verify", { ok: result.ok, checkedAt: result.checkedAt });
+    } else {
+      console.log("[smtp] verify", result);
+    }
   });
 });
 

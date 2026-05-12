@@ -72,8 +72,8 @@ export function SyncCentreScreen({
       </section>
       {syncQueue.length === 0 ? (
         <EmptyPanel
-          title="Nothing queued for sync"
-          text="When you work offline or the app batches updates to Drive, each item appears here with status and retry history so supervisors can trust what reached the master sheet."
+          title="No sync items waiting"
+          text="All clear — nothing queued right now. Items appear when field or admin work is waiting to upload or retry to your company sheet."
         />
       ) : (
         <div className="space-y-3">

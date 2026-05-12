@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { AuditorTaskDashboardProps } from "../../types/dashboardScreenProps";
 import { amberThresholdHours, getAuditTrafficStatus, getDueWarning } from "../../utils/dashboardHealth";
 import { pickNextAuditorAudit, rankAuditorAudit } from "../../utils/auditorDashboard";
-import { DashboardBertFlowStrip, MiniMetric, StatusBadge } from "./DashboardPrimitives";
+import { DashboardBertFlowStrip, MiniMetric, StartHereCard, StatusBadge } from "./DashboardPrimitives";
 
 export function AuditorTaskDashboard({
   currentUser,
@@ -85,8 +85,9 @@ export function AuditorTaskDashboard({
 
   return (
     <div className="space-y-4">
+      {assignedAudits.length === 0 && <StartHereCard />}
       <section className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
-        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Today&apos;s tasks</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Needs attention</p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">Morning {currentUser.name.split(" ")[0]}</h2>
         <p className="mt-1 text-sm text-slate-500">What do you need to do now?</p>
         <DashboardBertFlowStrip variant="onLight" />
@@ -115,15 +116,18 @@ export function AuditorTaskDashboard({
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-sm font-semibold text-slate-900">Task list</p>
-          <div
-            className={[
-              "rounded-full px-3 py-1 text-xs font-semibold",
-              failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-800",
-            ].join(" ")}
-          >
-            {syncLabel}
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-slate-900">Today & open work</p>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Sync status</span>
+            <div
+              className={[
+                "rounded-full px-3 py-1 text-xs font-semibold",
+                failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-800",
+              ].join(" ")}
+            >
+              {syncLabel}
+            </div>
           </div>
         </div>
         <div className="space-y-3">

@@ -3,7 +3,7 @@ import { storageKeys } from "../../config/storageKeys";
 import type { AdminDashboardProps } from "../../types/dashboardScreenProps";
 import { getAuditTrafficStatus } from "../../utils/dashboardHealth";
 import { isEscalated, isOverdue, isStuck } from "../../utils/managerDashboard";
-import { DashboardBertFlowStrip, SectionHeader } from "./DashboardPrimitives";
+import { DashboardBertFlowStrip, SectionHeader, StartHereCard } from "./DashboardPrimitives";
 
 export function AdminDashboard({
   groupedAudits,
@@ -35,11 +35,17 @@ export function AdminDashboard({
     moveSection,
   } = useDashboardSectionLayout(storageKeys.layoutAdmin, ["immediateAttention", "todaysWork", "systemOverview"]);
 
+  const adminLayoutSectionLabels: Record<string, string> = {
+    immediateAttention: "Needs attention",
+    todaysWork: "Today",
+    systemOverview: "Workspace health",
+  };
+
   const renderSection = (section: string) => {
     if (section === "immediateAttention") {
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="shield" eyebrow="Immediate attention" title="Immediate attention" subtitle="Operational issues needing action." />
+          <SectionHeader icon="shield" eyebrow="Needs attention" title="Needs attention" subtitle="Operational issues needing action." />
           {allClear ? (
             <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm font-semibold text-blue-900">All clear - No overdue audits, actions, or critical issues.</div>
           ) : (
@@ -56,7 +62,7 @@ export function AdminDashboard({
     if (section === "todaysWork") {
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="clock" eyebrow="Today's work" title="Today's work" subtitle="What must be completed today." />
+          <SectionHeader icon="clock" eyebrow="Today" title="Today" subtitle="What must be completed today." />
           <div className="mt-2 grid gap-3 lg:grid-cols-2">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Audits due today</p>
@@ -80,7 +86,7 @@ export function AdminDashboard({
     }
     return (
       <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-        <SectionHeader icon="chart" eyebrow="System overview" title="System overview" subtitle="Running state and sync health." />
+        <SectionHeader icon="chart" eyebrow="Workspace health" title="Overview" subtitle="People, schedules, templates, and sync health." />
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
           <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Total users</p><p className="text-lg font-semibold text-slate-900">{reportUsersCount}</p></div>
           <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Active schedules</p><p className="text-lg font-semibold text-slate-900">{activeSchedulesCount}</p></div>
@@ -97,9 +103,10 @@ export function AdminDashboard({
 
   return (
     <div className="space-y-4">
+      {assignedAudits.length === 0 && <StartHereCard />}
       <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
+          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Home</p>
           <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
             Layout options
           </button>
@@ -109,7 +116,7 @@ export function AdminDashboard({
             {sectionOrder.map((section, index) => (
               <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
+                <span className="min-w-0 flex-1 text-sm text-slate-700">{adminLayoutSectionLabels[section] ?? section}</span>
                 <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
                 <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
               </div>

@@ -183,28 +183,43 @@ export function IncidentReportingScreen({
             <table className="min-w-full text-sm">
               <thead><tr className="text-left text-xs uppercase tracking-[0.14em] text-slate-500"><th className="px-2 py-2">Incident</th><th className="px-2 py-2">Date</th><th className="px-2 py-2">Type</th><th className="px-2 py-2">Severity</th><th className="px-2 py-2">Reporter</th><th className="px-2 py-2">Department</th><th className="px-2 py-2">Location</th><th className="px-2 py-2">Status</th><th className="px-2 py-2">Assigned</th><th className="px-2 py-2">Due</th><th className="px-2 py-2">Evidence</th><th className="px-2 py-2">Action</th></tr></thead>
               <tbody>
-                {filteredIncidents.map((item) => (
-                  <tr key={item.id} onClick={() => setSelectedIncidentId(item.id)} className="cursor-pointer border-t border-slate-200 hover:bg-slate-50">
-                    <td className="px-2 py-2 font-semibold">{item.incidentId}</td><td className="px-2 py-2">{item.incidentDate} {item.incidentTime}</td><td className="px-2 py-2">{item.incidentType}</td><td className="px-2 py-2">{item.severity}</td><td className="px-2 py-2">{item.reporterName}</td><td className="px-2 py-2">{item.department}</td><td className="px-2 py-2">{item.location}</td><td className="px-2 py-2">{item.status}</td><td className="px-2 py-2">{item.assignedTo || "-"}</td><td className="px-2 py-2">{item.dueDate || "-"}</td><td className="px-2 py-2">{item.evidenceUrls.length > 0 ? "Yes" : "No"}</td>
-                    <td className="px-2 py-2">
-                      {canInvestigateIncidents(currentUser.role) && item.status !== "Closed" && (
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setSelectedIncidentId(item.id);
-                            if (item.status === "Open") {
-                              onUpdateIncident(item.id, { status: "Under Investigation" }, { statusNote: "Investigation started" });
-                            }
-                          }}
-                          className="rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white"
-                        >
-                          {item.status === "Open" ? "Start investigation" : "Continue"}
-                        </button>
-                      )}
+                {filteredIncidents.length === 0 ? (
+                  <tr>
+                    <td colSpan={12} className="border-t border-slate-200 px-4 py-8 text-center">
+                      <p className="text-sm font-semibold text-slate-900">
+                        {incidents.length === 0 ? "No incidents recorded" : "No incidents match these filters"}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {incidents.length === 0
+                          ? "Use Report form to log the first incident; it will show in this register."
+                          : "Try clearing dates or setting filters back to All."}
+                      </p>
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredIncidents.map((item) => (
+                    <tr key={item.id} onClick={() => setSelectedIncidentId(item.id)} className="cursor-pointer border-t border-slate-200 hover:bg-slate-50">
+                      <td className="px-2 py-2 font-semibold">{item.incidentId}</td><td className="px-2 py-2">{item.incidentDate} {item.incidentTime}</td><td className="px-2 py-2">{item.incidentType}</td><td className="px-2 py-2">{item.severity}</td><td className="px-2 py-2">{item.reporterName}</td><td className="px-2 py-2">{item.department}</td><td className="px-2 py-2">{item.location}</td><td className="px-2 py-2">{item.status}</td><td className="px-2 py-2">{item.assignedTo || "-"}</td><td className="px-2 py-2">{item.dueDate || "-"}</td><td className="px-2 py-2">{item.evidenceUrls.length > 0 ? "Yes" : "No"}</td>
+                      <td className="px-2 py-2">
+                        {canInvestigateIncidents(currentUser.role) && item.status !== "Closed" && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedIncidentId(item.id);
+                              if (item.status === "Open") {
+                                onUpdateIncident(item.id, { status: "Under Investigation" }, { statusNote: "Investigation started" });
+                              }
+                            }}
+                            className="rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white"
+                          >
+                            {item.status === "Open" ? "Start investigation" : "Continue"}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -224,7 +239,10 @@ export function IncidentReportingScreen({
             <MiniMetric label="Open actions" value={String(openActionsCount)} />
           </div>
           <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
-            Monthly trend: {monthlyTrend.length === 0 ? "No data yet." : monthlyTrend.map(([month, count]) => `${month}: ${count}`).join(" | ")}
+            Monthly trend:{" "}
+            {monthlyTrend.length === 0
+              ? "No incidents recorded yet — the chart fills in after the first report is saved."
+              : monthlyTrend.map(([month, count]) => `${month}: ${count}`).join(" | ")}
           </div>
         </section>
       )}

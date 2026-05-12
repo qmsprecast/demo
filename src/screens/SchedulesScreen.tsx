@@ -263,7 +263,10 @@ export function SchedulesScreen({
         </div>
         <div className="mt-4 space-y-3">
           {schedules.length === 0 ? (
-            <EmptyPanel title="No schedules in this view" text="Add a new schedule or switch the filter to see archived revisions." />
+            <EmptyPanel
+              title="No schedules in this view"
+              text="Nothing listed — add a schedule or switch Live / Archived so saved schedules can appear here."
+            />
           ) : (
             schedules.map((schedule) => (
               <div key={schedule.id} className="rounded-[1.4rem] border border-[rgba(249,115,22,0.35)] bg-[rgba(249,115,22,0.1)] px-4 py-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
