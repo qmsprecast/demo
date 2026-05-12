@@ -34,6 +34,10 @@ const requiredEnv = {
   SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || process.env.APP_BRAND_NAME || "BERT",
 };
 const APP_BRAND_NAME = (process.env.APP_BRAND_NAME || "BERT — Business. Evaluate. Report. Tool.").trim();
+/** Customer-facing inbox for server-driven mail (e.g. incident notifications). Override with APP_SUPPORT_EMAIL or APP_ADMIN_EMAIL. */
+const APP_SUPPORT_EMAIL = String(
+  process.env.APP_SUPPORT_EMAIL || process.env.APP_ADMIN_EMAIL || "admin@usebert.co.uk",
+).trim();
 const ONBOARDING_INVITE_TTL_MS = Math.max(
   60 * 60 * 1000,
   Number(process.env.ONBOARDING_INVITE_TTL_MS || String(7 * 24 * 60 * 60 * 1000)),
@@ -917,7 +921,7 @@ async function sendIncidentReportEmail({
     throw new Error("SMTP is not configured. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM_EMAIL.");
   }
   const transporter = createSmtpTransport();
-  const to = "andy@qmsprecast.co.uk";
+  const to = APP_SUPPORT_EMAIL;
   const subject = `New Incident Report - ${incidentId}${escalated ? " [ESCALATED]" : ""}`;
   const lines = [
     "A new accident / near miss report has been submitted.",

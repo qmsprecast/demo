@@ -3,21 +3,11 @@
  * All boolean rules live here; App.tsx imports and uses these helpers only.
  */
 
+import type { NavItemId, RoutedScreen } from "./types/navigation";
+
 export type Role = "Master" | "Admin" | "Manager" | "Auditor";
 
-/** Must stay aligned with `Screen` minus `"complete"` in App.tsx */
-export type NavItemId =
-  | "dashboard"
-  | "audits"
-  | "actions"
-  | "nonConformance"
-  | "incidents"
-  | "reports"
-  | "sync"
-  | "schedules"
-  | "admin"
-  | "onboarding"
-  | "account";
+export type { NavItemId, RoutedScreen };
 
 export type HomeScreen = Extract<NavItemId, "dashboard" | "onboarding">;
 
@@ -36,7 +26,7 @@ export function canAccessAdmin(role: Role) {
   return role === "Master" || role === "Admin";
 }
 
-/** Control (admin) workspace tab — company Admin only; God Mode uses Onboarding only. */
+/** Control (admin) workspace tab — company Admin only; platform owner (Master) uses Onboarding only. */
 export function canAccessControlScreen(role: Role) {
   return role === "Admin";
 }
@@ -57,7 +47,7 @@ export function canAccessAdminOnboardingWorkspace(role: Role) {
   return role === "Master" || role === "Admin";
 }
 
-/** Dedicated Onboarding menu — company Admin and God Mode (platform setup). */
+/** Dedicated Onboarding menu — company Admin and platform owner (Master) setup. */
 export function canAccessOnboardingNav(role: Role) {
   return role === "Admin" || role === "Master";
 }
@@ -240,7 +230,7 @@ export function canViewAccount(role: Role) {
 }
 
 export function getRoleDisplayName(role: Role) {
-  return role === "Master" ? "God Mode" : role;
+  return role === "Master" ? "Platform owner" : role;
 }
 
 export function getCreatableRoles(role: Role): Role[] {

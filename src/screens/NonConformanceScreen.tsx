@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { canCompleteAuditAsAuditor } from "../permissions";
 import type { NonConformanceScreenProps } from "../types/nonConformanceScreenProps";
-
-const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
+import { slatePrimaryCtaInteract } from "../styles/interactions";
 
 function parseNcrSequence(reference: string) {
   const match = reference.match(/^NCR-(\d+)$/i);

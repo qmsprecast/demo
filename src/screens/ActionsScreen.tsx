@@ -2,10 +2,9 @@ import { canCompleteAuditAsAuditor, getRolePermissions } from "../permissions";
 import { EmptyPanel, MetaPill } from "../components/dashboard/DashboardPrimitives";
 import type { ActionItem, ActionStatus, RiskLevel } from "../types/reportsScreenProps";
 import type { User } from "../types/dashboardScreenProps";
+import { slatePrimaryCtaInteract } from "../styles/interactions";
 
 type ActionFilter = "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity";
-
-const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
 const brandDarkFormControl =
   "border border-[rgba(249,115,22,0.45)] bg-slate-950 text-slate-100 outline-none focus:border-[var(--bert-signal-orange)]";
 

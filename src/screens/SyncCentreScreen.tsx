@@ -1,8 +1,8 @@
 import type { Role } from "../permissions";
 import { getRolePermissions } from "../permissions";
 import type { SyncQueueItem, SyncStatus } from "../types/sync";
-
-const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
+import { EmptyPanel, MiniMetric } from "../components/dashboard/DashboardPrimitives";
+import { slatePrimaryCtaInteract } from "../styles/interactions";
 
 function syncTrustLabel(status: SyncStatus): string {
   if (status === "Pending Sync") return "Queued";
@@ -11,17 +11,6 @@ function syncTrustLabel(status: SyncStatus): string {
   if (status === "Failed") return "Failed";
   if (status === "Conflict") return "Failed (conflict)";
   return status;
-}
-
-function MiniMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-[1.5rem] border border-slate-200 bg-white p-3">
-      <div className="flex items-center gap-2">
-        <p className="text-[11px] font-semibold leading-tight tracking-[0.08em] text-slate-500">{label}</p>
-      </div>
-      <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
-    </div>
-  );
 }
 
 function SyncCentreAppIcon({ name, className = "h-5 w-5" }: { name: string; className?: string }) {
@@ -45,15 +34,6 @@ function SyncCentreAppIcon({ name, className = "h-5 w-5" }: { name: string; clas
     );
   }
   return null;
-}
-
-function EmptyPanel({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="rounded-[1.5rem] border border-dashed border-slate-300 bg-gradient-to-b from-slate-50 to-white px-4 py-5">
-      <p className="text-sm font-semibold text-slate-900">{title}</p>
-      <p className="mt-2 text-sm leading-6 text-slate-500">{text}</p>
-    </div>
-  );
 }
 
 export function SyncCentreScreen({

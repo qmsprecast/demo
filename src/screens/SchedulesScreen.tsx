@@ -6,6 +6,8 @@ import type {
   ScheduleFrequency,
   ScheduleHealthState,
 } from "../types/reportsScreenProps";
+import { EmptyPanel } from "../components/dashboard/DashboardPrimitives";
+import { slatePrimaryCtaInteract } from "../styles/interactions";
 
 const amberThresholdHours = 2;
 
@@ -19,7 +21,6 @@ const scheduleTimeOptions = Array.from({ length: 48 }, (_, index) => {
 });
 
 /** Transitions only — hover uses shell-wide 15% contrasting overlay (.qms-app-shell / .qms-login-shell). */
-const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
 
 /** Accent-filled fields (signal orange) — schedule editor; avoids washed-out OS styling on pale backgrounds in dark theme. */
 const brandAccentFormField =
@@ -138,15 +139,6 @@ function MetaPill({
     <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-600">
       <SchedulesScreenIcon name={icon} className="h-3.5 w-3.5" />
       <span>{label}</span>
-    </div>
-  );
-}
-
-function EmptyPanel({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="rounded-[1.5rem] border border-dashed border-slate-300 bg-gradient-to-b from-slate-50 to-white px-4 py-5">
-      <p className="text-sm font-semibold text-slate-900">{title}</p>
-      <p className="mt-2 text-sm leading-6 text-slate-500">{text}</p>
     </div>
   );
 }

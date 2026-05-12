@@ -14,8 +14,8 @@ import type {
   RiskLevel,
 } from "../types/reportsScreenProps";
 import type { SyncQueueItem } from "../types/sync";
-
-const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
+import { EmptyPanel } from "../components/dashboard/DashboardPrimitives";
+import { slatePrimaryCtaInteract } from "../styles/interactions";
 
 const reportTemplates: {
   type: ReportTemplateType;
@@ -221,15 +221,6 @@ function QuickActionTile({
       <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">{title}</p>
       <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">{value}</p>
       <p className="mt-1 text-sm text-slate-500">{caption}</p>
-    </div>
-  );
-}
-
-function EmptyPanel({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="rounded-[1.5rem] border border-dashed border-slate-300 bg-gradient-to-b from-slate-50 to-white px-4 py-5">
-      <p className="text-sm font-semibold text-slate-900">{title}</p>
-      <p className="mt-2 text-sm leading-6 text-slate-500">{text}</p>
     </div>
   );
 }

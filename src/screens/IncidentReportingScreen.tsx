@@ -38,7 +38,7 @@ export function IncidentReportingScreen({
     incidentDate: new Date().toISOString().slice(0, 10),
     incidentTime: new Date().toTimeString().slice(0, 5),
     reporterName: currentUser.name,
-    reporterEmail: `${currentUser.username}@qmsprecast.co.uk`,
+    reporterEmail: `${currentUser.username}@usebert.co.uk`,
     department: "",
     location: "",
     description: "",

@@ -1,6 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { BertLogo } from "./src/components/BertLogo";
-import type { NavItemId, Role } from "./src/permissions";
+import type { NavItemId, Role, RoutedScreen } from "./src/permissions";
 import {
   canAccessActions,
   canAccessAdmin,
@@ -23,6 +23,7 @@ import {
 } from "./src/permissions";
 import { navItems } from "./src/config/navItems";
 import { storageKeys } from "./src/config/storageKeys";
+import { slatePrimaryCtaInteract } from "./src/styles/interactions";
 import { AuditorTaskDashboard } from "./src/components/dashboard/AuditorTaskDashboard";
 import { AdminDashboard } from "./src/components/dashboard/AdminDashboard";
 import { ManagerDashboard } from "./src/components/dashboard/ManagerDashboard";
@@ -74,7 +75,8 @@ type ScheduleFrequency =
 type ScheduleScope = "Company schedule" | "Personal schedule";
 type OverdueAlertTiming = "At due time" | "30 minutes overdue" | "1 hour overdue" | "2 hours overdue";
 type CompletionCheckTiming = "30 minutes after send" | "1 hour after send" | "At due time" | "2 hours after due";
-type Screen = NavItemId | "complete";
+/** Routed shell screen — alias of `RoutedScreen` from `src/types/navigation.ts` (re-exported via `src/permissions.ts`). */
+type Screen = RoutedScreen;
 type ThemeMode = "light" | "dark";
 type ScheduleDay = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
 type ScheduleLifecycle = "Live" | "Archived";
@@ -630,7 +632,6 @@ const initialIncidents: IncidentRecord[] = [];
 const initialIncidentActions: IncidentCorrectiveAction[] = [];
 
 /** Transitions only — hover uses shell-wide 15% contrasting overlay (.qms-app-shell / .qms-login-shell). */
-const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
 
 /** Accent-filled fields (signal orange) — schedule editor; avoids washed-out OS styling on pale backgrounds in dark theme. */
 const brandAccentFormField =
@@ -1802,7 +1803,7 @@ function resolveUserSiteAssignmentKey(user: User, invitedUsers: UserInvite[]): s
   );
   if (invite) return normalizeIdentity(invite.email);
   if (user.name.includes("@")) return normalizeIdentity(user.name);
-  return normalizeIdentity(`${user.username}@qmsprecast.co.uk`);
+  return normalizeIdentity(`${user.username}@usebert.co.uk`);
 }
 
 function getUserAssignedSiteIds(
@@ -3116,12 +3117,12 @@ function App() {
         username: user.username,
         email:
           user.username === "admin"
-            ? "andy@qmsprecast.co.uk"
+            ? "andy@usebert.co.uk"
             : user.username === "manager"
-              ? "james@qmsprecast.co.uk"
+              ? "james@usebert.co.uk"
               : user.username === "tom"
-                ? "tom@qmsprecast.co.uk"
-                : "sarah@qmsprecast.co.uk",
+                ? "tom@usebert.co.uk"
+                : "sarah@usebert.co.uk",
         name: user.name,
         role: user.role,
       }));
@@ -3179,7 +3180,8 @@ function App() {
     }
     const normalizedName = normalizeIdentity(currentUser.name);
     const normalizedUsername = normalizeIdentity(currentUser.username);
-    const normalizedDefaultEmail = normalizeIdentity(`${currentUser.username}@qmsprecast.co.uk`);
+    const normalizedDefaultEmail = normalizeIdentity(`${currentUser.username}@usebert.co.uk`);
+    const legacyDefaultEmail = normalizeIdentity(`${currentUser.username}@qmsprecast.co.uk`);
     const matchingEmails = new Set(
       companyReportUsers
         .filter((user) => {
@@ -3190,6 +3192,7 @@ function App() {
           return (
             userName === normalizedName ||
             userEmail === normalizedDefaultEmail ||
+            userEmail === legacyDefaultEmail ||
             userEmailLocalPart === normalizedUsername ||
             userUsername === normalizedUsername
           );
@@ -3197,6 +3200,7 @@ function App() {
         .map((user) => normalizeIdentity(user.email)),
     );
     matchingEmails.add(normalizedDefaultEmail);
+    matchingEmails.add(legacyDefaultEmail);
 
     const allowedAuditIds = new Set<string>();
     Object.entries(auditAccessOverrides).forEach(([key, access]) => {
@@ -3241,12 +3245,15 @@ function App() {
     if (!currentUser || currentUser.role !== "Manager") {
       return [];
     }
-    const usernameEmail = `${currentUser.username}@qmsprecast.co.uk`.toLowerCase();
+    const usernameEmailPrimary = `${currentUser.username}@usebert.co.uk`.toLowerCase();
+    const usernameEmailLegacy = `${currentUser.username}@qmsprecast.co.uk`.toLowerCase();
     const normalizedName = currentUser.name.toLowerCase();
     return managerAlerts.filter(
       (alert) =>
         (alert.managerNames.some((name) => name.toLowerCase() === normalizedName) ||
-          alert.managerEmails.some((email) => email.toLowerCase() === usernameEmail)) &&
+          alert.managerEmails.some(
+            (email) => email.toLowerCase() === usernameEmailPrimary || email.toLowerCase() === usernameEmailLegacy,
+          )) &&
         !alert.readBy.includes(currentUser.username),
     );
   }, [currentUser, managerAlerts]);
@@ -4404,7 +4411,10 @@ function App() {
       if (normalizeIdentity(user.username) === normalizeIdentity(loginIdentity)) {
         return true;
       }
-      if (`${user.username}@qmsprecast.co.uk` === loginIdentity) {
+      if (
+        `${user.username}@usebert.co.uk` === loginIdentity ||
+        `${user.username}@qmsprecast.co.uk` === loginIdentity
+      ) {
         return true;
       }
       return false;
@@ -7312,7 +7322,7 @@ function App() {
                 {currentUser.role !== "Admin" && (
                 <button
                   type="button"
-                  onClick={() => handleQuickRoleSwitch("Master", "God Mode")}
+                  onClick={() => handleQuickRoleSwitch("Master", "Platform owner")}
                   className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
                 >
                   GOD

@@ -1,6 +1,6 @@
-import type { NavItemId } from "../permissions";
+import type { NavItemId } from "../types/navigation";
 
-export const navItems: { id: NavItemId; label: string; icon: string }[] = [
+export const navItems = [
   { id: "dashboard", label: "Dashboard", icon: "dashboard" },
   { id: "audits", label: "Audits", icon: "clipboard" },
   { id: "actions", label: "Actions", icon: "warningTriangle" },
@@ -12,4 +12,4 @@ export const navItems: { id: NavItemId; label: string; icon: string }[] = [
   { id: "admin", label: "Control", icon: "shield" },
   { id: "onboarding", label: "Onboarding", icon: "spark" },
   { id: "account", label: "Account settings", icon: "user" },
-];
+] as const satisfies ReadonlyArray<{ id: NavItemId; label: string; icon: string }>;

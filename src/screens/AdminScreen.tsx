@@ -332,7 +332,7 @@ export function AdminScreen({
               {!backendConfigured
                 ? "The platform backend needs to be configured before Google Drive can be connected."
                 : !googleConnected
-                  ? "Step 1: connect the God Mode account to Google Drive."
+                  ? "Step 1: connect the platform owner account to Google Drive."
                   : !selectedFolder
                     ? "Step 2: paste the company Google Drive links below."
                     : syncState !== "Synced"
