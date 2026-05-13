@@ -411,7 +411,7 @@ export function ManagerDashboard({
       {isDebugUiAllowed() ? (
         <section className="rounded-xl border border-slate-800 bg-gradient-to-r from-slate-900 to-slate-800 px-4 py-2 shadow-sm">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-200">Layout</p>
+            <p className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-200">Control loop</p>
             <button
               onClick={() => setShowLayoutOptions((current) => !current)}
               className="h-8 rounded-lg border border-slate-600 bg-slate-950/60 px-3 text-xs font-medium text-slate-200"

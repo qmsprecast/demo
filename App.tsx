@@ -592,7 +592,6 @@ type AuditCompletionSummaryState = {
 
 const companyName = (import.meta.env.VITE_APP_NAME || "bert.").trim();
 const PRODUCT_TAGLINE = "Business. Evaluate. Report. Tool.";
-const PRODUCT_BRAND_FULL = `${companyName} — ${PRODUCT_TAGLINE}`;
 function isDemoRoleSwitchEnabled() {
   const rawValue = String(import.meta.env.VITE_ENABLE_DEMO_ROLE_SWITCH || "").trim().toLowerCase();
   return rawValue === "true" || rawValue === "1" || rawValue === "yes" || rawValue === "on";
@@ -3323,9 +3322,18 @@ function App() {
     return getNextBestAction(currentUser.role, dashboardNextActionInput);
   }, [currentUser, dashboardNextActionInput]);
 
+  const workspaceOnboardingIncomplete = useMemo(() => {
+    if (!selectedFolder || !workspaceValidation) return false;
+    return (
+      !workspaceValidation.ok ||
+      workspaceValidation.missingTabs.length > 0 ||
+      (workspaceValidation.warnings?.length ?? 0) > 0
+    );
+  }, [selectedFolder, workspaceValidation]);
+
   const showDashboardStartHere = useMemo(
-    () => !selectedFolder || demoModeActive || godCompanySetupOnlyShell,
-    [selectedFolder, demoModeActive, godCompanySetupOnlyShell],
+    () => !selectedFolder || demoModeActive || godCompanySetupOnlyShell || workspaceOnboardingIncomplete,
+    [selectedFolder, demoModeActive, godCompanySetupOnlyShell, workspaceOnboardingIncomplete],
   );
 
   const openIncidentFollowUpsCount = useMemo(
@@ -7462,14 +7470,23 @@ function App() {
         <DataFlowBackground className="z-20 opacity-10" showBase={false} />
         <header className={["qms-app-header relative z-10 border-b px-3 pb-1 pt-1 backdrop-blur", themeMode === "dark" ? "border-white/10 bg-slate-950/58" : "border-slate-200/80 bg-white/72"].join(" ")}>
           <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[9px] font-semibold uppercase tracking-[0.16em]">
-            {godCompanySetupOnlyShell || isDebugUiAllowed() ? (
+            {godCompanySetupOnlyShell ? (
               <div
                 className={[
                   "rounded-full px-2.5 py-0.5",
                   themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--bert-signal-orange)] bg-white font-semibold text-[var(--qms-navy-900)]",
                 ].join(" ")}
               >
-                {godCompanySetupOnlyShell ? "Workspace setup (Master)" : "Tablet workspace"}
+                Workspace setup (Master)
+              </div>
+            ) : isDebugUiAllowed() ? (
+              <div
+                className={[
+                  "rounded-full px-2.5 py-0.5",
+                  themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--bert-signal-orange)] bg-white font-semibold text-[var(--qms-navy-900)]",
+                ].join(" ")}
+              >
+                Tablet workspace
               </div>
             ) : (
               <span className="sr-only">Status</span>
@@ -7556,11 +7573,11 @@ function App() {
                 ) : (
                   getUserInitials(currentUser.name, currentUser.username)
                 )}
-                {selectedFolder && (
+                {selectedFolder && isDebugUiAllowed() ? (
                     <span className="absolute -bottom-1 -right-1 rounded-full bg-blue-500 px-1 py-0 text-[8px] font-bold uppercase tracking-[0.08em] text-white">
                     Live
                   </span>
-                )}
+                ) : null}
               </div>
               <div className="min-w-0 flex-1">
                 <p className={["truncate text-[11px] font-semibold leading-4 tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{companyName}</p>
@@ -8710,7 +8727,7 @@ function AuditCompletionSummary({
           <MiniMetric label="Issues" value={String(summary.issuesFound)} />
           <MiniMetric label="Actions" value={String(summary.actionsCreated)} />
           <MiniMetric label="Photos" value={String(summary.photosCaptured)} />
-          <MiniMetric label="Sync" value={summary.syncLabel} />
+          <MiniMetric label="Sync status" value={summary.syncLabel} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <button type="button" onClick={onStartNext} className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>

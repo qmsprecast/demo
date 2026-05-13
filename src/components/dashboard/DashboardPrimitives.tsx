@@ -227,11 +227,11 @@ export function EmptyPanel({ title, text }: { title: string; text: string }) {
 
 export function StartHereCard() {
   const steps = [
-    "Connect or verify your company workspace.",
-    "Run your first audit.",
-    "Capture actions and owners.",
-    "Verify closure on site.",
-    "Generate and share reports.",
+    "Choose a workspace",
+    "Run an audit",
+    "Create actions",
+    "Add evidence",
+    "Verify and report",
   ];
   return (
     <section
@@ -343,7 +343,7 @@ export function DashboardBertFlowStrip({ variant }: { variant: "onDark" | "onLig
   const lead = variant === "onDark" ? "font-semibold text-slate-100" : "font-semibold text-slate-800";
   return (
     <div className={`mt-3 ${shell}`}>
-      <span className={lead}>How work flows in bert.: </span>
+      <span className={lead}>How work flows in bert. </span>
       Provision → Evaluate → Action → Verify → Report — connect the workspace, run audits, close corrective actions with evidence, then export or share the record.
     </div>
   );

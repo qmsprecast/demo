@@ -135,7 +135,7 @@ export function AdminDashboard({
       {isDebugUiAllowed() ? (
         <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
+            <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Control loop</p>
             <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
               Layout options
             </button>

@@ -2,14 +2,13 @@
  * Central gate for demo/debug-only shell chrome (role switcher, layout preview,
  * empty-state dev hints, demo badges, etc.).
  *
- * **Customer default:** hidden in both dev and production unless you opt in with
- * `VITE_SHOW_DEBUG_UI=true` (e.g. in `.env.local`). This avoids `npm run dev` looking
- * like a debug build while you iterate on real UX.
+ * Visible when running Vite in development **or** when `VITE_SHOW_DEBUG_UI=true`
+ * (e.g. to surface the same tools in a production build preview).
  *
  * Admin-only extras still respect `VITE_SHOW_ADMIN_DEBUG_UI` when not in debug UI.
  */
 export function isDebugUiAllowed(): boolean {
-  return String(import.meta.env.VITE_SHOW_DEBUG_UI || "").trim().toLowerCase() === "true";
+  return import.meta.env.DEV === true || import.meta.env.VITE_SHOW_DEBUG_UI === "true";
 }
 
 export function isAdminDebugUiAllowed(userRole: string | undefined): boolean {

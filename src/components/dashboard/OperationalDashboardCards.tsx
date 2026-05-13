@@ -175,14 +175,14 @@ function AttentionSummaryBody({
       key: "overdue-actions",
       label: `overdue action${summary.overdueActions === 1 ? "" : "s"}`,
       count: summary.overdueActions,
-      chip: <StatusChip variant={summary.overdueActions > 0 ? "overdue" : "none"} />,
+      chip: <StatusChip variant={summary.overdueActions > 0 ? "overdue" : "none"}>{summary.overdueActions > 0 ? "OVERDUE" : "NONE"}</StatusChip>,
       onClick: onViewAllNeedsAttention,
     },
     {
       key: "escalated",
       label: `escalated item${summary.escalatedItems === 1 ? "" : "s"}`,
       count: summary.escalatedItems,
-      chip: <StatusChip variant={summary.escalatedItems > 0 ? "escalated" : "none"} />,
+      chip: <StatusChip variant={summary.escalatedItems > 0 ? "escalated" : "none"}>{summary.escalatedItems > 0 ? "ESCALATED" : "NONE"}</StatusChip>,
       onClick: onViewAllNeedsAttention,
     },
     {
@@ -191,7 +191,7 @@ function AttentionSummaryBody({
       count: summary.stuckActions,
       chip: (
         <StatusChip variant={summary.stuckActions > 0 ? "dueSoon" : "none"}>
-          {summary.stuckActions > 0 ? "Needs nudge" : "None"}
+          {summary.stuckActions > 0 ? "STUCK" : "NONE"}
         </StatusChip>
       ),
       onClick: onViewAllNeedsAttention,
@@ -200,7 +200,7 @@ function AttentionSummaryBody({
       key: "overdue-audits",
       label: `overdue audit${summary.overdueAudits === 1 ? "" : "s"}`,
       count: summary.overdueAudits,
-      chip: <StatusChip variant={summary.overdueAudits > 0 ? "overdue" : "none"} />,
+      chip: <StatusChip variant={summary.overdueAudits > 0 ? "overdue" : "none"}>{summary.overdueAudits > 0 ? "OVERDUE" : "NONE"}</StatusChip>,
       onClick: onViewAllNeedsAttention,
     },
   ];
@@ -270,7 +270,7 @@ export function OperationalDashboardCards({
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <CardShell
-        title="Critical & overdue"
+        title="Needs attention"
         iconTint="bg-rose-50 text-rose-600 ring-1 ring-rose-100"
         icon={<AlertIcon />}
         footer={
