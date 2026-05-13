@@ -3324,8 +3324,8 @@ function App() {
   }, [currentUser, dashboardNextActionInput]);
 
   const showDashboardStartHere = useMemo(
-    () => !selectedFolder || demoModeActive || assignedAudits.length === 0,
-    [selectedFolder, demoModeActive, assignedAudits.length],
+    () => !selectedFolder || demoModeActive || godCompanySetupOnlyShell,
+    [selectedFolder, demoModeActive, godCompanySetupOnlyShell],
   );
 
   const openIncidentFollowUpsCount = useMemo(
@@ -7462,9 +7462,18 @@ function App() {
         <DataFlowBackground className="z-20 opacity-10" showBase={false} />
         <header className={["qms-app-header relative z-10 border-b px-3 pb-1 pt-1 backdrop-blur", themeMode === "dark" ? "border-white/10 bg-slate-950/58" : "border-slate-200/80 bg-white/72"].join(" ")}>
           <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[9px] font-semibold uppercase tracking-[0.16em]">
-            <div className={["rounded-full px-2.5 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--bert-signal-orange)] bg-white font-semibold text-[var(--qms-navy-900)]"].join(" ")}>
-              {godCompanySetupOnlyShell ? "Workspace setup (Master)" : "Tablet workspace"}
-            </div>
+            {godCompanySetupOnlyShell || isDebugUiAllowed() ? (
+              <div
+                className={[
+                  "rounded-full px-2.5 py-0.5",
+                  themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--bert-signal-orange)] bg-white font-semibold text-[var(--qms-navy-900)]",
+                ].join(" ")}
+              >
+                {godCompanySetupOnlyShell ? "Workspace setup (Master)" : "Tablet workspace"}
+              </div>
+            ) : (
+              <span className="sr-only">Status</span>
+            )}
             <div className="flex items-center gap-1">
               {isDebugUiAllowed() && demoRoleSwitchEnabled && !godCompanySetupOnlyShell && <div className="hidden items-center gap-1 lg:flex">
                 {currentUser.role !== "Admin" && (
@@ -7554,10 +7563,13 @@ function App() {
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <p className={["truncate text-[11px] font-semibold leading-4 tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{workspaceName}</p>
-                <p className={["truncate text-[8px] leading-3 tracking-[0.08em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
-                  {selectedFolder ? `Live company workspace · ${PRODUCT_TAGLINE}` : `bert. · ${PRODUCT_TAGLINE}`}
-                </p>
+                <p className={["truncate text-[11px] font-semibold leading-4 tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{companyName}</p>
+                <p className={["truncate text-[8px] leading-3 tracking-[0.08em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>{PRODUCT_TAGLINE}</p>
+                {selectedFolder ? (
+                  <p className={["mt-0.5 truncate text-[8px] font-medium leading-3", themeMode === "dark" ? "text-slate-500" : "text-slate-600"].join(" ")}>
+                    Workspace: {selectedFolder.name}
+                  </p>
+                ) : null}
                 {showSiteSelectorForRole && !godCompanySetupOnlyShell && (
                 <div className="mt-1">
                   <select
@@ -7590,26 +7602,14 @@ function App() {
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
-                {isDebugUiAllowed() && demoModeActive && (
-                  <div className="rounded-full bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
-                    Demo mode active
+                {isDebugUiAllowed() && demoModeActive ? (
+                  <div className="rounded-full bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold text-sky-700">Demo mode active</div>
+                ) : null}
+                {isDebugUiAllowed() ? (
+                  <div className="rounded-full bg-blue-500/12 px-2 py-0.5 text-[10px] font-semibold text-blue-800">
+                    {selectedFolder ? "Live workspace" : "Live session"}
                   </div>
-                )}
-                <div className="rounded-full bg-blue-500/12 px-2 py-0.5 text-[10px] font-semibold text-blue-800">
-                  {selectedFolder ? "Live workspace" : "Live session"}
-                </div>
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  className={[
-                    "rounded-lg border px-2 py-0.5 text-[10px] font-semibold transition",
-                    themeMode === "dark"
-                      ? "border-slate-600 bg-slate-950 text-slate-200 hover:border-orange-400/50 hover:text-orange-200"
-                      : "border-slate-300 bg-white text-slate-800 hover:border-[var(--bert-signal-orange)] hover:text-[var(--qms-navy-900)]",
-                  ].join(" ")}
-                >
-                  Log out
-                </button>
+                ) : null}
               </div>
             </div>
           </div>

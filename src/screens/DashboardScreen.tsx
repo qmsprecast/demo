@@ -218,6 +218,7 @@ export function DashboardScreen({
   renderAdminDashboard: () => ReactNode;
 }) {
   const [showDashboardOptions, setShowDashboardOptions] = useState(false);
+  void workspaceName;
   void awaitingVerificationActions;
   void companySheetSync;
   void workspaceValidation;
@@ -350,17 +351,27 @@ export function DashboardScreen({
   return (
     <div className="space-y-4">
       {showStartHereCard && <StartHereCard />}
-      <section className="rounded-2xl border border-slate-700/80 bg-gradient-to-r from-slate-950 via-[#0c1f36] to-slate-950 p-4 text-white shadow-[0_12px_28px_rgba(2,6,23,0.28)]">
+      <section className="rounded-2xl border border-slate-700/80 bg-gradient-to-r from-slate-950 via-[#0c1f36] to-slate-950 px-4 py-3.5 text-white shadow-[0_12px_28px_rgba(2,6,23,0.28)]">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Overview</p>
-            <h2 className="mt-1 text-xl font-semibold tracking-tight">{workspaceName}</h2>
-            <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-300">Needs attention, today, open work, and reporting signals in one place.</p>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Control loop</p>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight sm:text-xl">bert.</h2>
+            <p className="mt-0.5 text-xs text-slate-400">Business. Evaluate. Report. Tool.</p>
+            {selectedFolder ? (
+              <p className="mt-1 text-[11px] font-medium text-slate-500">Workspace: {selectedFolder.name}</p>
+            ) : null}
+            <p className="mt-2 max-w-xl text-xs leading-relaxed text-slate-300">
+              Provision through report — where you are in the quality cycle right now.
+            </p>
             <ControlLoopStrip currentStepIndex={controlLoop.currentStepIndex} tone="onDark" className="mt-2" />
           </div>
           {isDebugUiAllowed() ? (
             <div className="flex shrink-0 flex-col items-end gap-2">
-              <button onClick={() => setShowDashboardOptions((current) => !current)} className="h-8 rounded-lg bg-white/12 px-3 text-xs font-semibold text-white">
+              <button
+                type="button"
+                onClick={() => setShowDashboardOptions((current) => !current)}
+                className="h-8 rounded-lg bg-white/12 px-3 text-xs font-semibold text-white"
+              >
                 Customize
               </button>
               <div className="rounded-xl bg-white/10 px-3 py-1.5 text-right">
@@ -368,12 +379,7 @@ export function DashboardScreen({
                 <p className="text-lg font-semibold">{overdueAudits.length}</p>
               </div>
             </div>
-          ) : (
-            <div className="rounded-xl bg-white/10 px-3 py-1.5 text-right">
-              <p className="text-[11px] text-slate-300">Overdue audits</p>
-              <p className="text-lg font-semibold">{overdueAudits.length}</p>
-            </div>
-          )}
+          ) : null}
         </div>
       </section>
       {isDebugUiAllowed() && showDashboardOptions && (
