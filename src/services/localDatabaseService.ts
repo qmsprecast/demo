@@ -1,4 +1,4 @@
-import { storageKeys } from "../config/storageKeys";
+import { storageKeys, migrateLegacyStorageKeysOnce } from "../config/storageKeys";
 import { CURRENT_SCHEMA_VERSION } from "../schema/companySchema";
 
 export type LocalSyncLifecycle = "Pending" | "Syncing" | "Synced" | "Failed" | "Conflict";
@@ -90,6 +90,7 @@ function safeParse<T>(value: string | null, fallback: T): T {
 }
 
 function readLegacySeed() {
+  migrateLegacyStorageKeysOnce();
   if (!canUseStorage()) {
     return cloneEmptyDb();
   }
@@ -107,6 +108,7 @@ function readLegacySeed() {
 }
 
 function readDb(): LocalDatabaseShape {
+  migrateLegacyStorageKeysOnce();
   if (!canUseStorage()) {
     return cloneEmptyDb();
   }

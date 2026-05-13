@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { canCompleteAuditAsAuditor, getRolePermissions } from "../permissions";
+import { canCompleteAuditAsAuditor, getRolePermissions, type Role } from "../permissions";
 import { EmptyPanel, MetaPill } from "../components/dashboard/DashboardPrimitives";
 import { StatusChip } from "../components/ui/StatusChip";
 import type { ActionItem, ActionStatus, RiskLevel } from "../types/reportsScreenProps";
 import type { User } from "../types/dashboardScreenProps";
 import { slatePrimaryCtaInteract } from "../styles/interactions";
+import { getActionPrimaryCTA, getRecordNextStepText } from "../utils/recordNextStep";
 
 type ActionFilter = "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity";
 const brandDarkFormControl =
@@ -63,11 +64,11 @@ function getActionUrgency(action: ActionItem): "Escalated" | "Overdue" | "Stuck"
 }
 
 function statusChipForAction(status: ActionStatus) {
-  if (status === "Awaiting Verification") return { variant: "awaitingVerification" as const, label: "AWAITING VERIFICATION" };
-  if (status === "Closed") return { variant: "closed" as const, label: "CLOSED" };
-  if (status === "Rejected") return { variant: "overdue" as const, label: "REJECTED" };
-  if (status === "In Progress") return { variant: "awaitingVerification" as const, label: "IN PROGRESS" };
-  return { variant: "draft" as const, label: status.toUpperCase() };
+  if (status === "Awaiting Verification") return { variant: "awaitingVerification" as const, label: "Awaiting verification" };
+  if (status === "Closed") return { variant: "closed" as const, label: "Closed" };
+  if (status === "Rejected") return { variant: "overdue" as const, label: "Rejected" };
+  if (status === "In Progress") return { variant: "awaitingVerification" as const, label: "In progress" };
+  return { variant: "draft" as const, label: status === "Open" ? "Open" : status };
 }
 
 function useWideLayout() {
@@ -92,6 +93,7 @@ function ChevronRight({ className = "h-5 w-5" }: { className?: string }) {
 
 function MobileActionDetail({
   action,
+  role,
   permissions,
   onBack,
   onAdvanceAction,
@@ -100,6 +102,7 @@ function MobileActionDetail({
   availableAuditors,
 }: {
   action: ActionItem;
+  role: Role;
   permissions: ReturnType<typeof getRolePermissions>;
   onBack: () => void;
   onAdvanceAction: (actionId: string, nextStatus?: ActionStatus) => void;
@@ -110,6 +113,11 @@ function MobileActionDetail({
   const evidenceInputRef = useRef<HTMLInputElement>(null);
   const chip = statusChipForAction(action.status);
   const priorityHigh = action.severity === "High" || action.severity === "Critical";
+  const cta = getActionPrimaryCTA(action, permissions);
+  const nextStep = getRecordNextStepText("action", action.status, role, {
+    evidenceRequired: action.evidenceRequired,
+    evidenceCount: action.evidenceCount,
+  });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-slate-50 lg:hidden">
@@ -118,31 +126,33 @@ function MobileActionDetail({
           <button
             type="button"
             onClick={onBack}
-            className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white"
+            className="min-h-[44px] rounded-full border border-white/15 bg-white/10 px-3 py-2 text-xs font-semibold text-white focus-visible:outline focus-visible:ring-2 focus-visible:ring-white/60"
           >
             Back
           </button>
-          <p className="text-sm font-semibold">Action Details</p>
-          <button
-            type="button"
-            className="rounded-full border border-white/15 p-2 text-white"
-            aria-label="More options"
-          >
-            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
-              <circle cx="5" cy="12" r="1.5" />
-              <circle cx="12" cy="12" r="1.5" />
-              <circle cx="19" cy="12" r="1.5" />
-            </svg>
-          </button>
+          <p className="text-sm font-semibold">Action</p>
+          <span className="w-10 shrink-0" aria-hidden />
         </div>
-        <div className="mt-3">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <StatusChip variant={chip.variant}>{chip.label}</StatusChip>
+          {action.nonConformanceId ? (
+            <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-200 ring-1 ring-white/20">
+              NCR {action.nonConformanceId}
+            </span>
+          ) : null}
         </div>
-        <h2 className="mt-2 text-lg font-semibold leading-snug text-white">{action.questionText}</h2>
-        <p className="mt-1 text-xs leading-relaxed text-slate-300">{action.auditName}</p>
+        <p className="mt-2 font-mono text-[11px] text-slate-400">Ref · {action.id}</p>
+        <h2 className="mt-1 text-lg font-semibold leading-snug text-white">{action.questionText}</h2>
+        <p className="mt-2 text-xs leading-relaxed text-slate-300">{action.sourceAnswer}</p>
+        <p className="mt-2 text-xs text-slate-400">{action.auditName}</p>
       </header>
 
-      <div className="min-h-0 flex-1 space-y-0 overflow-y-auto px-3 py-4">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-4">
+        <div className="rounded-2xl border border-slate-200 bg-sky-50/80 p-3 text-sm text-slate-800">
+          <span className="font-semibold text-slate-900">Next step. </span>
+          {nextStep.replace(/^Next step:\s*/i, "")}
+        </div>
+
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
           <DetailRow label="Owner" value={action.assignedToName} />
           <DetailRow
@@ -150,7 +160,7 @@ function MobileActionDetail({
             value={action.dueDate || action.dueLabel}
             valueClassName={isDueToday(action) ? "text-orange-600 font-semibold" : undefined}
           />
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+          <div className="flex min-h-[44px] items-center justify-between border-b border-slate-100 px-4 py-3">
             <span className="text-xs font-medium text-slate-500">Status</span>
             <StatusChip variant={chip.variant}>{chip.label}</StatusChip>
           </div>
@@ -161,30 +171,27 @@ function MobileActionDetail({
           />
           <DetailRow label="Created" value={action.createdAt} />
           <DetailRow label="Location" value={action.siteArea || "—"} />
+          <DetailRow label="Notes" value={action.comments?.trim() ? action.comments : "—"} />
           <button
             type="button"
-            className="flex w-full items-center justify-between border-b border-slate-100 px-4 py-3 text-left"
+            className="flex min-h-[44px] w-full items-center justify-between border-b border-slate-100 px-4 py-3 text-left focus-visible:outline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
             onClick={() => evidenceInputRef.current?.click()}
           >
             <span className="text-xs font-medium text-slate-500">Evidence</span>
             <span className="flex items-center gap-1 text-sm font-semibold text-slate-800">
-              {action.evidenceCount > 0 ? `${action.evidenceCount} attached` : "Add"}
+              {action.evidenceCount > 0 ? `${action.evidenceCount} attached` : "Add photos"}
               <ChevronRight className="h-4 w-4 text-slate-400" />
             </span>
-          </button>
-          <button type="button" className="flex w-full items-center justify-between px-4 py-3 text-left">
-            <span className="text-xs font-medium text-slate-500">Notes</span>
-            <ChevronRight className="h-4 w-4 text-slate-400" />
           </button>
         </div>
 
         {permissions.canAssignActions && (
-          <div className="mt-4">
-            <label className="mb-1 block text-xs font-semibold text-slate-600">Assign</label>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">Owner (assign)</label>
             <select
               value={action.assignedToName}
               onChange={(event) => onAssignAction(action.id, event.target.value)}
-              className={`h-11 w-full rounded-2xl px-4 text-sm ${brandDarkFormControl}`}
+              className={`min-h-[44px] w-full rounded-2xl px-4 text-sm ${brandDarkFormControl}`}
             >
               {[action.assignedToName, ...availableAuditors]
                 .filter((value, index, list) => value && list.indexOf(value) === index)
@@ -212,52 +219,62 @@ function MobileActionDetail({
         />
       </div>
 
-      <div className="shrink-0 border-t border-slate-200 bg-white px-3 py-3">
-        <button
-          type="button"
-          onClick={() => evidenceInputRef.current?.click()}
-          className={`h-12 w-full rounded-2xl bg-[var(--bert-signal-orange)] text-sm font-semibold text-[var(--qms-navy-950)] shadow-md ${slatePrimaryCtaInteract}`}
-        >
-          Review evidence
-        </button>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {action.status === "Open" && (
-            <button
-              type="button"
-              onClick={() => onAdvanceAction(action.id, "In Progress")}
-              className="flex-1 rounded-xl border border-slate-200 py-2 text-xs font-semibold text-slate-800"
-            >
-              Start action
-            </button>
-          )}
-          {action.status === "In Progress" && (
-            <button
-              type="button"
-              onClick={() => onAdvanceAction(action.id, "Awaiting Verification")}
-              className="flex-1 rounded-xl border border-slate-200 py-2 text-xs font-semibold text-slate-800"
-            >
-              Submit for verification
-            </button>
-          )}
-          {action.status === "Awaiting Verification" && permissions.canVerifyActions && (
-            <>
-              <button
-                type="button"
-                onClick={() => onAdvanceAction(action.id, "Closed")}
-                className="flex-1 rounded-xl border border-slate-200 py-2 text-xs font-semibold text-slate-800"
-              >
-                Verify & close
-              </button>
-              <button
-                type="button"
-                onClick={() => onAdvanceAction(action.id, "Rejected")}
-                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700"
-              >
-                Reject
-              </button>
-            </>
-          )}
-        </div>
+      <div className="shrink-0 space-y-2 border-t border-slate-200 bg-white px-3 py-3">
+        {cta.kind === "uploadEvidence" ? (
+          <button
+            type="button"
+            onClick={() => evidenceInputRef.current?.click()}
+            className={`min-h-[48px] w-full rounded-2xl bg-[var(--bert-signal-orange)] text-sm font-semibold text-[var(--qms-navy-950)] shadow-md focus-visible:outline focus-visible:ring-2 focus-visible:ring-orange-300 focus-visible:ring-offset-2 ${slatePrimaryCtaInteract}`}
+          >
+            {cta.label}
+          </button>
+        ) : cta.kind === "start" ? (
+          <button
+            type="button"
+            onClick={() => onAdvanceAction(action.id, "In Progress")}
+            className={`min-h-[48px] w-full rounded-2xl bg-[var(--bert-signal-orange)] text-sm font-semibold text-[var(--qms-navy-950)] shadow-md focus-visible:outline focus-visible:ring-2 focus-visible:ring-orange-300 focus-visible:ring-offset-2 ${slatePrimaryCtaInteract}`}
+          >
+            {cta.label}
+          </button>
+        ) : cta.kind === "submitVerification" ? (
+          <button
+            type="button"
+            onClick={() => onAdvanceAction(action.id, "Awaiting Verification")}
+            className={`min-h-[48px] w-full rounded-2xl bg-[var(--bert-signal-orange)] text-sm font-semibold text-[var(--qms-navy-950)] shadow-md focus-visible:outline focus-visible:ring-2 focus-visible:ring-orange-300 focus-visible:ring-offset-2 ${slatePrimaryCtaInteract}`}
+          >
+            {cta.label}
+          </button>
+        ) : cta.kind === "verifyClose" ? (
+          <button
+            type="button"
+            onClick={() => onAdvanceAction(action.id, "Closed")}
+            className={`min-h-[48px] w-full rounded-2xl bg-[var(--bert-signal-orange)] text-sm font-semibold text-[var(--qms-navy-950)] shadow-md focus-visible:outline focus-visible:ring-2 focus-visible:ring-orange-300 focus-visible:ring-offset-2 ${slatePrimaryCtaInteract}`}
+          >
+            {cta.label}
+          </button>
+        ) : (
+          <p className="py-2 text-center text-xs text-slate-500">No further actions from you on this item.</p>
+        )}
+
+        {action.status === "In Progress" && cta.kind === "uploadEvidence" ? (
+          <button
+            type="button"
+            onClick={() => onAdvanceAction(action.id, "Awaiting Verification")}
+            className="min-h-[44px] w-full rounded-2xl border border-slate-200 py-2 text-sm font-semibold text-slate-800 focus-visible:outline focus-visible:ring-2 focus-visible:ring-slate-300"
+          >
+            Mark ready for review (photos attached)
+          </button>
+        ) : null}
+
+        {action.status === "Awaiting Verification" && permissions.canVerifyActions ? (
+          <button
+            type="button"
+            onClick={() => onAdvanceAction(action.id, "Rejected")}
+            className="min-h-[44px] w-full rounded-2xl border border-rose-200 bg-rose-50 py-2 text-sm font-semibold text-rose-800 focus-visible:outline focus-visible:ring-2 focus-visible:ring-rose-300"
+          >
+            Reject with feedback
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -336,6 +353,7 @@ export function ActionsScreen({
     return (
       <MobileActionDetail
         action={detailAction}
+        role={currentUser.role}
         permissions={permissions}
         onBack={() => setMobileDetailId(null)}
         onAdvanceAction={onAdvanceAction}
@@ -376,7 +394,7 @@ export function ActionsScreen({
           >
             <option value="Open">Open</option>
             <option value="Overdue">Overdue</option>
-            <option value="Awaiting Verification">Awaiting Verification</option>
+            <option value="Awaiting Verification">Awaiting verification</option>
             <option value="Closed">Closed</option>
             <option value="Severity">All by severity</option>
           </select>
@@ -396,10 +414,10 @@ export function ActionsScreen({
             onChange={(event) => onNcFilterChange(event.target.value)}
             className="h-12 rounded-2xl border border-[rgba(249,115,22,0.45)] bg-slate-950 px-4 text-sm text-white outline-none focus:border-[var(--bert-signal-orange)]"
           >
-            <option value="All">All non-conformance refs</option>
+            <option value="All">All non-conformances</option>
             {availableNonConformanceIds.map((reference) => (
               <option key={reference} value={reference}>
-                {reference}
+                Non-conformance {reference} (NCR)
               </option>
             ))}
           </select>
@@ -439,19 +457,26 @@ export function ActionsScreen({
                         : urgency === "Due soon"
                           ? "bg-amber-50 text-amber-700"
                           : "bg-slate-100 text-slate-700";
+                const chip = statusChipForAction(action.status);
                 return (
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{action.status}</div>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <StatusChip variant={chip.variant}>{chip.label}</StatusChip>
                     <div className={`rounded-full px-3 py-1 text-xs font-semibold ${urgencyTone}`}>{urgency}</div>
                   </div>
                 );
               })()}
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-900">{action.auditName}</p>
-                  <p className="mt-2 text-sm text-slate-600">{action.questionText}</p>
+                  <p className="font-mono text-[11px] text-slate-500">Ref · {action.id}</p>
+                  <p className="mt-1 text-base font-semibold text-slate-900">{action.questionText}</p>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-600">{action.sourceAnswer}</p>
+                  <p className="mt-1 text-xs font-medium text-slate-500">{action.auditName}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {action.nonConformanceId && <MetaPill icon="spark" label={action.nonConformanceId} />}
+                    {action.nonConformanceId ? (
+                      <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700">
+                        NCR {action.nonConformanceId}
+                      </span>
+                    ) : null}
                     <MetaPill icon="spark" label={action.severity} />
                     <MetaPill icon="clipboard" label={action.riskCategory} />
                     <MetaPill icon="user" label={action.assignedToName} />
@@ -462,24 +487,35 @@ export function ActionsScreen({
                         action.evidenceRequired
                           ? action.evidenceCount === 0
                             ? "Evidence required"
-                            : `${action.evidenceCount} evidence`
+                            : `${action.evidenceCount} photos`
                           : action.evidenceCount > 0
-                            ? `${action.evidenceCount} evidence`
+                            ? `${action.evidenceCount} photos`
                             : "Evidence optional"
                       }
                     />
+                    {action.siteArea ? <MetaPill icon="clipboard" label={action.siteArea} /> : null}
                   </div>
+                  <p className="mt-3 rounded-xl border border-sky-100 bg-sky-50/90 px-3 py-2 text-sm text-slate-800">
+                    <span className="font-semibold text-slate-900">Next step. </span>
+                    {getRecordNextStepText("action", action.status, currentUser.role, {
+                      evidenceRequired: action.evidenceRequired,
+                      evidenceCount: action.evidenceCount,
+                    }).replace(/^Next step:\s*/i, "")}
+                  </p>
                   {action.status !== "Closed" && action.evidenceRequired && action.evidenceCount === 0 && (
-                    <p className="mt-2 text-xs font-semibold text-amber-700">Reason not closed: evidence missing.</p>
+                    <p className="mt-2 text-xs font-semibold text-amber-800">Photos are still required before this can be verified.</p>
                   )}
                 </div>
               </div>
-              <div className="mt-4 hidden gap-3 lg:grid lg:grid-cols-2" onClick={(e) => e.stopPropagation()}>
+              {(() => {
+                const cta = getActionPrimaryCTA(action, permissions);
+                return (
+              <div className="mt-4 hidden flex-col gap-3 lg:flex" onClick={(e) => e.stopPropagation()}>
                 {permissions.canAssignActions && (
                   <select
                     value={action.assignedToName}
                     onChange={(event) => onAssignAction(action.id, event.target.value)}
-                    className={`h-11 w-full min-w-0 rounded-2xl px-4 text-sm ${brandDarkFormControl}`}
+                    className={`min-h-[44px] w-full max-w-md rounded-2xl px-4 text-sm ${brandDarkFormControl}`}
                   >
                     {[action.assignedToName, ...availableAuditors].filter((value, index, list) => value && list.indexOf(value) === index).map((name) => (
                       <option key={name} value={name}>
@@ -488,63 +524,94 @@ export function ActionsScreen({
                     ))}
                   </select>
                 )}
-                <div className="flex flex-wrap gap-2">
-                  {action.status !== "Closed" && (
-                    <div className="w-full">
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Upload evidence</p>
-                      <label className={`inline-flex h-11 w-full cursor-pointer items-center justify-center rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                        Attach photo evidence
-                        <input
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          className="hidden"
-                          onChange={(event) => {
-                            if (event.target.files?.length) {
-                              onAddEvidence(action.id, event.target.files);
-                              event.target.value = "";
-                            }
-                          }}
-                        />
-                      </label>
-                      <p className="mt-1 text-[11px] text-slate-500">Add photo evidence before submitting for verification.</p>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        title="Fallback file chooser"
-                        className={`mt-2 h-9 w-full rounded-xl px-2 text-xs ${brandDarkFormControl}`}
-                        onChange={(event) => {
-                          if (event.target.files?.length) {
-                            onAddEvidence(action.id, event.target.files);
-                            event.target.value = "";
-                          }
-                        }}
-                      />
-                    </div>
-                  )}
-                  {action.status === "Open" && (
-                    <button onClick={() => onAdvanceAction(action.id, "In Progress")} className={`h-11 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                      Start action
+                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                  {cta.kind === "uploadEvidence" ? (
+                    <button
+                      type="button"
+                      onClick={() => document.getElementById(`evidence-${action.id}`)?.click()}
+                      className={`min-h-[44px] rounded-2xl bg-[var(--bert-signal-orange)] px-5 text-sm font-semibold text-[var(--qms-navy-950)] shadow-sm focus-visible:outline focus-visible:ring-2 focus-visible:ring-orange-300 ${slatePrimaryCtaInteract}`}
+                    >
+                      {cta.label}
                     </button>
-                  )}
-                  {action.status === "Awaiting Verification" && permissions.canVerifyActions && (
-                    <button onClick={() => onAdvanceAction(action.id, "Closed")} className={`h-11 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                      Verify & close
+                  ) : cta.kind === "start" ? (
+                    <button
+                      type="button"
+                      onClick={() => onAdvanceAction(action.id, "In Progress")}
+                      className={`min-h-[44px] rounded-2xl bg-[var(--bert-signal-orange)] px-5 text-sm font-semibold text-[var(--qms-navy-950)] shadow-sm focus-visible:outline focus-visible:ring-2 focus-visible:ring-orange-300 ${slatePrimaryCtaInteract}`}
+                    >
+                      {cta.label}
                     </button>
-                  )}
-                  {action.status === "In Progress" && (
-                    <button onClick={() => onAdvanceAction(action.id, "Awaiting Verification")} className={`h-11 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                      Submit for verification
+                  ) : cta.kind === "submitVerification" ? (
+                    <button
+                      type="button"
+                      onClick={() => onAdvanceAction(action.id, "Awaiting Verification")}
+                      className={`min-h-[44px] rounded-2xl bg-[var(--bert-signal-orange)] px-5 text-sm font-semibold text-[var(--qms-navy-950)] shadow-sm focus-visible:outline focus-visible:ring-2 focus-visible:ring-orange-300 ${slatePrimaryCtaInteract}`}
+                    >
+                      {cta.label}
                     </button>
-                  )}
-                  {permissions.canVerifyActions && action.status === "Awaiting Verification" && (
-                    <button onClick={() => onAdvanceAction(action.id, "Rejected")} className="h-11 rounded-2xl bg-rose-50 px-4 text-sm font-semibold text-rose-700">
-                      Reject
+                  ) : cta.kind === "verifyClose" ? (
+                    <button
+                      type="button"
+                      onClick={() => onAdvanceAction(action.id, "Closed")}
+                      className={`min-h-[44px] rounded-2xl bg-[var(--bert-signal-orange)] px-5 text-sm font-semibold text-[var(--qms-navy-950)] shadow-sm focus-visible:outline focus-visible:ring-2 focus-visible:ring-orange-300 ${slatePrimaryCtaInteract}`}
+                    >
+                      {cta.label}
                     </button>
-                  )}
+                  ) : null}
+                  {action.status === "In Progress" && cta.kind === "uploadEvidence" ? (
+                    <button
+                      type="button"
+                      onClick={() => onAdvanceAction(action.id, "Awaiting Verification")}
+                      className="min-h-[44px] rounded-2xl border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-800 focus-visible:outline focus-visible:ring-2 focus-visible:ring-slate-300"
+                    >
+                      Mark ready for review
+                    </button>
+                  ) : null}
+                  {permissions.canVerifyActions && action.status === "Awaiting Verification" ? (
+                    <button
+                      type="button"
+                      onClick={() => onAdvanceAction(action.id, "Rejected")}
+                      className="min-h-[44px] rounded-2xl border border-rose-200 bg-rose-50 px-5 text-sm font-semibold text-rose-800 focus-visible:outline focus-visible:ring-2 focus-visible:ring-rose-300"
+                    >
+                      Reject with feedback
+                    </button>
+                  ) : null}
                 </div>
+                {action.status !== "Closed" && cta.kind !== "uploadEvidence" ? (
+                  <label className={`inline-flex min-h-[44px] w-full max-w-xs cursor-pointer items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-slate-300`}>
+                    Add photo evidence
+                    <input
+                      id={`evidence-${action.id}`}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(event) => {
+                        if (event.target.files?.length) {
+                          onAddEvidence(action.id, event.target.files);
+                          event.target.value = "";
+                        }
+                      }}
+                    />
+                  </label>
+                ) : action.status !== "Closed" && cta.kind === "uploadEvidence" ? (
+                  <input
+                    id={`evidence-${action.id}`}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      if (event.target.files?.length) {
+                        onAddEvidence(action.id, event.target.files);
+                        event.target.value = "";
+                      }
+                    }}
+                  />
+                ) : null}
               </div>
+                );
+              })()}
             </section>
           ))}
         </div>

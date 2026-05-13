@@ -1,4 +1,4 @@
-package com.qmsprecast.app;
+package co.usebert.app;
 
 import com.getcapacitor.BridgeActivity;
 

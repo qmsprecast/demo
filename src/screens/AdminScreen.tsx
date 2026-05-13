@@ -179,7 +179,7 @@ export function AdminScreen({
           {[
             { key: "onboarding", targetId: "admin-user-management", icon: "user", title: "User Management", subtitle: "Invite users and manage roles" },
             { key: "overview", targetId: "admin-audit-templates", icon: "checklist", title: "Audit Templates", subtitle: "Build and manage audit form templates" },
-            { key: "onboarding", targetId: "admin-maintenance", icon: "sync", title: "Maintenance", subtitle: "Sync queue tools, data export, and reset" },
+            { key: "onboarding", targetId: "admin-maintenance", icon: "sync", title: "Maintenance", subtitle: "Work waiting to sync, export, and reset tools" },
           ].map((card) => (
             <button
               key={card.title}

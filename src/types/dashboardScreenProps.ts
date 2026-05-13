@@ -87,6 +87,9 @@ export type AuditorTaskDashboardProps = {
   actions: ActionItem[];
   pendingSyncCount: number;
   failedSyncCount: number;
+  showStartHereCard: boolean;
+  workspaceLinked: boolean;
+  recentCompletionsCount: number;
   onOpenAudit: (auditId: string) => void;
   slatePrimaryCtaInteract: string;
 };
@@ -101,25 +104,36 @@ export type ManagerDashboardProps = {
   failedSyncCount: number;
   offlineQueueCount: number;
   workspaceLinked: boolean;
+  /** Surface onboarding card when workspace is new, empty, or demo data is active. */
+  showStartHereCard: boolean;
+  demoModeActive: boolean;
+  openIncidentFollowUpsCount: number;
+  onOpenIncidents: () => void;
   onOpenAudit: (auditId: string) => void;
   onAdvanceAction: (actionId: string, nextStatus?: ActionItem["status"]) => void;
   recurringFailedQuestions: [string, number][];
   onViewAllNeedsAttention: () => void;
   onViewAllDueToday: () => void;
   onViewAllAwaitingVerification: () => void;
+  onViewAllInProgress: () => void;
   onViewAllRecentCompletions: () => void;
   onOpenSyncCentre: () => void;
+  /** Company sheet last sync label for plain-English dashboard copy */
+  lastSyncedAt?: string | null;
 };
 
 export type AdminDashboardProps = {
   groupedAudits: Record<AuditStatus, Audit[]>;
   assignedAudits: Audit[];
   actions: ActionItem[];
+  history: HistoryEntry[];
+  workspaceLinked: boolean;
   pendingSyncCount: number;
   failedSyncCount: number;
   reportUsersCount: number;
   activeSchedulesCount: number;
   templatesCount: number;
+  showStartHereCard: boolean;
   onOpenAudit: (auditId: string) => void;
   onAdvanceAction: (actionId: string, nextStatus?: ActionItem["status"]) => void;
 };

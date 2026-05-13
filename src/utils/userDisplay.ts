@@ -46,3 +46,11 @@ export function getTimeBasedGreeting(date = new Date()): "Good morning" | "Good 
   if (h < 17) return "Good afternoon";
   return "Good evening";
 }
+
+/** First token of profile display name for greetings; null if unset (do not substitute workspace or email). */
+export function getGreetingFirstName(displayName: string): string | null {
+  const trimmed = displayName.trim();
+  if (!trimmed) return null;
+  const first = trimmed.split(/\s+/)[0];
+  return first || null;
+}

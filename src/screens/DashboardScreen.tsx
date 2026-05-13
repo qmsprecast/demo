@@ -10,7 +10,7 @@
  * App.tsx because they are not exported. Keep aligned with App.tsx if those helpers change.
  */
 
-import { ReactNode, useState } from "react";
+import { ReactNode, useMemo, useState } from "react";
 import {
   canAccessAdmin,
   canCompleteAuditAsAuditor,
@@ -36,7 +36,6 @@ import type {
   WorkspaceValidation,
 } from "../types/dashboardScreenProps";
 import {
-  DashboardBertFlowStrip,
   EmptyPanel,
   KpiCard,
   MetaPill,
@@ -45,6 +44,7 @@ import {
   StatusBadge,
   TrendBar,
 } from "../components/dashboard/DashboardPrimitives";
+import { ControlLoopStrip, deriveControlLoopState } from "../components/dashboard/ControlLoopStrip";
 import {
   amberThresholdHours,
   computeScheduleHealthState,
@@ -52,6 +52,7 @@ import {
   getDueWarning,
   statusStyles,
 } from "../utils/dashboardHealth";
+import { isDebugUiAllowed } from "../utils/debugUiVisibility";
 
 function TrafficLane({
   title,
@@ -161,6 +162,8 @@ export function DashboardScreen({
   onRepairWorkspace,
   onLoadDemoData,
   onClearDemoData,
+  showStartHereCard,
+  demoModeActive,
   renderAuditorDashboard,
   renderManagerDashboard,
   renderAdminDashboard,
@@ -208,6 +211,8 @@ export function DashboardScreen({
   onRepairWorkspace: () => void;
   onLoadDemoData: () => void;
   onClearDemoData: () => void;
+  showStartHereCard: boolean;
+  demoModeActive: boolean;
   renderAuditorDashboard: () => ReactNode;
   renderManagerDashboard: () => ReactNode;
   renderAdminDashboard: () => ReactNode;
@@ -216,11 +221,11 @@ export function DashboardScreen({
   void awaitingVerificationActions;
   void companySheetSync;
   void workspaceValidation;
-  void selectedFolder;
   void onValidateWorkspace;
   void onRepairWorkspace;
   void onLoadDemoData;
   void onClearDemoData;
+  void demoModeActive;
   void reportUsersCount;
   void activeSchedulesCount;
   void templatesCount;
@@ -237,6 +242,27 @@ export function DashboardScreen({
   if (currentUser.role === "Admin") {
     return <>{renderAdminDashboard()}</>;
   }
+
+  const workspaceLinked = Boolean(selectedFolder);
+  const openOrInProgressActions = useMemo(
+    () => actions.filter((a) => a.status === "Open" || a.status === "In Progress").length,
+    [actions],
+  );
+  const awaitingVerificationCount = useMemo(
+    () => actions.filter((a) => a.status === "Awaiting Verification").length,
+    [actions],
+  );
+  const controlLoop = useMemo(
+    () =>
+      deriveControlLoopState({
+        workspaceLinked,
+        hasAssignedAudits: assignedAudits.length > 0,
+        openOrInProgressActions,
+        awaitingVerificationCount,
+        recentCompletionCount: history.length,
+      }),
+    [workspaceLinked, assignedAudits.length, openOrInProgressActions, awaitingVerificationCount, history.length],
+  );
 
   const visibleSectionOrder = dashboardSectionOrder.filter((key) => dashboardPreferences[key]);
 
@@ -269,7 +295,7 @@ export function DashboardScreen({
             <KpiCard title="Open actions" value={String(openActions.length)} tone={openActions.length ? "amber" : "green"} subtitle={`${overdueActions.length} overdue`} dark={themeMode === "dark"} />
             <KpiCard title="Compliance" value={`${compliance}%`} tone="green" subtitle={complianceDelta >= 0 ? `Up ${complianceDelta}%` : `Down ${Math.abs(complianceDelta)}%`} dark={themeMode === "dark"} />
             <KpiCard title="Completion" value={`${auditCompletionRate}%`} tone={auditCompletionRate > 79 ? "green" : "amber"} subtitle={`${completedToday} today`} dark={themeMode === "dark"} />
-            <KpiCard title="Queue" value={String(offlineQueueCount)} tone={offlineQueueCount ? "amber" : "green"} subtitle={`${evidenceCount} evidence`} dark={themeMode === "dark"} />
+            <KpiCard title="Work waiting to sync" value={String(offlineQueueCount)} tone={offlineQueueCount ? "amber" : "green"} subtitle={`${evidenceCount} evidence`} dark={themeMode === "dark"} />
           </div>
         </section>
       );
@@ -323,27 +349,34 @@ export function DashboardScreen({
 
   return (
     <div className="space-y-4">
-      {assignedAudits.length === 0 && <StartHereCard />}
-      <section className="rounded-[1.4rem] bg-slate-950 p-3.5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Dashboard</p>
+      {showStartHereCard && <StartHereCard />}
+      <section className="rounded-2xl border border-slate-700/80 bg-gradient-to-r from-slate-950 via-[#0c1f36] to-slate-950 p-4 text-white shadow-[0_12px_28px_rgba(2,6,23,0.28)]">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Overview</p>
             <h2 className="mt-1 text-xl font-semibold tracking-tight">{workspaceName}</h2>
-            <p className="mt-1 max-w-sm text-xs leading-5 text-slate-300">Needs attention, today, open work, and reporting signals in one place.</p>
-            <DashboardBertFlowStrip variant="onDark" />
+            <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-300">Needs attention, today, open work, and reporting signals in one place.</p>
+            <ControlLoopStrip currentStepIndex={controlLoop.currentStepIndex} tone="onDark" className="mt-2" />
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setShowDashboardOptions((current) => !current)} className="h-8 rounded-lg bg-white/12 px-3 text-xs font-semibold text-white">
-              Customize
-            </button>
+          {isDebugUiAllowed() ? (
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              <button onClick={() => setShowDashboardOptions((current) => !current)} className="h-8 rounded-lg bg-white/12 px-3 text-xs font-semibold text-white">
+                Customize
+              </button>
+              <div className="rounded-xl bg-white/10 px-3 py-1.5 text-right">
+                <p className="text-[11px] text-slate-300">Overdue audits</p>
+                <p className="text-lg font-semibold">{overdueAudits.length}</p>
+              </div>
+            </div>
+          ) : (
             <div className="rounded-xl bg-white/10 px-3 py-1.5 text-right">
-              <p className="text-[11px] text-slate-300">Overdue</p>
+              <p className="text-[11px] text-slate-300">Overdue audits</p>
               <p className="text-lg font-semibold">{overdueAudits.length}</p>
             </div>
-          </div>
+          )}
         </div>
       </section>
-      {showDashboardOptions && (
+      {isDebugUiAllowed() && showDashboardOptions && (
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Dashboard options</p>
           <div className="mt-2 flex flex-wrap gap-2">

@@ -3,6 +3,7 @@ import { storageKeys } from "../../config/storageKeys";
 import type { ManagerDashboardProps } from "../../types/dashboardScreenProps";
 import type { Audit, AuditStatus } from "../../types/reportsScreenProps";
 import { amberThresholdHours, getAuditTrafficStatus, getDueWarning, statusStyles } from "../../utils/dashboardHealth";
+import { isDebugUiAllowed } from "../../utils/debugUiVisibility";
 import { isEscalated, isOverdue, isStuck } from "../../utils/managerDashboard";
 import { ControlLoopStrip, deriveControlLoopState } from "./ControlLoopStrip";
 import {
@@ -12,6 +13,8 @@ import {
   type OperationalAwaitingRow,
   type OperationalCompletionRow,
   type OperationalDueRow,
+  type OperationalInProgressRow,
+  type OperationalTodayStripRow,
 } from "./OperationalDashboardCards";
 import { SectionHeader, StartHereCard, StatusBadge, TrendBar } from "./DashboardPrimitives";
 
@@ -27,14 +30,20 @@ export function ManagerDashboard({
   failedSyncCount,
   offlineQueueCount,
   workspaceLinked,
+  showStartHereCard,
+  demoModeActive,
+  openIncidentFollowUpsCount,
+  onOpenIncidents,
   onOpenAudit,
   onAdvanceAction,
   recurringFailedQuestions,
   onViewAllNeedsAttention,
   onViewAllDueToday,
   onViewAllAwaitingVerification,
+  onViewAllInProgress,
   onViewAllRecentCompletions,
   onOpenSyncCentre,
+  lastSyncedAt,
 }: ManagerDashboardProps) {
   const overdueAudits = useMemo(
     () => assignedAudits.filter((audit) => getAuditTrafficStatus(audit.dueHours) === "red"),
@@ -140,6 +149,51 @@ export function ManagerDashboard({
       }));
   }, [actions, onAdvanceAction]);
 
+  const inProgressRows = useMemo((): OperationalInProgressRow[] => {
+    return actions
+      .filter((a) => a.status === "Open" || a.status === "In Progress")
+      .slice(0, 4)
+      .map((action) => ({
+        id: `prog-${action.id}`,
+        title: action.questionText,
+        subtitle: `${action.auditName} · ${action.assignedToName}`,
+        chip: action.status === "In Progress" ? ("inProgress" as const) : ("open" as const),
+        onActivate: () => onAdvanceAction(action.id),
+      }));
+  }, [actions, onAdvanceAction]);
+
+  const todayStripRows = useMemo((): OperationalTodayStripRow[] => {
+    const rows: OperationalTodayStripRow[] = [];
+    const firstAudit = auditsDueToday[0];
+    if (firstAudit) {
+      const soon = firstAudit.dueHours < amberThresholdHours;
+      rows.push({
+        id: `today-audit-${firstAudit.id}`,
+        title: `${firstAudit.name} — ${firstAudit.dueLabel}`,
+        chip: soon ? "dueSoon" : "none",
+        onActivate: () => onOpenAudit(firstAudit.id),
+      });
+    }
+    if (actionsDueToday.length > 0) {
+      const soon = actionsDueToday.some((a) => a.dueHours < amberThresholdHours);
+      rows.push({
+        id: "today-actions",
+        title: `${actionsDueToday.length} Action${actionsDueToday.length === 1 ? "" : "s"} due today`,
+        chip: soon ? "dueSoon" : "none",
+        onActivate: () => onViewAllDueToday(),
+      });
+    }
+    if (openIncidentFollowUpsCount > 0) {
+      rows.push({
+        id: "today-incidents",
+        title: `${openIncidentFollowUpsCount} Incident follow-up${openIncidentFollowUpsCount === 1 ? "" : "s"}`,
+        chip: "dueSoon",
+        onActivate: () => onOpenIncidents(),
+      });
+    }
+    return rows;
+  }, [auditsDueToday, actionsDueToday, openIncidentFollowUpsCount, onOpenAudit, onViewAllDueToday, onOpenIncidents]);
+
   const completionRows = useMemo((): OperationalCompletionRow[] => {
     return history.slice(0, 4).map((entry) => ({
       id: `hist-${entry.id}`,
@@ -151,13 +205,17 @@ export function ManagerDashboard({
   }, [history, onOpenAudit]);
 
   const devPreviewFill =
-    import.meta.env.DEV &&
-    needsAttentionRows.length === 0 &&
-    dueTodayRows.length === 0 &&
+    isDebugUiAllowed() &&
+    todayStripRows.length === 0 &&
     awaitingRows.length === 0 &&
-    completionRows.length === 0;
+    completionRows.length === 0 &&
+    overdueActions.length === 0 &&
+    escalatedActions.length === 0 &&
+    stuckActions.length === 0 &&
+    overdueAudits.length === 0;
 
   void currentUser;
+  void demoModeActive;
   const [selectedLiveGraph, setSelectedLiveGraph] = useState<"auditTraffic" | "actionStatus" | "riskFocus">("auditTraffic");
   const [selectedGraphType, setSelectedGraphType] = useState<"column" | "line" | "area" | "bar">("column");
 
@@ -182,32 +240,39 @@ export function ManagerDashboard({
     if (section === "immediateAttention") {
       return (
         <div key={section} className="space-y-3">
-          <section className="rounded-2xl bg-gradient-to-br from-[#071525] via-[#0f2744] to-[#0c1422] px-4 py-4 text-white shadow-[0_20px_44px_rgba(2,6,23,0.38)] ring-1 ring-white/10">
+          <section className="rounded-2xl border border-slate-700/80 bg-gradient-to-r from-slate-950 via-[#0c1f36] to-slate-950 px-4 py-3.5 text-white shadow-[0_12px_28px_rgba(2,6,23,0.28)]">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Dashboard</p>
-                <h2 className="mt-1 text-lg font-semibold tracking-tight text-white">Control loop</h2>
-                <p className="mt-1 max-w-xl text-xs leading-relaxed text-slate-300">
-                  Provision through report — where you are in the quality cycle right now.
-                </p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Control loop</p>
+                <p className="mt-1 max-w-xl text-xs leading-relaxed text-slate-300">Provision through report — where you are in the quality cycle right now.</p>
               </div>
             </div>
-            <ControlLoopStrip currentStepIndex={controlLoop.currentStepIndex} tone="onDark" />
+            <ControlLoopStrip currentStepIndex={controlLoop.currentStepIndex} tone="onDark" className="mt-1" />
           </section>
           <SyncSavedStateSummary
             offlineQueueCount={offlineQueueCount}
             pendingSyncCount={pendingSyncCount}
             failedSyncCount={failedSyncCount}
+            lastSyncedAt={lastSyncedAt}
             onOpenSyncCentre={onOpenSyncCentre}
           />
           <OperationalDashboardCards
             needsAttentionRows={needsAttentionRows}
+            needsAttentionSummary={{
+              overdueActions: overdueActions.length,
+              escalatedItems: escalatedActions.length,
+              stuckActions: stuckActions.length,
+              overdueAudits: overdueAudits.length,
+            }}
             dueTodayRows={dueTodayRows}
+            todayStripRows={todayStripRows}
             awaitingRows={awaitingRows}
+            inProgressRows={inProgressRows}
             completionRows={completionRows}
             onViewAllNeedsAttention={onViewAllNeedsAttention}
             onViewAllDueToday={onViewAllDueToday}
             onViewAllAwaiting={onViewAllAwaitingVerification}
+            onViewAllInProgress={onViewAllInProgress}
             onViewAllCompletions={onViewAllRecentCompletions}
             devPreviewFill={devPreviewFill}
           />
@@ -342,42 +407,44 @@ export function ManagerDashboard({
 
   return (
     <div className="space-y-4">
-      {assignedAudits.length === 0 && <StartHereCard />}
-      <section className="rounded-xl border border-slate-800 bg-gradient-to-r from-slate-900 to-slate-800 px-4 py-2 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-200">Layout</p>
-          <button
-            onClick={() => setShowLayoutOptions((current) => !current)}
-            className="h-8 rounded-lg border border-slate-600 bg-slate-950/60 px-3 text-xs font-medium text-slate-200"
-          >
-            Layout options
-          </button>
-        </div>
-        {showLayoutOptions && (
-          <div className="mt-2 space-y-2">
-            {sectionOrder.map((section, index) => (
-              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-600 bg-slate-950/40 px-3 py-2">
-                <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-200">{managerLayoutSectionLabels[section] ?? section}</span>
-                <button
-                  onClick={() => moveSection(section, "up")}
-                  disabled={index === 0}
-                  className="h-7 rounded border border-slate-600 bg-slate-900 px-2 text-xs text-slate-200"
-                >
-                  ↑
-                </button>
-                <button
-                  onClick={() => moveSection(section, "down")}
-                  disabled={index === sectionOrder.length - 1}
-                  className="h-7 rounded border border-slate-600 bg-slate-900 px-2 text-xs text-slate-200"
-                >
-                  ↓
-                </button>
-              </div>
-            ))}
+      {showStartHereCard && <StartHereCard />}
+      {isDebugUiAllowed() ? (
+        <section className="rounded-xl border border-slate-800 bg-gradient-to-r from-slate-900 to-slate-800 px-4 py-2 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-200">Layout</p>
+            <button
+              onClick={() => setShowLayoutOptions((current) => !current)}
+              className="h-8 rounded-lg border border-slate-600 bg-slate-950/60 px-3 text-xs font-medium text-slate-200"
+            >
+              Layout options
+            </button>
           </div>
-        )}
-      </section>
+          {showLayoutOptions && (
+            <div className="mt-2 space-y-2">
+              {sectionOrder.map((section, index) => (
+                <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-600 bg-slate-950/40 px-3 py-2">
+                  <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
+                  <span className="min-w-0 flex-1 text-sm text-slate-200">{managerLayoutSectionLabels[section] ?? section}</span>
+                  <button
+                    onClick={() => moveSection(section, "up")}
+                    disabled={index === 0}
+                    className="h-7 rounded border border-slate-600 bg-slate-900 px-2 text-xs text-slate-200"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    onClick={() => moveSection(section, "down")}
+                    disabled={index === sectionOrder.length - 1}
+                    className="h-7 rounded border border-slate-600 bg-slate-900 px-2 text-xs text-slate-200"
+                  >
+                    ↓
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
       {hasOperationalOverview && <div>{renderSection("immediateAttention")}</div>}
       {remainingSections.map((section) => renderSection(section))}
     </div>

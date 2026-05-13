@@ -2,18 +2,23 @@ import { useEffect, useMemo, useState } from "react";
 import { storageKeys } from "../../config/storageKeys";
 import type { AdminDashboardProps } from "../../types/dashboardScreenProps";
 import { getAuditTrafficStatus } from "../../utils/dashboardHealth";
+import { isDebugUiAllowed } from "../../utils/debugUiVisibility";
 import { isEscalated, isOverdue, isStuck } from "../../utils/managerDashboard";
-import { DashboardBertFlowStrip, SectionHeader, StartHereCard } from "./DashboardPrimitives";
+import { ControlLoopStrip, deriveControlLoopState } from "./ControlLoopStrip";
+import { SectionHeader, StartHereCard } from "./DashboardPrimitives";
 
 export function AdminDashboard({
   groupedAudits,
   assignedAudits,
   actions,
+  history,
+  workspaceLinked,
   pendingSyncCount,
   failedSyncCount,
   reportUsersCount,
   activeSchedulesCount,
   templatesCount,
+  showStartHereCard,
   onOpenAudit,
   onAdvanceAction,
 }: AdminDashboardProps) {
@@ -24,6 +29,26 @@ export function AdminDashboard({
   const auditsDueToday = useMemo(() => assignedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours <= 24), [assignedAudits]);
   const actionsDueToday = useMemo(() => actions.filter((action) => action.dueHours >= 0 && action.dueHours <= 24 && action.status !== "Closed"), [actions]);
   const allClear = overdueAudits.length === 0 && overdueActions.length === 0 && escalatedActions.length === 0 && stuckActions.length === 0;
+
+  const openOrInProgressActions = useMemo(
+    () => actions.filter((a) => a.status === "Open" || a.status === "In Progress").length,
+    [actions],
+  );
+  const awaitingVerificationCount = useMemo(
+    () => actions.filter((a) => a.status === "Awaiting Verification").length,
+    [actions],
+  );
+  const controlLoop = useMemo(
+    () =>
+      deriveControlLoopState({
+        workspaceLinked,
+        hasAssignedAudits: assignedAudits.length > 0,
+        openOrInProgressActions,
+        awaitingVerificationCount,
+        recentCompletionCount: history.length,
+      }),
+    [workspaceLinked, assignedAudits.length, openOrInProgressActions, awaitingVerificationCount, history.length],
+  );
 
   const {
     showLayoutOptions,
@@ -93,9 +118,12 @@ export function AdminDashboard({
           <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Audit templates</p><p className="text-lg font-semibold text-slate-900">{templatesCount}</p></div>
         </div>
         <div className="mt-2 flex flex-wrap gap-2">
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">Pending sync {pendingSyncCount}</div>
-          <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Failed sync {failedSyncCount}</div>
-          <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Conflicts {failedSyncCount}</div>
+          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+            {pendingSyncCount} {pendingSyncCount === 1 ? "item" : "items"} waiting to sync
+          </div>
+          <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">
+            {failedSyncCount} {failedSyncCount === 1 ? "item" : "items"} not yet saved online
+          </div>
         </div>
       </section>
     );
@@ -103,27 +131,33 @@ export function AdminDashboard({
 
   return (
     <div className="space-y-4">
-      {assignedAudits.length === 0 && <StartHereCard />}
-      <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
-          <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
-            Layout options
-          </button>
-        </div>
-        {showLayoutOptions && (
-          <div className="mt-2 space-y-2">
-            {sectionOrder.map((section, index) => (
-              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-700">{adminLayoutSectionLabels[section] ?? section}</span>
-                <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
-                <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
-              </div>
-            ))}
+      {showStartHereCard && <StartHereCard />}
+      {isDebugUiAllowed() ? (
+        <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
+            <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
+              Layout options
+            </button>
           </div>
-        )}
-        <DashboardBertFlowStrip variant="onDark" />
+          {showLayoutOptions && (
+            <div className="mt-2 space-y-2">
+              {sectionOrder.map((section, index) => (
+                <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
+                  <span className="min-w-0 flex-1 text-sm text-slate-700">{adminLayoutSectionLabels[section] ?? section}</span>
+                  <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
+                  <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+      <section className="rounded-2xl border border-slate-700/80 bg-gradient-to-r from-slate-950 via-[#0c1f36] to-slate-950 px-4 py-3.5 text-white shadow-[0_12px_28px_rgba(2,6,23,0.28)]">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Control loop</p>
+        <p className="mt-1 max-w-xl text-xs leading-relaxed text-slate-300">Provision through report — where you are in the quality cycle right now.</p>
+        <ControlLoopStrip currentStepIndex={controlLoop.currentStepIndex} tone="onDark" className="mt-1" />
       </section>
       {visibleSectionOrder.map((section) => renderSection(section))}
     </div>

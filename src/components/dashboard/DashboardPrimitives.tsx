@@ -227,11 +227,11 @@ export function EmptyPanel({ title, text }: { title: string; text: string }) {
 
 export function StartHereCard() {
   const steps = [
-    "Connect or choose a workspace.",
-    "Run an audit.",
-    "Create actions.",
-    "Verify closure.",
-    "Generate a report.",
+    "Connect or verify your company workspace.",
+    "Run your first audit.",
+    "Capture actions and owners.",
+    "Verify closure on site.",
+    "Generate and share reports.",
   ];
   return (
     <section
@@ -239,7 +239,8 @@ export function StartHereCard() {
       className="rounded-2xl border border-sky-200/80 bg-sky-50/60 px-4 py-3 shadow-[0_6px_16px_rgba(15,23,42,0.04)]"
     >
       <p className="text-sm font-semibold text-slate-900">Start here</p>
-      <ol className="mt-1.5 list-decimal space-y-0.5 pl-5 text-xs leading-5 text-slate-600">
+      <p className="mt-1 text-xs leading-relaxed text-slate-600">Set up the workspace and complete the first control loop.</p>
+      <ol className="mt-2 list-decimal space-y-0.5 pl-5 text-xs leading-5 text-slate-600">
         {steps.map((step) => (
           <li key={step}>{step}</li>
         ))}

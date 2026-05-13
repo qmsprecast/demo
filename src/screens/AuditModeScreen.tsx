@@ -3,6 +3,7 @@ import { StatusBadge } from "../components/dashboard/DashboardPrimitives";
 import type { AuditModeScreenProps } from "../types/auditModeScreenProps";
 import type { Answer } from "../types/reportsScreenProps";
 import { getAuditTrafficStatus, getDueWarning } from "../utils/dashboardHealth";
+import { getPlainEnglishSyncStatus } from "../utils/plainEnglishSync";
 
 export function AuditModeScreen({
   audit,
@@ -44,9 +45,18 @@ export function AuditModeScreen({
   const safeIndex = Math.max(0, Math.min(questionIndex, audit.questions.length - 1));
   const currentQuestion = audit.questions[safeIndex];
   const answeredCount = audit.questions.filter((question) => Boolean(responses[question.id])).length;
+  const syncPlain = getPlainEnglishSyncStatus({
+    offlineQueueCount: 0,
+    pendingSyncCount,
+    failedSyncCount,
+  });
   const syncBadgeClass =
-    failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-800";
-  const syncLabel = failedSyncCount > 0 ? "Sync failed" : pendingSyncCount > 0 ? `${pendingSyncCount} pending sync` : "Synced";
+    syncPlain.tone === "problem"
+      ? "bg-rose-100 text-rose-800"
+      : syncPlain.tone === "waiting"
+        ? "bg-amber-100 text-amber-800"
+        : "bg-emerald-50 text-emerald-900";
+  const syncLabel = syncPlain.summary;
   const options: Answer[] = currentQuestion.fieldType === "Traffic light" ? ["pass", "nc", "fail"] : ["pass", "fail", "nc"];
 
   return (

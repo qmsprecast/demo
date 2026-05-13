@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BertLogo } from "./src/components/BertLogo";
 import type { NavItemId, Role, RoutedScreen } from "./src/permissions";
 import {
@@ -25,7 +25,8 @@ import { navItems } from "./src/config/navItems";
 import { isMoreMenuNavId, isPrimaryNavId } from "./src/config/navStructure";
 import { storageKeys } from "./src/config/storageKeys";
 import { slatePrimaryCtaInteract } from "./src/styles/interactions";
-import { getFirstName, getTimeBasedGreeting, getUserInitials } from "./src/utils/userDisplay";
+import { getGreetingFirstName, getTimeBasedGreeting, getUserInitials } from "./src/utils/userDisplay";
+import { isDebugUiAllowed } from "./src/utils/debugUiVisibility";
 import { AuditorTaskDashboard } from "./src/components/dashboard/AuditorTaskDashboard";
 import { AdminDashboard } from "./src/components/dashboard/AdminDashboard";
 import { ManagerDashboard } from "./src/components/dashboard/ManagerDashboard";
@@ -52,6 +53,8 @@ import {
 } from "./src/components/dashboard/DashboardPrimitives";
 import { pickNextAuditorAudit } from "./src/utils/auditorDashboard";
 import { isEscalated, isOverdue, isStuck } from "./src/utils/managerDashboard";
+import { getNextBestAction } from "./src/utils/nextBestAction";
+import type { DashboardSummaryForNextAction, NextBestActionIntent } from "./src/utils/nextBestAction";
 import {
   amberThresholdHours,
   computeScheduleHealthState,
@@ -3158,6 +3161,7 @@ function App() {
     entries.push({ id: "__more__", label: "More", icon: "grid" });
     return entries;
   }, [visibleNavItems]);
+
   const showSiteSelectorForRole = currentUser ? (roleSiteSelectorVisibility[currentUser.role] ?? true) : true;
 
   const creatableRoles = useMemo(
@@ -3290,6 +3294,51 @@ function App() {
       return false;
     });
   }, [siteScopedAudits, currentUser, currentUserAuditAccess]);
+
+  const dashboardNextActionInput = useMemo((): DashboardSummaryForNextAction | null => {
+    if (!currentUser) return null;
+    const actions = visibleActions;
+    return {
+      overdueAuditCount: assignedAudits.filter((a) => getAuditTrafficStatus(a.dueHours) === "red").length,
+      overdueActionCount: actions.filter(isOverdue).length,
+      escalatedActionCount: actions.filter(isEscalated).length,
+      stuckActionCount: actions.filter(isStuck).length,
+      dueTodayAuditCount: assignedAudits.filter((a) => a.dueHours >= 0 && a.dueHours <= 24).length,
+      dueTodayActionCount: actions.filter((a) => a.dueHours >= 0 && a.dueHours <= 24 && a.status !== "Closed").length,
+      awaitingVerificationCount: actions.filter((a) => a.status === "Awaiting Verification").length,
+      openOrInProgressActionCount: actions.filter((a) => a.status === "Open" || a.status === "In Progress").length,
+      assignedEvidenceMissingCount: actions.filter(
+        (a) =>
+          (a.assignedToUserId === currentUser.username || a.assignedToName === currentUser.name) &&
+          a.status !== "Closed" &&
+          Boolean(a.evidenceRequired) &&
+          a.evidenceCount === 0,
+      ).length,
+      recentCompletionCount: assignmentFilteredHistory.length,
+    };
+  }, [currentUser, visibleActions, assignedAudits, assignmentFilteredHistory]);
+
+  const dashboardNextBest = useMemo(() => {
+    if (!currentUser || !dashboardNextActionInput) return null;
+    return getNextBestAction(currentUser.role, dashboardNextActionInput);
+  }, [currentUser, dashboardNextActionInput]);
+
+  const showDashboardStartHere = useMemo(
+    () => !selectedFolder || demoModeActive || assignedAudits.length === 0,
+    [selectedFolder, demoModeActive, assignedAudits.length],
+  );
+
+  const openIncidentFollowUpsCount = useMemo(
+    () => incidentActions.filter((item) => item.status !== "Complete").length,
+    [incidentActions],
+  );
+
+  const syncPlainSummary = useMemo(() => {
+    if (offlineMode) return "Offline";
+    if (failedSyncCount > 0) return `${failedSyncCount} sync issue${failedSyncCount === 1 ? "" : "s"}`;
+    if (pendingSyncCount > 0 || offlineQueue.length > 0) return "Saving…";
+    return "All work saved";
+  }, [offlineMode, failedSyncCount, pendingSyncCount, offlineQueue.length]);
 
   const availableScheduleAuditors = useMemo(() => {
     const seeded = users.filter((user) => user.role === "Auditor").map((user) => user.name);
@@ -3937,6 +3986,12 @@ function App() {
     }
 
     const queued = [...offlineQueue];
+    const offlineSubmittedByFallback: User = {
+      username: "offline-sync",
+      password: "",
+      role: "Auditor",
+      name: "Offline submission",
+    };
     queued
       .slice()
       .reverse()
@@ -3947,7 +4002,15 @@ function App() {
           noteMap: submission.notes,
           evidenceMap: submission.evidence,
           submittedBy: submission.submittedBy,
-          submittedByUser: users.find((item) => item.name === submission.submittedBy) || users[0],
+          submittedByUser:
+            users.find((item) => item.name === submission.submittedBy) ||
+            ({
+              ...offlineSubmittedByFallback,
+              name: submission.submittedBy?.trim() || offlineSubmittedByFallback.name,
+              username: submission.submittedBy?.trim()
+                ? submission.submittedBy.trim().toLowerCase().replace(/\s+/g, "-")
+                : offlineSubmittedByFallback.username,
+            } as User),
           completedAt: submission.queuedAt,
         });
         updateSyncItemStatus(submission.audit.id, "Synced");
@@ -4932,6 +4995,14 @@ function App() {
       throw new Error(payload.error || "Unable to save actions.");
     }
   };
+
+  const applyNextBestDashboardIntent = useCallback((intent: NextBestActionIntent) => {
+    if (intent.type !== "screen") return;
+    if (intent.actionFilter) {
+      setActionFilter(intent.actionFilter);
+    }
+    setScreen(intent.screen);
+  }, []);
 
   const handleLogout = () => {
     fetch("/auth/google/logout", { method: "POST" }).catch(() => undefined);
@@ -7395,7 +7466,7 @@ function App() {
               {godCompanySetupOnlyShell ? "Workspace setup (Master)" : "Tablet workspace"}
             </div>
             <div className="flex items-center gap-1">
-              {demoRoleSwitchEnabled && !godCompanySetupOnlyShell && <div className="hidden items-center gap-1 lg:flex">
+              {isDebugUiAllowed() && demoRoleSwitchEnabled && !godCompanySetupOnlyShell && <div className="hidden items-center gap-1 lg:flex">
                 {currentUser.role !== "Admin" && (
                 <button
                   type="button"
@@ -7428,7 +7499,7 @@ function App() {
                   AUDITOR
                 </button>
               </div>}
-              {!godCompanySetupOnlyShell && (
+              {isDebugUiAllowed() && !godCompanySetupOnlyShell && (
               <button
                 type="button"
                 onClick={() => setScreen(getHomeScreenForRole(currentUser.role))}
@@ -7437,7 +7508,7 @@ function App() {
                 Layout options
               </button>
               )}
-              {!godCompanySetupOnlyShell && (
+              {isDebugUiAllowed() && !godCompanySetupOnlyShell && (
               <button
                 onClick={() => setPreviewOrientation(previewOrientation === "landscape" ? "portrait" : "landscape")}
                 className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-orange-50"].join(" ")}
@@ -7447,6 +7518,14 @@ function App() {
               )}
               <div className={["rounded-full px-2 py-0.5", offlineMode ? "bg-amber-500/15 text-amber-600" : "bg-blue-500/12 text-blue-800"].join(" ")}>
                 {offlineMode ? "Offline" : "Online"}
+              </div>
+              <div
+                className={[
+                  "rounded-full border px-2 py-0.5 text-[8px] font-semibold normal-case tracking-normal",
+                  themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-300" : "border-slate-200 bg-white text-slate-700",
+                ].join(" ")}
+              >
+                {syncPlainSummary}
               </div>
               <div className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-300" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)]"].join(" ")}>
                 {deviceTimeLabel}
@@ -7462,17 +7541,11 @@ function App() {
                   size="sm"
                 />
               </div>
-              <button
-                onClick={handleLogout}
-                className={`h-6 shrink-0 rounded-md bg-[var(--bert-signal-orange)] px-2 text-[9px] font-semibold text-[var(--qms-navy-950)] shadow-sm ${slatePrimaryCtaInteract}`}
-              >
-                Logout
-              </button>
               <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--bert-signal-orange)] text-[9px] font-semibold tracking-[0.08em] text-[var(--qms-navy-950)]">
                 {accountPhotoUrl ? (
                   <img src={accountPhotoUrl} alt={currentUser.name} className="h-full w-full object-cover" />
                 ) : (
-                  getWorkspaceInitials(currentUser.name)
+                  getUserInitials(currentUser.name, currentUser.username)
                 )}
                 {selectedFolder && (
                     <span className="absolute -bottom-1 -right-1 rounded-full bg-blue-500 px-1 py-0 text-[8px] font-bold uppercase tracking-[0.08em] text-white">
@@ -7483,7 +7556,7 @@ function App() {
               <div className="min-w-0 flex-1">
                 <p className={["truncate text-[11px] font-semibold leading-4 tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{workspaceName}</p>
                 <p className={["truncate text-[8px] leading-3 tracking-[0.08em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
-                  {selectedFolder ? `Live company workspace · ${PRODUCT_TAGLINE}` : PRODUCT_BRAND_FULL}
+                  {selectedFolder ? `Live company workspace · ${PRODUCT_TAGLINE}` : `bert. · ${PRODUCT_TAGLINE}`}
                 </p>
                 {showSiteSelectorForRole && !godCompanySetupOnlyShell && (
                 <div className="mt-1">
@@ -7504,7 +7577,7 @@ function App() {
               </div>
             </div>
 
-            <div className={["qms-app-session-bar mt-0.5 hidden items-center justify-between gap-2 rounded-lg border px-2 py-0.5 lg:flex", themeMode === "dark" ? "border-slate-700 bg-slate-900" : "border-slate-300 bg-white"].join(" ")}>
+            <div className={["qms-app-session-bar mt-0.5 hidden items-center justify-between gap-2 rounded-lg border px-2 py-0.5 sm:flex", themeMode === "dark" ? "border-slate-700 bg-slate-900" : "border-slate-300 bg-white"].join(" ")}>
               <div className="flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-[10px] leading-4">
                 <p className={["shrink-0 font-semibold", themeMode === "dark" ? "text-slate-100" : "text-slate-900"].join(" ")}>{currentUser.name}</p>
                 <span className={themeMode === "dark" ? "text-slate-500" : "text-slate-400"}>•</span>
@@ -7517,7 +7590,7 @@ function App() {
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
-                {demoModeActive && (
+                {isDebugUiAllowed() && demoModeActive && (
                   <div className="rounded-full bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
                     Demo mode active
                   </div>
@@ -7525,6 +7598,18 @@ function App() {
                 <div className="rounded-full bg-blue-500/12 px-2 py-0.5 text-[10px] font-semibold text-blue-800">
                   {selectedFolder ? "Live workspace" : "Live session"}
                 </div>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className={[
+                    "rounded-lg border px-2 py-0.5 text-[10px] font-semibold transition",
+                    themeMode === "dark"
+                      ? "border-slate-600 bg-slate-950 text-slate-200 hover:border-orange-400/50 hover:text-orange-200"
+                      : "border-slate-300 bg-white text-slate-800 hover:border-[var(--bert-signal-orange)] hover:text-[var(--qms-navy-900)]",
+                  ].join(" ")}
+                >
+                  Log out
+                </button>
               </div>
             </div>
           </div>
@@ -7540,7 +7625,7 @@ function App() {
             <div className={`shrink-0 ${desktopSidebarCollapsed ? "px-2 py-3" : "px-3 py-4"}`}>
               <BertLogo variant="wordmark" tone="onDark" size="sm" className={desktopSidebarCollapsed ? "scale-90" : ""} />
             </div>
-            <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pb-2" aria-label="Primary">
+            <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-2" aria-label="Primary">
               {primaryNavItems.map((item) => {
                 const selected = screen === item.id || (screen === "complete" && item.id === "audits");
                 return (
@@ -7553,7 +7638,7 @@ function App() {
                       setScreen(item.id);
                     }}
                     className={[
-                      "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition",
+                      "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-semibold transition",
                       selected
                         ? "bg-[var(--bert-signal-orange)] text-[var(--qms-navy-950)] shadow-[0_8px_20px_rgba(249,115,22,0.25)]"
                         : "text-slate-200 hover:bg-white/8 hover:text-white",
@@ -7561,7 +7646,7 @@ function App() {
                     ].join(" ")}
                     title={item.label}
                   >
-                    <AppIcon name={item.icon} className="h-4 w-4 shrink-0" />
+                    <AppIcon name={item.icon} className="h-4 w-4 shrink-0 opacity-95" />
                     {!desktopSidebarCollapsed && <span className="truncate">{item.label}</span>}
                   </button>
                 );
@@ -7572,7 +7657,7 @@ function App() {
                     type="button"
                     onClick={() => setShellMoreExpanded((current) => !current)}
                     className={[
-                      "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition",
+                      "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-semibold transition",
                       shellMoreExpanded || moreNavItems.some((item) => item.id === screen)
                         ? "border border-orange-400/40 bg-orange-500/15 text-orange-100"
                         : "text-slate-300 hover:bg-white/8 hover:text-white",
@@ -7606,6 +7691,16 @@ function App() {
                           </button>
                         );
                       })}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleLogout();
+                          setShellMoreExpanded(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold text-rose-200 transition hover:bg-rose-500/15 hover:text-white"
+                      >
+                        <span className="truncate">Log out</span>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -7637,7 +7732,7 @@ function App() {
               <button
                 type="button"
                 onClick={() => setDesktopSidebarCollapsed((current) => !current)}
-                className="flex w-full items-center justify-center rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
+                className="flex w-full items-center justify-center rounded-xl border border-white/12 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
                 aria-label={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
                 title={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
               >
@@ -7649,16 +7744,42 @@ function App() {
             className={[
               "qms-screen-stage h-full min-w-0 flex-1 overflow-y-auto px-4 pb-24 pt-4 md:pb-10", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_input:focus]:border-[var(--bert-signal-orange)] [&_section_input:focus]:bg-slate-950 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_section_textarea:focus]:border-[var(--bert-signal-orange)] [&_section_select]:border-slate-700 [&_section_select]:bg-slate-950 [&_section_select]:text-slate-100 [&_section_select:focus]:border-[var(--bert-signal-orange)] [&_section_select:focus]:bg-slate-950 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800 [&_.bg-white]:bg-slate-900 [&_.text-slate-900]:text-slate-100 [&_.text-slate-800]:text-slate-200 [&_.text-slate-700]:text-slate-300 [&_.text-slate-600]:text-slate-400 [&_.text-slate-500]:text-slate-400 [&_input[type=file]]:border-[rgba(249,115,22,0.45)] [&_input[type=file]]:bg-slate-950 [&_input[type=file]]:text-slate-300 [&_input[type=file]]:file:text-slate-200" : "bg-slate-100/72"            ].join(" ")}>
             {screen === "dashboard" && !godCompanySetupOnlyShell && (
-              <div className="mb-4 flex items-start justify-between gap-3">
-                <div className="min-w-0">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1">
                   <h1 className="text-xl font-semibold tracking-tight text-slate-900 md:text-2xl dark:text-slate-100">
-                    {getTimeBasedGreeting()}, {getFirstName(currentUserAppName, currentUser.username)}
+                    {(() => {
+                      const first = getGreetingFirstName(currentUserAppName);
+                      return first ? `${getTimeBasedGreeting()}, ${first}` : getTimeBasedGreeting();
+                    })()}
                   </h1>
-                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{"Here's what needs attention today."}</p>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                    Here is what needs attention, what is due today, and what is waiting on someone else.
+                  </p>
+                  {dashboardNextBest?.intent.type === "screen" ? (
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Suggested next step</p>
+                      {dashboardNextBest.description ? (
+                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{dashboardNextBest.description}</p>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (dashboardNextBest?.intent.type === "screen") {
+                            applyNextBestDashboardIntent(dashboardNextBest.intent);
+                          }
+                        }}
+                        className="mt-3 inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-[var(--bert-signal-orange)] px-4 text-sm font-semibold text-[var(--qms-navy-950)] shadow-sm transition hover:brightness-95 focus-visible:outline focus-visible:ring-2 focus-visible:ring-orange-300 focus-visible:ring-offset-2 sm:w-auto"
+                      >
+                        {dashboardNextBest.label}
+                      </button>
+                    </div>
+                  ) : dashboardNextBest && dashboardNextBest.intent.type === "none" ? (
+                    <p className="mt-2 text-sm font-medium text-emerald-800 dark:text-emerald-300">{dashboardNextBest.description ?? dashboardNextBest.label}</p>
+                  ) : null}
                 </div>
                 <button
                   type="button"
-                  className="shrink-0 rounded-full border border-slate-200 bg-white p-2 text-slate-600 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                  className="shrink-0 self-end rounded-full border border-slate-200 bg-white p-2 text-slate-600 shadow-sm hover:bg-slate-50 sm:self-start dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                   aria-label="Notifications"
                 >
                   <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -7757,6 +7878,8 @@ function App() {
                 onRepairWorkspace={repairWorkspace}
                 onLoadDemoData={handleLoadDemoData}
                 onClearDemoData={handleClearDemoData}
+                showStartHereCard={showDashboardStartHere}
+                demoModeActive={demoModeActive}
                 renderAuditorDashboard={() => (
                   <AuditorTaskDashboard
                     currentUser={currentUser}
@@ -7766,6 +7889,9 @@ function App() {
                     actions={visibleActions}
                     pendingSyncCount={pendingSyncCount}
                     failedSyncCount={failedSyncCount}
+                    showStartHereCard={showDashboardStartHere}
+                    workspaceLinked={Boolean(selectedFolder)}
+                    recentCompletionsCount={assignmentFilteredHistory.length}
                     onOpenAudit={startAudit}
                     slatePrimaryCtaInteract={slatePrimaryCtaInteract}
                   />
@@ -7781,6 +7907,12 @@ function App() {
                     failedSyncCount={failedSyncCount}
                     offlineQueueCount={offlineQueue.length}
                     workspaceLinked={Boolean(selectedFolder)}
+                    showStartHereCard={showDashboardStartHere}
+                    demoModeActive={demoModeActive}
+                    openIncidentFollowUpsCount={openIncidentFollowUpsCount}
+                    onOpenIncidents={() => {
+                      setScreen("incidents");
+                    }}
                     onOpenAudit={startAudit}
                     onAdvanceAction={updateActionStatus}
                     recurringFailedQuestions={recurringFailedQuestions}
@@ -7795,12 +7927,17 @@ function App() {
                       setActionFilter("Awaiting Verification");
                       setScreen("actions");
                     }}
+                    onViewAllInProgress={() => {
+                      setActionFilter("Open");
+                      setScreen("actions");
+                    }}
                     onViewAllRecentCompletions={() => {
                       setScreen("reports");
                     }}
                     onOpenSyncCentre={() => {
                       setScreen("sync");
                     }}
+                    lastSyncedAt={companySheetSync?.lastSyncedAt ?? null}
                   />
                 )}
                 renderAdminDashboard={() => (
@@ -7808,11 +7945,14 @@ function App() {
                     groupedAudits={groupedAudits}
                     assignedAudits={assignedAudits}
                     actions={visibleActions}
+                    history={assignmentFilteredHistory}
+                    workspaceLinked={Boolean(selectedFolder)}
                     pendingSyncCount={pendingSyncCount}
                     failedSyncCount={failedSyncCount}
                     reportUsersCount={companyReportUsers.length}
                     activeSchedulesCount={managedSchedules.filter((item) => item.lifecycle !== "Archived").length}
                     templatesCount={templates.filter((template) => template.active).length}
+                    showStartHereCard={showDashboardStartHere}
                     onOpenAudit={startAudit}
                     onAdvanceAction={updateActionStatus}
                   />
@@ -8390,6 +8530,16 @@ function App() {
                         <span className="truncate">{item.label}</span>
                       </button>
                     ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleLogout();
+                        setMobileMoreOpen(false);
+                      }}
+                      className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2.5 text-left text-sm font-semibold text-rose-900"
+                    >
+                      Log out
+                    </button>
                   </div>
                 </div>
               </div>

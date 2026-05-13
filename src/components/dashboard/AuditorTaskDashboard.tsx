@@ -1,8 +1,11 @@
 import { useMemo } from "react";
 import type { AuditorTaskDashboardProps } from "../../types/dashboardScreenProps";
 import { amberThresholdHours, getAuditTrafficStatus, getDueWarning } from "../../utils/dashboardHealth";
+import { getPlainEnglishSyncStatus } from "../../utils/plainEnglishSync";
+import { getGreetingFirstName, getTimeBasedGreeting } from "../../utils/userDisplay";
 import { pickNextAuditorAudit, rankAuditorAudit } from "../../utils/auditorDashboard";
-import { DashboardBertFlowStrip, MiniMetric, StartHereCard, StatusBadge } from "./DashboardPrimitives";
+import { ControlLoopStrip, deriveControlLoopState } from "./ControlLoopStrip";
+import { MiniMetric, StartHereCard, StatusBadge } from "./DashboardPrimitives";
 
 export function AuditorTaskDashboard({
   currentUser,
@@ -12,9 +15,38 @@ export function AuditorTaskDashboard({
   actions,
   pendingSyncCount,
   failedSyncCount,
+  showStartHereCard,
+  workspaceLinked,
+  recentCompletionsCount,
   onOpenAudit,
   slatePrimaryCtaInteract,
 }: AuditorTaskDashboardProps) {
+  void groupedAudits;
+  const openOrInProgressActions = useMemo(
+    () => actions.filter((item) => item.status === "Open" || item.status === "In Progress").length,
+    [actions],
+  );
+  const awaitingVerificationCount = useMemo(
+    () => actions.filter((item) => item.status === "Awaiting Verification").length,
+    [actions],
+  );
+  const controlLoop = useMemo(
+    () =>
+      deriveControlLoopState({
+        workspaceLinked,
+        hasAssignedAudits: assignedAudits.length > 0,
+        openOrInProgressActions,
+        awaitingVerificationCount,
+        recentCompletionCount: recentCompletionsCount,
+      }),
+    [
+      workspaceLinked,
+      assignedAudits.length,
+      openOrInProgressActions,
+      awaitingVerificationCount,
+      recentCompletionsCount,
+    ],
+  );
   const sortedAudits = useMemo(
     () =>
       [...assignedAudits].sort((a, b) => {
@@ -54,12 +86,12 @@ export function AuditorTaskDashboard({
   );
   const nextAudit = useMemo(() => pickNextAuditorAudit(sortedAudits, drafts), [sortedAudits, drafts]);
   const primaryLabel = useMemo(() => {
-    if (!nextAudit) return "No Audits Due";
-    if (drafts[nextAudit.id]) return "Resume Audit";
-    if (nextAudit.dueHours < 0) return "Start Overdue Audit";
-    if (getAuditTrafficStatus(nextAudit.dueHours) === "amber") return "Start Due Soon Audit";
-    if (nextAudit.dueHours <= 24) return "Start Today’s Audits";
-    return "Start Next Audit";
+    if (!nextAudit) return "No audits due";
+    if (drafts[nextAudit.id]) return "Continue audit";
+    if (nextAudit.dueHours < 0) return "Start overdue audit";
+    if (getAuditTrafficStatus(nextAudit.dueHours) === "amber") return "Start due-soon audit";
+    if (nextAudit.dueHours <= 24) return "Start today’s audit";
+    return "Start next audit";
   }, [nextAudit, drafts]);
   const primarySubtitle = useMemo(() => {
     if (!nextAudit) return "All clear - no audits due right now.";
@@ -80,17 +112,30 @@ export function AuditorTaskDashboard({
       ),
     [actions, currentUser.name, currentUser.username],
   );
-  const syncLabel =
-    failedSyncCount > 0 ? `${failedSyncCount} sync failed` : pendingSyncCount > 0 ? `${pendingSyncCount} pending sync` : "Synced";
+  const syncPlain = useMemo(
+    () =>
+      getPlainEnglishSyncStatus({
+        offlineQueueCount: 0,
+        pendingSyncCount,
+        failedSyncCount,
+      }),
+    [pendingSyncCount, failedSyncCount],
+  );
+  const syncLabel = syncPlain.summary;
+
+  const greetingHeadline = useMemo(() => {
+    const first = getGreetingFirstName(currentUser.name);
+    return first ? `${getTimeBasedGreeting()}, ${first}` : getTimeBasedGreeting();
+  }, [currentUser.name]);
 
   return (
     <div className="space-y-4">
-      {assignedAudits.length === 0 && <StartHereCard />}
+      {showStartHereCard && <StartHereCard />}
       <section className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
         <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Needs attention</p>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">Morning {currentUser.name.split(" ")[0]}</h2>
+        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{greetingHeadline}</h2>
         <p className="mt-1 text-sm text-slate-500">What do you need to do now?</p>
-        <DashboardBertFlowStrip variant="onLight" />
+        <ControlLoopStrip currentStepIndex={controlLoop.currentStepIndex} tone="onLight" className="mt-2" />
         <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           <MiniMetric label="Outstanding" value={String(overdueCount)} tone="red" />
           <MiniMetric label="Due now" value={String(dueSoonCount)} tone="amber" />
@@ -103,9 +148,9 @@ export function AuditorTaskDashboard({
           type="button"
           onClick={() => nextAudit && onOpenAudit(nextAudit.id)}
           disabled={!nextAudit}
-          className={`mt-4 h-16 w-full rounded-2xl text-lg font-semibold ${nextAudit ? `bg-slate-900 text-white ${slatePrimaryCtaInteract}` : "cursor-not-allowed bg-slate-200 text-slate-700"}`}
+          className={`mt-4 min-h-[48px] w-full rounded-2xl text-lg font-semibold ${nextAudit ? `bg-slate-900 text-white ${slatePrimaryCtaInteract}` : "cursor-not-allowed bg-slate-200 text-slate-700"}`}
         >
-          {nextAudit ? `Audit Mode: ${primaryLabel}` : "Audit Mode: No Audits Due"}
+          {nextAudit ? primaryLabel : "No audits due right now"}
         </button>
         <p className="mt-2 text-sm text-slate-500">{primarySubtitle}</p>
         {orphanDraftCount > 0 && (
@@ -123,7 +168,11 @@ export function AuditorTaskDashboard({
             <div
               className={[
                 "rounded-full px-3 py-1 text-xs font-semibold",
-                failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-800",
+                syncPlain.tone === "problem"
+                  ? "bg-rose-100 text-rose-800"
+                  : syncPlain.tone === "waiting"
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-emerald-50 text-emerald-900",
               ].join(" ")}
             >
               {syncLabel}

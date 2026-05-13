@@ -1,5 +1,6 @@
 export type StatusChipVariant =
   | "overdue"
+  | "escalated"
   | "dueSoon"
   | "awaitingVerification"
   | "verified"
@@ -15,6 +16,11 @@ const variantClasses: Record<
     className:
       "border border-rose-200/90 bg-rose-50 text-rose-800 ring-1 ring-rose-500/15 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white",
     defaultLabel: "OVERDUE",
+  },
+  escalated: {
+    className:
+      "border border-rose-200/90 bg-rose-50 text-rose-900 ring-1 ring-rose-600/20 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white",
+    defaultLabel: "ESCALATED",
   },
   dueSoon: {
     className:

@@ -68,7 +68,7 @@ const reportSectionOptions: {
   { key: "scheduleCompliance", title: "Schedule compliance", description: "Schedule health, missed audits, and due-soon items." },
   { key: "syncExceptions", title: "Offline sync exceptions", description: "Items failed or conflicted during sync." },
   { key: "templates", title: "Audit templates", description: "Active templates included in the workspace." },
-  { key: "offlineQueue", title: "Offline queue", description: "Queued submissions still waiting to sync." },
+  { key: "offlineQueue", title: "Work waiting to sync", description: "Queued submissions still waiting to sync." },
 ];
 
 function ReportsScreenIcon({ name, className = "h-5 w-5" }: { name: string; className?: string }) {
@@ -505,7 +505,7 @@ export function ReportsScreen({
             subtitle="Package evidence and metrics for handover—stakeholders get a finished view, not a tour of every screen in the app."
           />
           <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-            Queue {offlineQueueCount}
+            Waiting to sync {offlineQueueCount}
           </div>
         </div>
         {!showReportCreator ? (
