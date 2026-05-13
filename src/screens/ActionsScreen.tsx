@@ -1,5 +1,7 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { canCompleteAuditAsAuditor, getRolePermissions } from "../permissions";
 import { EmptyPanel, MetaPill } from "../components/dashboard/DashboardPrimitives";
+import { StatusChip } from "../components/ui/StatusChip";
 import type { ActionItem, ActionStatus, RiskLevel } from "../types/reportsScreenProps";
 import type { User } from "../types/dashboardScreenProps";
 import { slatePrimaryCtaInteract } from "../styles/interactions";
@@ -48,12 +50,234 @@ function isActionDueSoon(action: ActionItem) {
   return action.status !== "Closed" && action.dueHours >= 0 && action.dueHours <= 24;
 }
 
+function isDueToday(action: ActionItem) {
+  return action.dueHours >= 0 && action.dueHours <= 24;
+}
+
 function getActionUrgency(action: ActionItem): "Escalated" | "Overdue" | "Stuck" | "Due soon" | "Normal" {
   if (isActionEscalated(action)) return "Escalated";
   if (isActionOverdue(action)) return "Overdue";
   if (isActionStuck(action)) return "Stuck";
   if (isActionDueSoon(action)) return "Due soon";
   return "Normal";
+}
+
+function statusChipForAction(status: ActionStatus) {
+  if (status === "Awaiting Verification") return { variant: "awaitingVerification" as const, label: "AWAITING VERIFICATION" };
+  if (status === "Closed") return { variant: "closed" as const, label: "CLOSED" };
+  if (status === "Rejected") return { variant: "overdue" as const, label: "REJECTED" };
+  if (status === "In Progress") return { variant: "awaitingVerification" as const, label: "IN PROGRESS" };
+  return { variant: "draft" as const, label: status.toUpperCase() };
+}
+
+function useWideLayout() {
+  const query = "(min-width: 1024px)";
+  const [wide, setWide] = useState(() => (typeof window !== "undefined" ? window.matchMedia(query).matches : true));
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const handler = () => setWide(mq.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return wide;
+}
+
+function ChevronRight({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="m9 6 6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function MobileActionDetail({
+  action,
+  permissions,
+  onBack,
+  onAdvanceAction,
+  onAssignAction,
+  onAddEvidence,
+  availableAuditors,
+}: {
+  action: ActionItem;
+  permissions: ReturnType<typeof getRolePermissions>;
+  onBack: () => void;
+  onAdvanceAction: (actionId: string, nextStatus?: ActionStatus) => void;
+  onAssignAction: (actionId: string, assignee: string) => void;
+  onAddEvidence: (actionId: string, files: FileList) => void;
+  availableAuditors: string[];
+}) {
+  const evidenceInputRef = useRef<HTMLInputElement>(null);
+  const chip = statusChipForAction(action.status);
+  const priorityHigh = action.severity === "High" || action.severity === "Critical";
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col bg-slate-50 lg:hidden">
+      <header className="shrink-0 bg-gradient-to-r from-[#071525] via-[#0c1f36] to-[#050b14] px-3 py-3 text-white ring-1 ring-white/10">
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={onBack}
+            className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white"
+          >
+            Back
+          </button>
+          <p className="text-sm font-semibold">Action Details</p>
+          <button
+            type="button"
+            className="rounded-full border border-white/15 p-2 text-white"
+            aria-label="More options"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
+              <circle cx="5" cy="12" r="1.5" />
+              <circle cx="12" cy="12" r="1.5" />
+              <circle cx="19" cy="12" r="1.5" />
+            </svg>
+          </button>
+        </div>
+        <div className="mt-3">
+          <StatusChip variant={chip.variant}>{chip.label}</StatusChip>
+        </div>
+        <h2 className="mt-2 text-lg font-semibold leading-snug text-white">{action.questionText}</h2>
+        <p className="mt-1 text-xs leading-relaxed text-slate-300">{action.auditName}</p>
+      </header>
+
+      <div className="min-h-0 flex-1 space-y-0 overflow-y-auto px-3 py-4">
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <DetailRow label="Owner" value={action.assignedToName} />
+          <DetailRow
+            label="Due"
+            value={action.dueDate || action.dueLabel}
+            valueClassName={isDueToday(action) ? "text-orange-600 font-semibold" : undefined}
+          />
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <span className="text-xs font-medium text-slate-500">Status</span>
+            <StatusChip variant={chip.variant}>{chip.label}</StatusChip>
+          </div>
+          <DetailRow
+            label="Priority"
+            value={action.severity}
+            valueClassName={priorityHigh ? "text-rose-600 font-semibold" : undefined}
+          />
+          <DetailRow label="Created" value={action.createdAt} />
+          <DetailRow label="Location" value={action.siteArea || "—"} />
+          <button
+            type="button"
+            className="flex w-full items-center justify-between border-b border-slate-100 px-4 py-3 text-left"
+            onClick={() => evidenceInputRef.current?.click()}
+          >
+            <span className="text-xs font-medium text-slate-500">Evidence</span>
+            <span className="flex items-center gap-1 text-sm font-semibold text-slate-800">
+              {action.evidenceCount > 0 ? `${action.evidenceCount} attached` : "Add"}
+              <ChevronRight className="h-4 w-4 text-slate-400" />
+            </span>
+          </button>
+          <button type="button" className="flex w-full items-center justify-between px-4 py-3 text-left">
+            <span className="text-xs font-medium text-slate-500">Notes</span>
+            <ChevronRight className="h-4 w-4 text-slate-400" />
+          </button>
+        </div>
+
+        {permissions.canAssignActions && (
+          <div className="mt-4">
+            <label className="mb-1 block text-xs font-semibold text-slate-600">Assign</label>
+            <select
+              value={action.assignedToName}
+              onChange={(event) => onAssignAction(action.id, event.target.value)}
+              className={`h-11 w-full rounded-2xl px-4 text-sm ${brandDarkFormControl}`}
+            >
+              {[action.assignedToName, ...availableAuditors]
+                .filter((value, index, list) => value && list.indexOf(value) === index)
+                .map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+            </select>
+          </div>
+        )}
+
+        <input
+          ref={evidenceInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            if (event.target.files?.length) {
+              onAddEvidence(action.id, event.target.files);
+              event.target.value = "";
+            }
+          }}
+        />
+      </div>
+
+      <div className="shrink-0 border-t border-slate-200 bg-white px-3 py-3">
+        <button
+          type="button"
+          onClick={() => evidenceInputRef.current?.click()}
+          className={`h-12 w-full rounded-2xl bg-[var(--bert-signal-orange)] text-sm font-semibold text-[var(--qms-navy-950)] shadow-md ${slatePrimaryCtaInteract}`}
+        >
+          Review evidence
+        </button>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {action.status === "Open" && (
+            <button
+              type="button"
+              onClick={() => onAdvanceAction(action.id, "In Progress")}
+              className="flex-1 rounded-xl border border-slate-200 py-2 text-xs font-semibold text-slate-800"
+            >
+              Start action
+            </button>
+          )}
+          {action.status === "In Progress" && (
+            <button
+              type="button"
+              onClick={() => onAdvanceAction(action.id, "Awaiting Verification")}
+              className="flex-1 rounded-xl border border-slate-200 py-2 text-xs font-semibold text-slate-800"
+            >
+              Submit for verification
+            </button>
+          )}
+          {action.status === "Awaiting Verification" && permissions.canVerifyActions && (
+            <>
+              <button
+                type="button"
+                onClick={() => onAdvanceAction(action.id, "Closed")}
+                className="flex-1 rounded-xl border border-slate-200 py-2 text-xs font-semibold text-slate-800"
+              >
+                Verify & close
+              </button>
+              <button
+                type="button"
+                onClick={() => onAdvanceAction(action.id, "Rejected")}
+                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700"
+              >
+                Reject
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 last:border-b-0">
+      <span className="text-xs font-medium text-slate-500">{label}</span>
+      <span className={`max-w-[60%] text-right text-sm text-slate-900 ${valueClassName ?? ""}`.trim()}>{value}</span>
+    </div>
+  );
 }
 
 export function ActionsScreen({
@@ -86,6 +310,42 @@ export function ActionsScreen({
   onAddEvidence: (actionId: string, files: FileList) => void;
 }) {
   const permissions = getRolePermissions(currentUser.role);
+  const wide = useWideLayout();
+  const [mobileDetailId, setMobileDetailId] = useState<string | null>(null);
+
+  const detailAction = useMemo(
+    () => (mobileDetailId ? actions.find((a) => a.id === mobileDetailId) : undefined),
+    [actions, mobileDetailId],
+  );
+
+  useEffect(() => {
+    if (wide) setMobileDetailId(null);
+  }, [wide]);
+
+  useEffect(() => {
+    if (mobileDetailId && !actions.some((a) => a.id === mobileDetailId)) {
+      setMobileDetailId(null);
+    }
+  }, [actions, mobileDetailId]);
+
+  const openDetail = useCallback((id: string) => {
+    if (!wide) setMobileDetailId(id);
+  }, [wide]);
+
+  if (!wide && detailAction) {
+    return (
+      <MobileActionDetail
+        action={detailAction}
+        permissions={permissions}
+        onBack={() => setMobileDetailId(null)}
+        onAdvanceAction={onAdvanceAction}
+        onAssignAction={onAssignAction}
+        onAddEvidence={onAddEvidence}
+        availableAuditors={availableAuditors}
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
       <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
@@ -94,9 +354,15 @@ export function ActionsScreen({
             <ActionsScreenIcon className="h-5 w-5" />
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">{canCompleteAuditAsAuditor(currentUser.role) ? "My actions" : "Corrective actions"}</p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight">{canCompleteAuditAsAuditor(currentUser.role) ? "Assigned corrective actions" : "CAPA control centre"}</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-300">Track failed findings, assign ownership, upload evidence, and verify closure.</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">
+              {canCompleteAuditAsAuditor(currentUser.role) ? "My actions" : "Corrective actions"}
+            </p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+              {canCompleteAuditAsAuditor(currentUser.role) ? "Assigned corrective actions" : "CAPA control centre"}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              Track failed findings, assign ownership, upload evidence, and verify closure.
+            </p>
           </div>
         </div>
       </section>
@@ -148,7 +414,19 @@ export function ActionsScreen({
       ) : (
         <div className="space-y-3">
           {actions.map((action) => (
-            <section key={action.id} className="rounded-[1.6rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
+            <section
+              key={action.id}
+              className="cursor-pointer rounded-[1.6rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_30px_rgba(15,23,42,0.06)] lg:cursor-default"
+              onClick={() => openDetail(action.id)}
+              onKeyDown={(e) => {
+                if (!wide && (e.key === "Enter" || e.key === " ")) {
+                  e.preventDefault();
+                  openDetail(action.id);
+                }
+              }}
+              role={wide ? undefined : "button"}
+              tabIndex={wide ? undefined : 0}
+            >
               {(() => {
                 const urgency = getActionUrgency(action);
                 const urgencyTone =
@@ -196,7 +474,7 @@ export function ActionsScreen({
                   )}
                 </div>
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="mt-4 hidden gap-3 lg:grid lg:grid-cols-2" onClick={(e) => e.stopPropagation()}>
                 {permissions.canAssignActions && (
                   <select
                     value={action.assignedToName}
@@ -204,7 +482,9 @@ export function ActionsScreen({
                     className={`h-11 w-full min-w-0 rounded-2xl px-4 text-sm ${brandDarkFormControl}`}
                   >
                     {[action.assignedToName, ...availableAuditors].filter((value, index, list) => value && list.indexOf(value) === index).map((name) => (
-                      <option key={name} value={name}>{name}</option>
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
                     ))}
                   </select>
                 )}
@@ -258,7 +538,11 @@ export function ActionsScreen({
                       Submit for verification
                     </button>
                   )}
-                  {permissions.canVerifyActions && action.status === "Awaiting Verification" && <button onClick={() => onAdvanceAction(action.id, "Rejected")} className="h-11 rounded-2xl bg-rose-50 px-4 text-sm font-semibold text-rose-700">Reject</button>}
+                  {permissions.canVerifyActions && action.status === "Awaiting Verification" && (
+                    <button onClick={() => onAdvanceAction(action.id, "Rejected")} className="h-11 rounded-2xl bg-rose-50 px-4 text-sm font-semibold text-rose-700">
+                      Reject
+                    </button>
+                  )}
                 </div>
               </div>
             </section>

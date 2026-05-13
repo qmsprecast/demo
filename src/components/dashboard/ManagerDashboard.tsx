@@ -4,15 +4,37 @@ import type { ManagerDashboardProps } from "../../types/dashboardScreenProps";
 import type { Audit, AuditStatus } from "../../types/reportsScreenProps";
 import { amberThresholdHours, getAuditTrafficStatus, getDueWarning, statusStyles } from "../../utils/dashboardHealth";
 import { isEscalated, isOverdue, isStuck } from "../../utils/managerDashboard";
-import { DashboardBertFlowStrip, SectionHeader, StartHereCard, StatusBadge, TrendBar } from "./DashboardPrimitives";
+import { ControlLoopStrip, deriveControlLoopState } from "./ControlLoopStrip";
+import {
+  OperationalDashboardCards,
+  SyncSavedStateSummary,
+  type OperationalAttentionRow,
+  type OperationalAwaitingRow,
+  type OperationalCompletionRow,
+  type OperationalDueRow,
+} from "./OperationalDashboardCards";
+import { SectionHeader, StartHereCard, StatusBadge, TrendBar } from "./DashboardPrimitives";
+
+const MANAGER_LAYOUT_DEFAULT_ORDER = ["immediateAttention", "liveBoard", "liveGraphs", "repeatIssues"] as const;
 
 export function ManagerDashboard({
+  currentUser,
   groupedAudits,
   assignedAudits,
   actions,
+  history,
+  pendingSyncCount,
+  failedSyncCount,
+  offlineQueueCount,
+  workspaceLinked,
   onOpenAudit,
   onAdvanceAction,
   recurringFailedQuestions,
+  onViewAllNeedsAttention,
+  onViewAllDueToday,
+  onViewAllAwaitingVerification,
+  onViewAllRecentCompletions,
+  onOpenSyncCentre,
 }: ManagerDashboardProps) {
   const overdueAudits = useMemo(
     () => assignedAudits.filter((audit) => getAuditTrafficStatus(audit.dueHours) === "red"),
@@ -30,17 +52,112 @@ export function ManagerDashboard({
     [actions],
   );
   const repeatedTop3 = useMemo(() => recurringFailedQuestions.slice(0, 3), [recurringFailedQuestions]);
-  const allClear =
-    overdueAudits.length === 0 &&
-    overdueActions.length === 0 &&
-    escalatedActions.length === 0 &&
-    stuckActions.length === 0;
   const totalLiveAudits = Math.max(1, groupedAudits.red.length + groupedAudits.amber.length + groupedAudits.green.length);
   const openActionsCount = actions.filter((item) => item.status === "Open").length;
   const inProgressActionsCount = actions.filter((item) => item.status === "In Progress").length;
   const awaitingVerificationCount = actions.filter((item) => item.status === "Awaiting Verification").length;
   const closedActionsCount = actions.filter((item) => item.status === "Closed").length;
   const totalActionsCount = Math.max(1, actions.length);
+  const openOrInProgressActions = useMemo(
+    () => actions.filter((a) => a.status === "Open" || a.status === "In Progress").length,
+    [actions],
+  );
+  const controlLoop = useMemo(
+    () =>
+      deriveControlLoopState({
+        workspaceLinked,
+        hasAssignedAudits: assignedAudits.length > 0,
+        openOrInProgressActions,
+        awaitingVerificationCount,
+        recentCompletionCount: history.length,
+      }),
+    [workspaceLinked, assignedAudits.length, openOrInProgressActions, awaitingVerificationCount, history.length],
+  );
+
+  const needsAttentionRows = useMemo((): OperationalAttentionRow[] => {
+    const rows: OperationalAttentionRow[] = [];
+    for (const audit of overdueAudits) {
+      if (rows.length >= 4) break;
+      rows.push({
+        id: `att-audit-${audit.id}`,
+        title: audit.name,
+        subtitle: `${audit.siteArea} · ${getDueWarning(audit.dueHours)}`,
+        chip: "overdue",
+        onActivate: () => onOpenAudit(audit.id),
+      });
+    }
+    const actionPool = [...escalatedActions, ...stuckActions, ...overdueActions];
+    for (const action of actionPool) {
+      if (rows.length >= 4) break;
+      if (rows.some((r) => r.id === `att-act-${action.id}`)) continue;
+      rows.push({
+        id: `att-act-${action.id}`,
+        title: action.questionText,
+        subtitle: `${action.auditName} · ${action.assignedToName}`,
+        chip: isOverdue(action) ? "overdue" : "none",
+        onActivate: () => onAdvanceAction(action.id),
+      });
+    }
+    return rows;
+  }, [overdueAudits, escalatedActions, stuckActions, overdueActions, onOpenAudit, onAdvanceAction]);
+
+  const dueTodayRows = useMemo((): OperationalDueRow[] => {
+    const rows: OperationalDueRow[] = [];
+    for (const audit of auditsDueToday) {
+      if (rows.length >= 4) break;
+      const soon = audit.dueHours < amberThresholdHours;
+      rows.push({
+        id: `due-audit-${audit.id}`,
+        title: audit.name,
+        subtitle: getDueWarning(audit.dueHours),
+        chip: soon ? "dueSoon" : "none",
+        onActivate: () => onOpenAudit(audit.id),
+      });
+    }
+    for (const action of actionsDueToday) {
+      if (rows.length >= 4) break;
+      const soon = action.dueHours < amberThresholdHours;
+      rows.push({
+        id: `due-act-${action.id}`,
+        title: action.questionText,
+        subtitle: `${action.auditName} · ${action.dueLabel}`,
+        chip: soon ? "dueSoon" : "none",
+        onActivate: () => onAdvanceAction(action.id),
+      });
+    }
+    return rows;
+  }, [auditsDueToday, actionsDueToday, onOpenAudit, onAdvanceAction]);
+
+  const awaitingRows = useMemo((): OperationalAwaitingRow[] => {
+    return actions
+      .filter((a) => a.status === "Awaiting Verification")
+      .slice(0, 4)
+      .map((action) => ({
+        id: `await-${action.id}`,
+        title: action.questionText,
+        subtitle: `${action.auditName} · ${action.assignedToName}`,
+        onActivate: () => onAdvanceAction(action.id),
+      }));
+  }, [actions, onAdvanceAction]);
+
+  const completionRows = useMemo((): OperationalCompletionRow[] => {
+    return history.slice(0, 4).map((entry) => ({
+      id: `hist-${entry.id}`,
+      title: entry.auditName,
+      subtitle: `${entry.completedBy} · ${entry.completedAt}`,
+      chip: entry.status === "green" ? ("verified" as const) : ("closed" as const),
+      onActivate: () => onOpenAudit(entry.auditId),
+    }));
+  }, [history, onOpenAudit]);
+
+  const devPreviewFill =
+    import.meta.env.DEV &&
+    needsAttentionRows.length === 0 &&
+    dueTodayRows.length === 0 &&
+    awaitingRows.length === 0 &&
+    completionRows.length === 0;
+
+  void currentUser;
   const [selectedLiveGraph, setSelectedLiveGraph] = useState<"auditTraffic" | "actionStatus" | "riskFocus">("auditTraffic");
   const [selectedGraphType, setSelectedGraphType] = useState<"column" | "line" | "area" | "bar">("column");
 
@@ -52,11 +169,10 @@ export function ManagerDashboard({
     visibleSectionOrder,
     toggleSection,
     moveSection,
-  } = useDashboardSectionLayout(storageKeys.layoutManager, ["immediateAttention", "todaysWork", "liveBoard", "liveGraphs", "repeatIssues"]);
+  } = useDashboardSectionLayout(storageKeys.layoutManager, [...MANAGER_LAYOUT_DEFAULT_ORDER]);
 
   const managerLayoutSectionLabels: Record<string, string> = {
-    immediateAttention: "Needs attention",
-    todaysWork: "Today",
+    immediateAttention: "Operational overview",
     liveBoard: "Audit traffic",
     liveGraphs: "Charts",
     repeatIssues: "Repeat issues",
@@ -65,69 +181,41 @@ export function ManagerDashboard({
   const renderSection = (section: string) => {
     if (section === "immediateAttention") {
       return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="shield" eyebrow="Needs attention" title="Needs attention" subtitle="Items that need action now." />
-          <div className="mt-2 flex flex-wrap gap-2">
-            <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue actions {overdueActions.length}</div>
-            <div className="rounded-full bg-rose-200 px-3 py-1 text-xs font-semibold text-rose-900">Escalated {escalatedActions.length}</div>
-            <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Stuck {stuckActions.length}</div>
-            <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue audits {overdueAudits.length}</div>
-          </div>
-          {allClear ? (
-            <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm font-semibold text-blue-900">
-              All clear - No overdue audits, actions, or critical issues.
+        <div key={section} className="space-y-3">
+          <section className="rounded-2xl bg-gradient-to-br from-[#071525] via-[#0f2744] to-[#0c1422] px-4 py-4 text-white shadow-[0_20px_44px_rgba(2,6,23,0.38)] ring-1 ring-white/10">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Dashboard</p>
+                <h2 className="mt-1 text-lg font-semibold tracking-tight text-white">Control loop</h2>
+                <p className="mt-1 max-w-xl text-xs leading-relaxed text-slate-300">
+                  Provision through report — where you are in the quality cycle right now.
+                </p>
+              </div>
             </div>
-          ) : (
-            <div className="mt-3 space-y-2">
-              {[...escalatedActions.slice(0, 2), ...stuckActions.slice(0, 2), ...overdueActions.slice(0, 2)].slice(0, 4).map((action) => (
-                <div key={`attention-${action.id}`} className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5">
-                  <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
-                  <p className="mt-1 text-xs text-slate-500">{action.auditName} - {action.assignedToName}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+            <ControlLoopStrip currentStepIndex={controlLoop.currentStepIndex} tone="onDark" />
+          </section>
+          <SyncSavedStateSummary
+            offlineQueueCount={offlineQueueCount}
+            pendingSyncCount={pendingSyncCount}
+            failedSyncCount={failedSyncCount}
+            onOpenSyncCentre={onOpenSyncCentre}
+          />
+          <OperationalDashboardCards
+            needsAttentionRows={needsAttentionRows}
+            dueTodayRows={dueTodayRows}
+            awaitingRows={awaitingRows}
+            completionRows={completionRows}
+            onViewAllNeedsAttention={onViewAllNeedsAttention}
+            onViewAllDueToday={onViewAllDueToday}
+            onViewAllAwaiting={onViewAllAwaitingVerification}
+            onViewAllCompletions={onViewAllRecentCompletions}
+            devPreviewFill={devPreviewFill}
+          />
+        </div>
       );
     }
     if (section === "todaysWork") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="clock" eyebrow="Today" title="Today" subtitle="Audits and actions due today." />
-          <div className="mt-2 grid gap-3 lg:grid-cols-2">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Audits due today</p>
-              {auditsDueToday.length === 0 ? (
-                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No audits due today.</div>
-              ) : (
-                <div className="mt-2 space-y-2">
-                  {auditsDueToday.slice(0, 4).map((audit) => (
-                    <button key={audit.id} onClick={() => onOpenAudit(audit.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left">
-                      <p className="text-sm font-semibold text-slate-900">{audit.name}</p>
-                      <p className="mt-1 text-xs text-slate-500">{getDueWarning(audit.dueHours)}</p>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Actions due today</p>
-              {actionsDueToday.length === 0 ? (
-                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No actions due today.</div>
-              ) : (
-                <div className="mt-2 space-y-2">
-                  {actionsDueToday.slice(0, 4).map((action) => (
-                    <button key={action.id} onClick={() => onAdvanceAction(action.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left">
-                      <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
-                      <p className="mt-1 text-xs text-slate-500">{action.assignedToName} - {action.dueLabel}</p>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
-      );
+      return null;
     }
     if (section === "liveBoard") {
       return (
@@ -247,48 +335,50 @@ export function ManagerDashboard({
     );
   };
 
-  const hasImmediateAttention = visibleSectionOrder.includes("immediateAttention");
-  const hasTodaysWork = visibleSectionOrder.includes("todaysWork");
-  const remainingSections = visibleSectionOrder.filter((section) => section !== "immediateAttention" && section !== "todaysWork");
+  const hasOperationalOverview = visibleSectionOrder.includes("immediateAttention");
+  const remainingSections = visibleSectionOrder.filter(
+    (section) => section !== "immediateAttention" && section !== "todaysWork",
+  );
 
   return (
     <div className="space-y-4">
       {assignedAudits.length === 0 && <StartHereCard />}
-      <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
+      <section className="rounded-xl border border-slate-800 bg-gradient-to-r from-slate-900 to-slate-800 px-4 py-2 shadow-sm">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Home</p>
-          <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
+          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-200">Layout</p>
+          <button
+            onClick={() => setShowLayoutOptions((current) => !current)}
+            className="h-8 rounded-lg border border-slate-600 bg-slate-950/60 px-3 text-xs font-medium text-slate-200"
+          >
             Layout options
           </button>
         </div>
         {showLayoutOptions && (
           <div className="mt-2 space-y-2">
             {sectionOrder.map((section, index) => (
-              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-600 bg-slate-950/40 px-3 py-2">
                 <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-700">{managerLayoutSectionLabels[section] ?? section}</span>
-                <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
-                <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
+                <span className="min-w-0 flex-1 text-sm text-slate-200">{managerLayoutSectionLabels[section] ?? section}</span>
+                <button
+                  onClick={() => moveSection(section, "up")}
+                  disabled={index === 0}
+                  className="h-7 rounded border border-slate-600 bg-slate-900 px-2 text-xs text-slate-200"
+                >
+                  ↑
+                </button>
+                <button
+                  onClick={() => moveSection(section, "down")}
+                  disabled={index === sectionOrder.length - 1}
+                  className="h-7 rounded border border-slate-600 bg-slate-900 px-2 text-xs text-slate-200"
+                >
+                  ↓
+                </button>
               </div>
             ))}
           </div>
         )}
-        <DashboardBertFlowStrip variant="onDark" />
       </section>
-      {(hasImmediateAttention || hasTodaysWork) && (
-        <div className="grid gap-3 lg:grid-cols-2">
-          {hasImmediateAttention && (
-            <div className="lg:h-[21rem] [&>section]:h-full [&>section]:overflow-y-auto">
-              {renderSection("immediateAttention")}
-            </div>
-          )}
-          {hasTodaysWork && (
-            <div className="lg:h-[21rem] [&>section]:h-full [&>section]:overflow-y-auto">
-              {renderSection("todaysWork")}
-            </div>
-          )}
-        </div>
-      )}
+      {hasOperationalOverview && <div>{renderSection("immediateAttention")}</div>}
       {remainingSections.map((section) => renderSection(section))}
     </div>
   );

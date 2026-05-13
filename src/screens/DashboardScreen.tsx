@@ -242,7 +242,7 @@ export function DashboardScreen({
 
   const dashboardSectionDisplayNames: Record<DashboardSectionKey, string> = {
     trafficBoard: "Needs attention",
-    upcomingAudits: "Today",
+    upcomingAudits: "Due today",
     openActions: "Open work",
     liveSummary: "Ready to report",
     complianceSnapshot: "Workspace health",
@@ -277,7 +277,7 @@ export function DashboardScreen({
     if (section === "upcomingAudits") {
       return (
         <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="clipboard" eyebrow="Today" title="Upcoming audits" subtitle="What to plan or open next from your assigned work." />
+          <SectionHeader icon="clipboard" eyebrow="Due today" title="Upcoming audits" subtitle="What to plan or open next from your assigned work." />
           <div className="mt-2 space-y-2">
             {assignedAudits.slice(0, 4).map((audit) => (
               <button key={audit.id} onClick={() => onOpenAudit(audit.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left transition hover:bg-white">
@@ -327,7 +327,7 @@ export function DashboardScreen({
       <section className="rounded-[1.4rem] bg-slate-950 p-3.5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Home</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Dashboard</p>
             <h2 className="mt-1 text-xl font-semibold tracking-tight">{workspaceName}</h2>
             <p className="mt-1 max-w-sm text-xs leading-5 text-slate-300">Needs attention, today, open work, and reporting signals in one place.</p>
             <DashboardBertFlowStrip variant="onDark" />

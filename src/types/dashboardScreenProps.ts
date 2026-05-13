@@ -4,7 +4,7 @@
  */
 
 import type { Role } from "../permissions";
-import type { ActionItem, Audit, AuditStatus } from "./reportsScreenProps";
+import type { ActionItem, Audit, AuditStatus, HistoryEntry } from "./reportsScreenProps";
 
 export type ThemeMode = "light" | "dark";
 export type Answer = "pass" | "nc" | "fail";
@@ -92,12 +92,23 @@ export type AuditorTaskDashboardProps = {
 };
 
 export type ManagerDashboardProps = {
+  currentUser: User;
   groupedAudits: Record<AuditStatus, Audit[]>;
   assignedAudits: Audit[];
   actions: ActionItem[];
+  history: HistoryEntry[];
+  pendingSyncCount: number;
+  failedSyncCount: number;
+  offlineQueueCount: number;
+  workspaceLinked: boolean;
   onOpenAudit: (auditId: string) => void;
   onAdvanceAction: (actionId: string, nextStatus?: ActionItem["status"]) => void;
   recurringFailedQuestions: [string, number][];
+  onViewAllNeedsAttention: () => void;
+  onViewAllDueToday: () => void;
+  onViewAllAwaitingVerification: () => void;
+  onViewAllRecentCompletions: () => void;
+  onOpenSyncCentre: () => void;
 };
 
 export type AdminDashboardProps = {

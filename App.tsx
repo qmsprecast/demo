@@ -22,8 +22,10 @@ import {
   getRolePermissions,
 } from "./src/permissions";
 import { navItems } from "./src/config/navItems";
+import { isMoreMenuNavId, isPrimaryNavId } from "./src/config/navStructure";
 import { storageKeys } from "./src/config/storageKeys";
 import { slatePrimaryCtaInteract } from "./src/styles/interactions";
+import { getFirstName, getTimeBasedGreeting, getUserInitials } from "./src/utils/userDisplay";
 import { AuditorTaskDashboard } from "./src/components/dashboard/AuditorTaskDashboard";
 import { AdminDashboard } from "./src/components/dashboard/AdminDashboard";
 import { ManagerDashboard } from "./src/components/dashboard/ManagerDashboard";
@@ -2665,6 +2667,8 @@ function App() {
   }
   const storedWorkspaceState = workspaceBootstrapRef.current;
   const [screen, setScreen] = useState<Screen>("dashboard");
+  const [shellMoreExpanded, setShellMoreExpanded] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [dashboardPreferences, setDashboardPreferences] = useState<DashboardPreferences>(() =>
     readStoredDashboardPreferences(),
   );
@@ -3114,6 +3118,36 @@ function App() {
 
     return filtered;
   }, [currentUser, roleNavVisibility, godCompanySetupSession]);
+
+  const primaryNavItems = useMemo(
+    () => visibleNavItems.filter((item) => isPrimaryNavId(item.id)),
+    [visibleNavItems],
+  );
+  const moreNavItems = useMemo(
+    () => visibleNavItems.filter((item) => isMoreMenuNavId(item.id)),
+    [visibleNavItems],
+  );
+  const mobileMoreDestinations = useMemo(
+    () => visibleNavItems.filter((item) => !["dashboard", "audits", "actions", "reports"].includes(item.id)),
+    [visibleNavItems],
+  );
+
+  const mobileBottomNavEntries = useMemo(() => {
+    const entries: Array<{ id: Screen | "__more__"; label: string; icon: string }> = [
+      { id: "dashboard", label: "Dashboard", icon: "dashboard" },
+    ];
+    if (visibleNavItems.some((i) => i.id === "audits")) {
+      entries.push({ id: "audits", label: "Audits", icon: "clipboard" });
+    }
+    if (visibleNavItems.some((i) => i.id === "actions")) {
+      entries.push({ id: "actions", label: "Actions", icon: "warningTriangle" });
+    }
+    if (visibleNavItems.some((i) => i.id === "reports")) {
+      entries.push({ id: "reports", label: "Reports", icon: "chart" });
+    }
+    entries.push({ id: "__more__", label: "More", icon: "grid" });
+    return entries;
+  }, [visibleNavItems]);
   const showSiteSelectorForRole = currentUser ? (roleSiteSelectorVisibility[currentUser.role] ?? true) : true;
 
   const creatableRoles = useMemo(
@@ -7465,24 +7499,33 @@ function App() {
         </header>
 
         <main className="relative z-10 flex min-h-0 flex-1 overflow-hidden">
-          <aside className={["flex shrink-0 flex-col border-r px-3 py-4 backdrop-blur", desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]", themeMode === "dark" ? "border-white/10 bg-slate-950/58 text-slate-200" : "border-slate-200/85 bg-slate-50/82 text-slate-700"].join(" ")}>
-            <nav className="flex-1 space-y-2 overflow-y-auto pr-1">
-              {visibleNavItems.map((item) => {
+          <aside
+            className={[
+              "hidden min-h-0 flex-col border-r border-white/10 bg-gradient-to-b from-[#071525] via-[#0c1f36] to-[#050b14] text-slate-100 md:flex",
+              desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]",
+            ].join(" ")}
+          >
+            <div className={`shrink-0 ${desktopSidebarCollapsed ? "px-2 py-3" : "px-3 py-4"}`}>
+              <BertLogo variant="wordmark" tone="onDark" size="sm" className={desktopSidebarCollapsed ? "scale-90" : ""} />
+            </div>
+            <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pb-2" aria-label="Primary">
+              {primaryNavItems.map((item) => {
                 const selected = screen === item.id || (screen === "complete" && item.id === "audits");
                 return (
                   <button
-                    key={`desktop-${item.id}`}
-                    onClick={() => setScreen(item.id)}
+                    key={`sidebar-${item.id}`}
+                    type="button"
+                    onClick={() => {
+                      setShellMoreExpanded(false);
+                      setMobileMoreOpen(false);
+                      setScreen(item.id);
+                    }}
                     className={[
-                      "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition-colors duration-200 ease-in-out",
+                      "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition",
                       selected
-                        ? themeMode === "dark"
-                          ? "border border-[var(--bert-signal-orange)]/40 bg-[rgba(249,115,22,0.12)] text-[var(--bert-chrome-accent)] hover:bg-[rgba(249,115,22,0.18)]"
-                          : `bg-[var(--bert-signal-orange)] text-[var(--qms-navy-950)] ${slatePrimaryCtaInteract}`
-                        : themeMode === "dark"
-                          ? "text-slate-300 hover:border hover:border-[var(--bert-signal-orange)]/25 hover:bg-slate-800/80"
-                          : "text-slate-700 hover:bg-orange-50 hover:text-slate-900",
-                      desktopSidebarCollapsed ? "justify-center" : "",
+                        ? "bg-[var(--bert-signal-orange)] text-[var(--qms-navy-950)] shadow-[0_8px_20px_rgba(249,115,22,0.25)]"
+                        : "text-slate-200 hover:bg-white/8 hover:text-white",
+                      desktopSidebarCollapsed ? "justify-center px-2" : "",
                     ].join(" ")}
                     title={item.label}
                   >
@@ -7491,19 +7534,108 @@ function App() {
                   </button>
                 );
               })}
+              {moreNavItems.length > 0 ? (
+                <div className="mt-1 border-t border-white/10 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShellMoreExpanded((current) => !current)}
+                    className={[
+                      "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition",
+                      shellMoreExpanded || moreNavItems.some((item) => item.id === screen)
+                        ? "border border-orange-400/40 bg-orange-500/15 text-orange-100"
+                        : "text-slate-300 hover:bg-white/8 hover:text-white",
+                      desktopSidebarCollapsed ? "justify-center px-2" : "",
+                    ].join(" ")}
+                    aria-expanded={shellMoreExpanded}
+                  >
+                    <AppIcon name="grid" className="h-4 w-4 shrink-0" />
+                    {!desktopSidebarCollapsed && <span>More</span>}
+                  </button>
+                  {shellMoreExpanded && (
+                    <div className="mt-1 space-y-1 pl-1">
+                      {moreNavItems.map((item) => {
+                        const selected = screen === item.id;
+                        return (
+                          <button
+                            key={`sidebar-more-${item.id}`}
+                            type="button"
+                            onClick={() => {
+                              setScreen(item.id);
+                              setShellMoreExpanded(false);
+                              setMobileMoreOpen(false);
+                            }}
+                            className={[
+                              "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold transition",
+                              selected ? "bg-sky-500/20 text-sky-100" : "text-slate-400 hover:bg-white/6 hover:text-slate-100",
+                            ].join(" ")}
+                          >
+                            <AppIcon name={item.icon} className="h-3.5 w-3.5 shrink-0 opacity-90" />
+                            <span className="truncate">{item.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </nav>
-            <div className="mt-auto pt-2">
+            <div className="mt-auto shrink-0 space-y-2 border-t border-white/10 px-2 py-3">
               <button
+                type="button"
+                onClick={() => {
+                  setScreen("account");
+                  setShellMoreExpanded(false);
+                  setMobileMoreOpen(false);
+                }}
+                className={[
+                  "flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition hover:bg-white/8",
+                  desktopSidebarCollapsed ? "justify-center" : "",
+                ].join(" ")}
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold text-white ring-1 ring-white/20">
+                  {getUserInitials(currentUser.name, currentUser.username)}
+                </span>
+                {!desktopSidebarCollapsed && (
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-white">{currentUser.name}</span>
+                    <span className="block truncate text-xs text-slate-400">{getRoleDisplayName(currentUser.role)}</span>
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => setDesktopSidebarCollapsed((current) => !current)}
-                className={["flex w-full items-center justify-center rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition", desktopSidebarCollapsed ? "border-[var(--bert-signal-orange)]/50 bg-[rgba(249,115,22,0.12)] text-[var(--bert-chrome-accent)] hover:bg-[rgba(249,115,22,0.18)]" : "border-[var(--bert-signal-orange)]/45 bg-slate-700 text-white hover:bg-slate-600"].join(" ")}
+                className="flex w-full items-center justify-center rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
                 aria-label={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
                 title={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
               >
-                <span>{desktopSidebarCollapsed ? ">>" : "<<"}</span>
+                <span>{desktopSidebarCollapsed ? "»" : "«"}</span>
               </button>
             </div>
           </aside>
-          <div className={["qms-screen-stage h-full min-w-0 flex-1 overflow-y-auto px-4 pb-10 pt-4", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_input:focus]:border-[var(--bert-signal-orange)] [&_section_input:focus]:bg-slate-950 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_section_textarea:focus]:border-[var(--bert-signal-orange)] [&_section_select]:border-slate-700 [&_section_select]:bg-slate-950 [&_section_select]:text-slate-100 [&_section_select:focus]:border-[var(--bert-signal-orange)] [&_section_select:focus]:bg-slate-950 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800 [&_.bg-white]:bg-slate-900 [&_.text-slate-900]:text-slate-100 [&_.text-slate-800]:text-slate-200 [&_.text-slate-700]:text-slate-300 [&_.text-slate-600]:text-slate-400 [&_.text-slate-500]:text-slate-400 [&_input[type=file]]:border-[rgba(249,115,22,0.45)] [&_input[type=file]]:bg-slate-950 [&_input[type=file]]:text-slate-300 [&_input[type=file]]:file:text-slate-200" : "bg-slate-100/72"].join(" ")}>
+          <div
+            className={[
+              "qms-screen-stage h-full min-w-0 flex-1 overflow-y-auto px-4 pb-24 pt-4 md:pb-10", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_input:focus]:border-[var(--bert-signal-orange)] [&_section_input:focus]:bg-slate-950 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_section_textarea:focus]:border-[var(--bert-signal-orange)] [&_section_select]:border-slate-700 [&_section_select]:bg-slate-950 [&_section_select]:text-slate-100 [&_section_select:focus]:border-[var(--bert-signal-orange)] [&_section_select:focus]:bg-slate-950 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800 [&_.bg-white]:bg-slate-900 [&_.text-slate-900]:text-slate-100 [&_.text-slate-800]:text-slate-200 [&_.text-slate-700]:text-slate-300 [&_.text-slate-600]:text-slate-400 [&_.text-slate-500]:text-slate-400 [&_input[type=file]]:border-[rgba(249,115,22,0.45)] [&_input[type=file]]:bg-slate-950 [&_input[type=file]]:text-slate-300 [&_input[type=file]]:file:text-slate-200" : "bg-slate-100/72"            ].join(" ")}>
+            {screen === "dashboard" && !godCompanySetupOnlyShell && (
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h1 className="text-xl font-semibold tracking-tight text-slate-900 md:text-2xl dark:text-slate-100">
+                    {getTimeBasedGreeting()}, {getFirstName(currentUserAppName, currentUser.username)}
+                  </h1>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{"Here's what needs attention today."}</p>
+                </div>
+                <button
+                  type="button"
+                  className="shrink-0 rounded-full border border-slate-200 bg-white p-2 text-slate-600 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                  aria-label="Notifications"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                    <path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 14h18c0-7-3-7-3-14" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
+            )}
             {currentUser.role === "Manager" && currentManagerAlerts.length > 0 && (
               <section className="mb-4 rounded-[1.5rem] border border-rose-200 bg-rose-50 px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
@@ -7608,12 +7740,35 @@ function App() {
                 )}
                 renderManagerDashboard={() => (
                   <ManagerDashboard
+                    currentUser={currentUser}
                     groupedAudits={groupedAudits}
                     assignedAudits={assignedAudits}
                     actions={visibleActions}
+                    history={assignmentFilteredHistory}
+                    pendingSyncCount={pendingSyncCount}
+                    failedSyncCount={failedSyncCount}
+                    offlineQueueCount={offlineQueue.length}
+                    workspaceLinked={Boolean(selectedFolder)}
                     onOpenAudit={startAudit}
                     onAdvanceAction={updateActionStatus}
                     recurringFailedQuestions={recurringFailedQuestions}
+                    onViewAllNeedsAttention={() => {
+                      setActionFilter("Overdue");
+                      setScreen("actions");
+                    }}
+                    onViewAllDueToday={() => {
+                      setScreen("audits");
+                    }}
+                    onViewAllAwaitingVerification={() => {
+                      setActionFilter("Awaiting Verification");
+                      setScreen("actions");
+                    }}
+                    onViewAllRecentCompletions={() => {
+                      setScreen("reports");
+                    }}
+                    onOpenSyncCentre={() => {
+                      setScreen("sync");
+                    }}
                   />
                 )}
                 renderAdminDashboard={() => (
@@ -8171,6 +8326,87 @@ function App() {
             )}
           </div>
         </main>
+
+        {!godCompanySetupOnlyShell && (
+          <>
+            {mobileMoreOpen ? (
+              <div
+                className="absolute inset-0 z-40 flex items-end justify-center bg-slate-950/50 p-3 md:hidden"
+                onClick={() => setMobileMoreOpen(false)}
+                role="presentation"
+              >
+                <div
+                  className="mb-14 w-full max-w-md rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl"
+                  onClick={(event) => event.stopPropagation()}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="More navigation"
+                >
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">More</p>
+                  <div className="grid max-h-[46vh] gap-2 overflow-y-auto">
+                    {mobileMoreDestinations.map((item) => (
+                      <button
+                        key={`mobile-more-${item.id}`}
+                        type="button"
+                        onClick={() => {
+                          setScreen(item.id);
+                          setMobileMoreOpen(false);
+                        }}
+                        className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5 text-left text-sm font-semibold text-slate-800"
+                      >
+                        <AppIcon name={item.icon} className="h-4 w-4 shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            <nav
+              className="absolute bottom-0 left-0 right-0 z-30 flex border-t border-slate-200/90 bg-white/95 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur md:hidden"
+              aria-label="Primary navigation"
+            >
+              {mobileBottomNavEntries.map((entry) => {
+                if (entry.id === "__more__") {
+                  const moreActive =
+                    mobileMoreOpen || mobileMoreDestinations.some((item) => item.id === screen);
+                  return (
+                    <button
+                      key="mobile-nav-more"
+                      type="button"
+                      onClick={() => setMobileMoreOpen((current) => !current)}
+                      className={[
+                        "flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-semibold",
+                        moreActive ? "text-[var(--bert-signal-orange)]" : "text-slate-500",
+                      ].join(" ")}
+                    >
+                      <AppIcon name="grid" className="h-5 w-5" />
+                      More
+                    </button>
+                  );
+                }
+                const selected = screen === entry.id || (screen === "complete" && entry.id === "audits");
+                return (
+                  <button
+                    key={`mobile-nav-${entry.id}`}
+                    type="button"
+                    onClick={() => {
+                      setMobileMoreOpen(false);
+                      setScreen(entry.id as Screen);
+                    }}
+                    className={[
+                      "flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-semibold",
+                      selected ? "text-[var(--bert-signal-orange)]" : "text-slate-500",
+                    ].join(" ")}
+                  >
+                    <AppIcon name={entry.icon} className="h-5 w-5" />
+                    {entry.label}
+                  </button>
+                );
+              })}
+            </nav>
+          </>
+        )}
 
         </div>
       </div>

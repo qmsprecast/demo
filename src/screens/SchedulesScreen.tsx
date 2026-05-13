@@ -224,7 +224,7 @@ export function SchedulesScreen({
               <SchedulesScreenIcon name="clock" className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Schedule control</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Schedules</p>
               <h2 className="mt-2 text-2xl font-semibold tracking-tight">Live schedules</h2>
               <p className="mt-2 text-sm leading-6 text-slate-300">
                 Create, edit, archive, and reactivate company audit schedules for {selectedFolder?.name || "the live workspace"}.
