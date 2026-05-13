@@ -37,7 +37,7 @@ export function AdminDashboard({
 
   const adminLayoutSectionLabels: Record<string, string> = {
     immediateAttention: "Needs attention",
-    todaysWork: "Today",
+    todaysWork: "Due today",
     systemOverview: "Workspace health",
   };
 
