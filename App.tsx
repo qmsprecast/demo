@@ -587,7 +587,7 @@ type AuditCompletionSummaryState = {
   syncLabel: string;
 };
 
-const companyName = (import.meta.env.VITE_APP_NAME || "BERT").trim();
+const companyName = (import.meta.env.VITE_APP_NAME || "bert.").trim();
 const PRODUCT_TAGLINE = "Business. Evaluate. Report. Tool.";
 const PRODUCT_BRAND_FULL = `${companyName} — ${PRODUCT_TAGLINE}`;
 function isDemoRoleSwitchEnabled() {
@@ -609,15 +609,25 @@ const ACTION_DUE_DAYS_BY_SEVERITY: Record<RiskLevel, number> = {
   Low: 14,
 };
 
+/** When true, static demo login users and related UI are included (dev or `VITE_ENABLE_DEMO_LOGIN=true`). */
+const isDemoLoginEnabled = import.meta.env.DEV === true || import.meta.env.VITE_ENABLE_DEMO_LOGIN === "true";
 const GOD_MODE_USERNAME = (import.meta.env.VITE_GODMODE_USERNAME || "master").trim().toLowerCase();
-const GOD_MODE_PASSWORD = import.meta.env.VITE_GODMODE_PASSWORD || "demo";
 
-const users: User[] = [
-  { username: GOD_MODE_USERNAME, password: GOD_MODE_PASSWORD, role: "Master", name: "System Setup" },
-  { username: "admin", password: "demo", role: "Admin", name: "Audit Control" },
-  { username: "manager", password: "demo", role: "Manager", name: "James Preston" },
-  { username: "tom", password: "demo", role: "Auditor", name: "Tom Hughes" },
-];
+const users: User[] = isDemoLoginEnabled
+  ? [
+      {
+        username: GOD_MODE_USERNAME,
+        password:
+          String(import.meta.env.VITE_GODMODE_PASSWORD || "").trim() ||
+          (import.meta.env.DEV === true ? "demo" : ""),
+        role: "Master",
+        name: "System Setup",
+      },
+      { username: "admin", password: "demo", role: "Admin", name: "Audit Control" },
+      { username: "manager", password: "demo", role: "Manager", name: "James Preston" },
+      { username: "tom", password: "demo", role: "Auditor", name: "Tom Hughes" },
+    ]
+  : [];
 
 const DEFAULT_MANAGER_NAME = users.find((user) => user.role === "Manager")?.name || "Unassigned";
 const DEFAULT_AUDITOR_NAME = users.find((user) => user.role === "Auditor")?.name || "Unassigned";
@@ -3199,7 +3209,7 @@ function App() {
       password:
         companyAuthPasswords[normalizeIdentity(invite.email)] ||
         onboardingPasswordByEmail.get(normalizeIdentity(invite.email)) ||
-        "demo",
+        (import.meta.env.DEV === true || import.meta.env.VITE_ENABLE_DEMO_LOGIN === "true" ? "demo" : ""),
       role: invite.role,
       name: invite.email,
     }));
@@ -4525,9 +4535,13 @@ function App() {
 
   const createRoleFallbackUser = (role: Role): User => {
     const suffix = role.toLowerCase();
+    const previewPassword =
+      import.meta.env.DEV === true || import.meta.env.VITE_ENABLE_DEMO_LOGIN === "true"
+        ? "demo"
+        : `preview-${typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : String(Date.now())}`;
     return {
       username: `quick-${suffix}`,
-      password: "demo",
+      password: previewPassword,
       role,
       name:
         role === "Master"
@@ -7101,8 +7115,16 @@ function App() {
                         are available from here.
                       </p>
                       <p className="mt-2 text-center text-[11px] text-slate-400 sm:text-xs">
-                        Username: <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span> — use the password configured for
-                        Master (default <span className="font-semibold text-white">demo</span> unless changed in environment).
+                        Username: <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span>
+                        {isDemoLoginEnabled ? (
+                          <>
+                            {" "}
+                            — use the password configured for Master (default{" "}
+                            <span className="font-semibold text-white">demo</span> unless changed in environment).
+                          </>
+                        ) : (
+                          <> — use the password configured for the Master account in your environment.</>
+                        )}
                       </p>
                       <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
                         <div>
@@ -7242,15 +7264,25 @@ function App() {
                     size="lg"
                     className="w-full"
                   />
-                  <p className="text-xs font-medium text-slate-500 sm:text-sm sm:text-slate-400">Secure • Reliable • Compliant</p>
+                  <p className="text-xs font-medium text-slate-500 sm:text-sm sm:text-slate-400">{PRODUCT_TAGLINE}</p>
                 </div>
 
                 <div className="flex min-h-0 items-center">
                   <div className="w-full rounded-2xl border border-white/10 bg-white/[0.06] p-3 shadow-[0_16px_40px_rgba(2,6,23,0.4)] backdrop-blur-xl sm:rounded-[1.5rem] sm:p-4">
                     <h2 className="text-center text-base font-semibold text-white sm:text-lg">Sign in to your account</h2>
-                    <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs text-slate-300 sm:text-sm">
-                      Demo accounts: <span className="font-semibold text-white">admin</span>, <span className="font-semibold text-white">manager</span>, <span className="font-semibold text-white">tom</span>, <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span> (password: <span className="font-semibold text-white">demo</span> unless overridden).
-                    </p>
+                    {isDemoLoginEnabled ? (
+                      <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs text-slate-300 sm:text-sm">
+                        Demo accounts: <span className="font-semibold text-white">admin</span>,{" "}
+                        <span className="font-semibold text-white">manager</span>,{" "}
+                        <span className="font-semibold text-white">tom</span>,{" "}
+                        <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span> (password:{" "}
+                        <span className="font-semibold text-white">demo</span> unless overridden).
+                      </p>
+                    ) : (
+                      <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs text-slate-300 sm:text-sm">
+                        Sign in with the email and password issued by your administrator.
+                      </p>
+                    )}
                     <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Username or email</label>

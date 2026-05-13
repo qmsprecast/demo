@@ -1,5 +1,5 @@
-const CACHE_NAME = "qms-precast-v2";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/qms-icon.svg", "/qms-maskable-icon.svg"];
+const CACHE_NAME = "bert-v1";
+const APP_SHELL = ["/", "/manifest.webmanifest", "/bert-icon.svg", "/bert-maskable-icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
