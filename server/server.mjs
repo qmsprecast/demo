@@ -10,6 +10,11 @@ import nodemailer from "nodemailer";
 dotenv.config();
 
 const app = express();
+app.disable("x-powered-by");
+/** Paid pilot / production: trust first reverse-proxy hop for accurate req.ip (rate limits, logs). */
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
 const port = Number(process.env.PORT || 8787);
 const rootDir = process.cwd();
 const sessionDir = path.join(rootDir, ".sessions");
@@ -43,6 +48,8 @@ const ONBOARDING_INVITE_TTL_MS = Math.max(
   Number(process.env.ONBOARDING_INVITE_TTL_MS || String(7 * 24 * 60 * 60 * 1000)),
 );
 const INVITE_STORE_PATH = path.join(sessionDir, "app-onboarding-invites.json");
+/** Pilot visibility only: `demo` = current client-side password auth. See docs/security-hardening-plan.md */
+const APP_AUTH_MODE = String(process.env.APP_AUTH_MODE || "demo").trim().toLowerCase();
 
 const scopes = [
   "openid",
@@ -474,8 +481,90 @@ if (!fs.existsSync(sessionDir)) {
   fs.mkdirSync(sessionDir, { recursive: true });
 }
 
-app.use(express.json());
+function securityHeadersMiddleware(req, res, next) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.removeHeader("X-Powered-By");
+  if (process.env.NODE_ENV === "production") {
+    const xfProto = String(req.headers["x-forwarded-proto"] || "")
+      .split(",")[0]
+      .trim()
+      .toLowerCase();
+    if (xfProto === "https") {
+      res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+    }
+  }
+  next();
+}
+
+function httpRequestLogMiddleware(req, res, next) {
+  const started = Date.now();
+  res.on("finish", () => {
+    const path = req.originalUrl || req.url || "";
+    if (path.includes("/favicon")) {
+      return;
+    }
+    console.log(`[http] ${req.method} ${path.split("?")[0]} ${res.statusCode} ${Date.now() - started}ms`);
+  });
+  next();
+}
+
+/** Simple in-memory fixed-window rate limiter (no extra deps). Not distributed across instances. */
+function createWindowRateLimiter({ windowMs, max, name }) {
+  const buckets = new Map();
+  return function windowRateLimitMiddleware(req, res, next) {
+    const ip = req.ip || req.socket?.remoteAddress || "unknown";
+    const key = `${name}:${ip}`;
+    const now = Date.now();
+    let b = buckets.get(key);
+    if (!b || b.resetAt <= now) {
+      b = { count: 0, resetAt: now + windowMs };
+      buckets.set(key, b);
+    }
+    b.count += 1;
+    if (b.count > max) {
+      res.setHeader("Retry-After", String(Math.ceil((b.resetAt - now) / 1000)));
+      return res.status(429).json({ ok: false, error: "Too many requests; try again shortly." });
+    }
+    next();
+  };
+}
+
+const isProdRuntime = () => process.env.NODE_ENV === "production";
+const sensitivePostRateLimit = createWindowRateLimiter({
+  name: "sensitive-post",
+  windowMs: 60_000,
+  max: isProdRuntime() ? 45 : 200,
+});
+const smtpStatusGetRateLimit = createWindowRateLimiter({
+  name: "smtp-status-get",
+  windowMs: 60_000,
+  max: isProdRuntime() ? 30 : 120,
+});
+
+function sensitiveAbusePostRateLimit(req, res, next) {
+  if (req.method !== "POST") {
+    return next();
+  }
+  const p = req.path || req.url || "";
+  if (
+    p.startsWith("/api/onboarding") ||
+    p === "/api/manager/non-compliance-alert" ||
+    p === "/api/ncr/escalation-alert" ||
+    p === "/api/incidents/notify"
+  ) {
+    return sensitivePostRateLimit(req, res, next);
+  }
+  return next();
+}
+
+app.use(securityHeadersMiddleware);
+app.use(express.json({ limit: "512kb" }));
 app.use(cookieParser(requiredEnv.SESSION_SECRET));
+app.use(httpRequestLogMiddleware);
+app.use(sensitiveAbusePostRateLimit);
 
 function createOAuthClient() {
   return new google.auth.OAuth2(
@@ -755,6 +844,17 @@ function getAuthedClient() {
   const auth = createOAuthClient();
   auth.setCredentials(session.tokens);
   return auth;
+}
+
+/**
+ * Pilot: require stored Google OAuth on the API host (Drive/Sheets service identity).
+ * Not end-user SSO. Use only where the SPA already expects Google (see docs/security-hardening-plan.md).
+ */
+function requireGoogleSession(req, res, next) {
+  if (!getAuthedClient()) {
+    return res.status(401).json({ ok: false, error: "Google connection required for this action." });
+  }
+  next();
 }
 
 function safeLower(value) {
@@ -3286,6 +3386,13 @@ app.post("/api/google-sheet-by-id/:sheetId/repair", async (req, res) => {
   }
 });
 
+/**
+ * API route protection (paid pilot) — classification:
+ * - publicSafe: GET /api/health, GET /api/readiness, OAuth browser callbacks
+ * - inviteToken: app-hosted invite fetch/complete; new-company POST (may run before API Google is connected)
+ * - googleSession: requireGoogleSession on company-user invite POST (SPA already requires Google)
+ * - deferredAuth: legacy onboarding + notification POSTs — same-origin trust today; rate-limited (see docs/security-hardening-plan.md)
+ */
 app.post("/api/onboarding/invite", async (req, res) => {
   const toEmail = String(req.body?.email || "").trim().toLowerCase();
   const inviteRole = String(req.body?.role || "").trim();
@@ -3421,7 +3528,7 @@ app.post("/api/onboarding/app-invites/new-company", (req, res) => {
   });
 });
 
-app.post("/api/onboarding/app-invites/company-user", (req, res) => {
+app.post("/api/onboarding/app-invites/company-user", requireGoogleSession, (req, res) => {
   const run = async () => {
     const toEmail = String(req.body?.email || "").trim().toLowerCase();
     const inviteRole = String(req.body?.role || "").trim();
@@ -3803,7 +3910,7 @@ app.post("/api/onboarding/app-invites/:tokenId/complete", async (req, res) => {
   }
 });
 
-app.get("/api/invites/smtp/status", async (_req, res) => {
+app.get("/api/invites/smtp/status", smtpStatusGetRateLimit, async (_req, res) => {
   const config = smtpConfigSummary();
   const diagnostics = smtpCredentialDiagnostics();
   const verification = await verifySmtpTransport();
@@ -4055,6 +4162,14 @@ const httpServer = app.listen(port, "0.0.0.0", () => {
     `[api] listening on http://127.0.0.1:${port} (NODE_ENV=${nodeEnvLabel()}, googleEnvConfigured=${envConfigured()}, sessionStoreWritable=${sessionStoreWritable()})`,
   );
   console.log(`[api] PORT env: ${process.env.PORT || "(unset, using 8787)"}`);
+  if (
+    isProductionRuntime() &&
+    (!process.env.APP_AUTH_MODE || APP_AUTH_MODE === "demo" || APP_AUTH_MODE === "local")
+  ) {
+    console.warn(
+      "[api][security] APP_AUTH_MODE is unset, demo, or local — SPA auth remains client-side (localStorage). OK only inside a trusted pilot boundary. Public self-serve needs provider/server app auth; see docs/security-hardening-plan.md.",
+    );
+  }
   console.log("[smtp] startup", smtpStartupLogPayload());
   void verifySmtpTransport().then((result) => {
     if (isProductionRuntime()) {

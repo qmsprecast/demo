@@ -3,6 +3,25 @@ import { defineConfig, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+/**
+ * Vite calls `os.networkInterfaces()` when `server.host` is `true` (to print LAN URLs). That
+ * throws in some environments (`uv_interface_addresses` / system error 1), so the dev server
+ * never starts → ERR_CONNECTION_REFUSED in the browser.
+ *
+ * - Default: bind loopback only (`127.0.0.1`) — no interface scan, stable on locked-down hosts.
+ * - LAN / all interfaces: `VITE_DEV_HOST=all` (or `lan`, `0.0.0.0`) → same as former `host: true`.
+ */
+function viteDevHost(): boolean | string {
+  const raw = String(process.env.VITE_DEV_HOST || "").trim().toLowerCase();
+  if (raw === "all" || raw === "lan" || raw === "0.0.0.0" || raw === "true") {
+    return true;
+  }
+  if (raw && raw !== "false") {
+    return raw;
+  }
+  return "127.0.0.1";
+}
+
 /** Vite's default proxy error responds with HTTP 500 and an empty body, which breaks JSON clients. */
 const backendProxy: ProxyOptions = {
   target: "http://127.0.0.1:8787",
@@ -28,8 +47,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     allowedHosts: true,
-    // Bind on all interfaces so http://127.0.0.1:5173 and http://localhost:5173 work reliably.
-    host: true,
+    host: viteDevHost(),
     port: 5173,
     strictPort: false,
     proxy: {
