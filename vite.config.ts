@@ -8,7 +8,10 @@ import tailwindcss from "@tailwindcss/vite";
  * throws in some environments (`uv_interface_addresses` / system error 1), so the dev server
  * never starts → ERR_CONNECTION_REFUSED in the browser.
  *
- * - Default: bind loopback only (`127.0.0.1`) — no interface scan, stable on locked-down hosts.
+ * - Default: `localhost` — no LAN interface scan (unlike `host: true`), but accepts both
+ *   `http://localhost:5173` and `http://127.0.0.1:5173` (binding only `127.0.0.1` breaks the former
+ *   when `localhost` resolves to `::1` first).
+ * - IPv4-only loopback: `VITE_DEV_HOST=127.0.0.1`.
  * - LAN / all interfaces: `VITE_DEV_HOST=all` (or `lan`, `0.0.0.0`) → same as former `host: true`.
  */
 function viteDevHost(): boolean | string {
@@ -19,7 +22,7 @@ function viteDevHost(): boolean | string {
   if (raw && raw !== "false") {
     return raw;
   }
-  return "127.0.0.1";
+  return "localhost";
 }
 
 /** Vite's default proxy error responds with HTTP 500 and an empty body, which breaks JSON clients. */
