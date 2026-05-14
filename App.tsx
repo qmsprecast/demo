@@ -3613,7 +3613,8 @@ function App() {
       }).format(new Date()),
     [screen, offlineMode, currentUser?.role],
   );
-  const shellPreviewClass = previewOrientation === "landscape" ? "qms-force-landscape" : "";
+  const shellPreviewClass =
+    isDebugUiAllowed() && previewOrientation === "landscape" ? "qms-force-landscape" : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -7354,13 +7355,21 @@ function App() {
         : "border-slate-200/85 bg-white/90 shadow-[0_28px_80px_rgba(15,23,42,0.14)] text-slate-900",
     ].join(" ");
 
+    const wrapSignInTabletChrome = (node: React.ReactNode) =>
+      isDebugUiAllowed() ? (
+        <div className="qms-tablet-stage">
+          <div className="qms-tablet-device qms-tablet-device--signin">{node}</div>
+        </div>
+      ) : (
+        node
+      );
+
     if (companySetupLoginPortal) {
       return (
         <div className={signInOuterClass}>
           <style>{appMotionStyles}</style>
-          <div className="qms-tablet-stage">
-            <div className="qms-tablet-device qms-tablet-device--signin">
-              <div data-qms-theme={themeMode} className={signInShellClass}>
+          {wrapSignInTabletChrome(
+            <div data-qms-theme={themeMode} className={signInShellClass}>
                 <DataFlowBackground />
                 <div className="relative z-10 grid h-full min-h-0 w-full grid-cols-1 items-center gap-3 sm:grid-cols-2 sm:gap-4">
                   <div className="flex flex-col justify-center gap-3 px-1 py-0 sm:px-2">
@@ -7483,8 +7492,7 @@ function App() {
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
+          )}
           <ToastStack toasts={toasts} />
         </div>
       );
@@ -7493,8 +7501,7 @@ function App() {
     return (
       <div className={signInOuterClass}>
         <style>{appMotionStyles}</style>
-        <div className="qms-tablet-stage">
-          <div className="qms-tablet-device qms-tablet-device--signin">
+        {wrapSignInTabletChrome(
             <div
               data-qms-theme={themeMode}
               className={signInShellClass}
@@ -7658,35 +7665,49 @@ function App() {
                 </div>
               </div>
             </div>
-          </div>
+          )}
           <ToastStack toasts={toasts} />
         </div>
-      </div>
     );
   }
 
-  return (
-    <div
-      className={[
-        shellPreviewClass,
-        "h-[100dvh] overflow-hidden px-2 py-2 sm:px-3 sm:py-3",
-        themeMode === "dark"
-          ? `${qmsDarkShellGradient} text-slate-100`
-          : `${qmsLightShellGradient} text-slate-900`,
-        ].join(" ")}
-    >
-      <style>{appMotionStyles}</style>
+  const tabletDebugUi = isDebugUiAllowed();
+  const wrapLoggedInTabletChrome = (node: React.ReactNode) =>
+    tabletDebugUi ? (
       <div className="qms-tablet-stage">
-        <div className="qms-tablet-device">
-          <div
-            data-qms-theme={themeMode}
-            className={[
-              "qms-app-shell relative isolate mx-auto flex h-full w-full flex-col overflow-hidden rounded-[2.25rem] border backdrop-blur",
-              themeMode === "dark"
-                ? "border-white/10 bg-slate-950/72 shadow-[0_28px_90px_rgba(2,6,23,0.55)]"
-                : "border-slate-200/90 bg-white/86 shadow-[0_28px_90px_rgba(15,23,42,0.12)]",
-            ].join(" ")}
-          >
+        <div className="qms-tablet-device">{node}</div>
+      </div>
+    ) : (
+      node
+    );
+
+  const loggedInRootClass = [
+    shellPreviewClass,
+    tabletDebugUi
+      ? "h-[100dvh] overflow-hidden px-2 py-2 sm:px-3 sm:py-3"
+      : "flex min-h-[100dvh] h-[100dvh] w-full max-w-[100vw] flex-col overflow-hidden",
+    themeMode === "dark" ? `${qmsDarkShellGradient} text-slate-100` : `${qmsLightShellGradient} text-slate-900`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const appShellSurfaceClass = [
+    "qms-app-shell relative isolate flex w-full flex-col overflow-hidden border backdrop-blur",
+    tabletDebugUi ? "mx-auto h-full rounded-[2.25rem]" : "mx-0 min-h-0 flex-1 rounded-none",
+    themeMode === "dark"
+      ? tabletDebugUi
+        ? "border-white/10 bg-slate-950/72 shadow-[0_28px_90px_rgba(2,6,23,0.55)]"
+        : "border-white/10 bg-slate-950/80"
+      : tabletDebugUi
+        ? "border-slate-200/90 bg-white/86 shadow-[0_28px_90px_rgba(15,23,42,0.12)]"
+        : "border-slate-200/90 bg-white/95",
+  ].join(" ");
+
+  return (
+    <div className={loggedInRootClass}>
+      <style>{appMotionStyles}</style>
+      {wrapLoggedInTabletChrome(
+          <div data-qms-theme={themeMode} className={appShellSurfaceClass}>
         <DataFlowBackground className="z-20 opacity-10" showBase={false} />
         <header className={["qms-app-header relative z-10 border-b px-3 pb-1 pt-1 backdrop-blur", themeMode === "dark" ? "border-white/10 bg-slate-950/58" : "border-slate-200/80 bg-white/72"].join(" ")}>
           <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[9px] font-semibold uppercase tracking-[0.16em]">
@@ -8824,8 +8845,7 @@ function App() {
         )}
 
         </div>
-      </div>
-      </div>
+      )}
 
       <ToastStack toasts={toasts} />
     </div>
