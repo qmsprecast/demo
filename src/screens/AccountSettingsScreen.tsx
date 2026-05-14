@@ -12,6 +12,8 @@ export function AccountSettingsScreen({
   onAccountPhotoChange,
   onThemeModeChange,
   onSave,
+  workspaceSetupLimitedShell,
+  onOpenFullAppNavigation,
 }: AccountSettingsScreenProps) {
   const godMode = currentUser.role === "Master";
 
@@ -26,6 +28,22 @@ export function AccountSettingsScreen({
             : "Update your display name, profile photo, and appearance for this device."}
         </p>
       </section>
+
+      {workspaceSetupLimitedShell && onOpenFullAppNavigation ? (
+        <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-sm font-semibold text-slate-900">Workspace setup</p>
+          <p className="mt-1 text-sm text-slate-500">
+            You are in setup-only mode (onboarding only). Open the full app when you need the rest of BERT on this device.
+          </p>
+          <button
+            type="button"
+            onClick={onOpenFullAppNavigation}
+            className={`mt-4 h-12 w-full rounded-2xl border border-slate-300 bg-slate-50 text-sm font-semibold text-slate-900 ${slatePrimaryCtaInteract}`}
+          >
+            Open full BERT navigation
+          </button>
+        </section>
+      ) : null}
 
       {!godMode && (
         <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">

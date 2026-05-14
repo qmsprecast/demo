@@ -10,6 +10,9 @@
  *
  * For APK/release pipelines, run after `npm run build` with the same env as production
  * (omit VITE_ENABLE_DEMO_LOGIN / VITE_SHOW_DEBUG_UI / demo passwords).
+ *
+ * Optional stricter pilot checks on the bundle (loopback API URLs, legacy "Audit App" string):
+ *   BERT_VERIFY_PILOT_DIST=1 npm run verify:auth
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -56,7 +59,10 @@ if (bundlePaths.length === 0) {
 
 const combined = bundlePaths.map((p) => fs.readFileSync(p, "utf8")).join("\n");
 
-/** { name: string, re: RegExp }[] */
+const pilotStrict =
+  String(process.env.BERT_VERIFY_PILOT_DIST || process.env.VERIFY_AUTH_PILOT || "").trim() === "1";
+
+/** @type { { name: string, re: RegExp, pilotOnly?: boolean }[] } */
 const forbiddenInDist = [
   { name: 'literal password: "demo" (or single-quoted)', re: /password\s*:\s*["']demo["']/i },
   {
@@ -67,10 +73,25 @@ const forbiddenInDist = [
     name: "VITE_SHOW_DEBUG_UI compared to true (debug UI path still in bundle)",
     re: /VITE_SHOW_DEBUG_UI\s*===?\s*["']true["']/,
   },
+  {
+    name: "loopback API URL in client bundle (http://localhost or http://127.0.0.1)",
+    re: /http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/api/i,
+    pilotOnly: true,
+  },
+  {
+    name: "legacy template app name \"Audit App\" in client bundle",
+    re: /Audit App/,
+    pilotOnly: true,
+  },
 ];
 
 let failed = false;
-for (const { name, re } of forbiddenInDist) {
+for (const entry of forbiddenInDist) {
+  if (entry.pilotOnly && !pilotStrict) {
+    console.log(`[verify:auth] SKIP (set BERT_VERIFY_PILOT_DIST=1 for pilot bundle): ${entry.name}`);
+    continue;
+  }
+  const { name, re } = entry;
   if (re.test(combined)) {
     console.error(`[verify:auth] FAIL (dist bundle): ${name}`);
     failed = true;
@@ -126,16 +147,19 @@ console.log(`
 4) Logout
    - POST /api/auth/company/logout → 200; subsequent GET /api/auth/company/session → 401.
 
-5) SPA / company sheet read
+5) CORS + cookies (split origin or Capacitor)
+   - See scripts/verify-cors-cookies.md: preflight 204 with reflected ACAO, Set-Cookie SameSite=None; Secure on HTTPS production, logout clears with matching attributes.
+
+6) SPA / company sheet read
    - GET /api/company-sheet/:folderId or /api/google-sheet-by-id/:id with auth as your app does.
    - In JSON, Config rows for UserAuth.* must have empty Value (sanitised for the browser).
 
-6) Migration (optional bulk legacy plaintext → hash)
+7) Migration (optional bulk legacy plaintext → hash)
    - After .sessions/google-session.json exists:
    - npm run migrate:userauth -- <masterSpreadsheetId>
    - Expect stdout JSON with { "ok": true, "migrated": <number> }.
 
-7) Repeat static verify after production-like build
+8) Repeat static verify after production-like build
    - npm run verify:auth
 
 --- End checklist ---

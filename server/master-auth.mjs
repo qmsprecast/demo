@@ -6,6 +6,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { getSessionCookieOptions } from "./session-cookie-options.mjs";
 
 const STORE_FILENAME = "master-operators.json";
 const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
@@ -102,10 +103,10 @@ function findOperator(sessionDir, email) {
 
 /**
  * @param {import('express').Express} app
- * @param {{ sessionDir: string; isProduction: boolean }} opts
+ * @param {{ sessionDir: string }} opts
  */
 export function installMasterAuthRoutes(app, opts) {
-  const { sessionDir, isProduction } = opts;
+  const { sessionDir } = opts;
 
   app.post("/api/auth/master/login", (req, res) => {
     const email = String(req.body?.email || req.body?.username || "")
@@ -120,14 +121,7 @@ export function installMasterAuthRoutes(app, opts) {
       return res.status(401).json({ ok: false, error: "Invalid email or password." });
     }
     const payload = JSON.stringify({ email: op.email, name: op.name, v: 1 });
-    res.cookie(MASTER_SESSION_COOKIE, payload, {
-      signed: true,
-      httpOnly: true,
-      secure: Boolean(isProduction),
-      sameSite: "lax",
-      maxAge: MASTER_SESSION_MS,
-      path: "/",
-    });
+    res.cookie(MASTER_SESSION_COOKIE, payload, getSessionCookieOptions({ maxAge: MASTER_SESSION_MS }));
     return res.json({
       ok: true,
       operator: { email: op.email, name: op.name },
@@ -135,13 +129,7 @@ export function installMasterAuthRoutes(app, opts) {
   });
 
   app.post("/api/auth/master/logout", (req, res) => {
-    res.clearCookie(MASTER_SESSION_COOKIE, {
-      signed: true,
-      httpOnly: true,
-      secure: Boolean(isProduction),
-      sameSite: "lax",
-      path: "/",
-    });
+    res.clearCookie(MASTER_SESSION_COOKIE, getSessionCookieOptions());
     return res.json({ ok: true });
   });
 
@@ -157,13 +145,7 @@ export function installMasterAuthRoutes(app, opts) {
       }
       const op = findOperator(sessionDir, data.email);
       if (!op) {
-        res.clearCookie(MASTER_SESSION_COOKIE, {
-          signed: true,
-          httpOnly: true,
-          secure: Boolean(isProduction),
-          sameSite: "lax",
-          path: "/",
-        });
+        res.clearCookie(MASTER_SESSION_COOKIE, getSessionCookieOptions());
         return res.status(401).json({ ok: false, error: "Operator removed." });
       }
       return res.json({

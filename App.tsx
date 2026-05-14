@@ -24,6 +24,7 @@ import {
 import { navItems } from "./src/config/navItems";
 import { MORE_MENU_NAV_IDS, PRIMARY_NAV_IDS } from "./src/config/navStructure";
 import { storageKeys } from "./src/config/storageKeys";
+import { apiUrl } from "./src/config/apiBase";
 import { slatePrimaryCtaInteract } from "./src/styles/interactions";
 import { getGreetingFirstName, getTimeBasedGreeting, getUserInitials } from "./src/utils/userDisplay";
 import { isDebugUiAllowed } from "./src/utils/debugUiVisibility";
@@ -1122,7 +1123,9 @@ async function parseJsonApiResponse<T = Record<string, unknown>>(response: Respo
   const trimmed = text.trim();
   if (!trimmed) {
     const hint =
-      "Start the API: from the project root run `npm run server` (default port 8787) while using `npm run dev`.";
+      import.meta.env.DEV === true
+        ? "Start the API: from the project root run `npm run server` (default port 8787) while using `npm run dev`."
+        : "The setup server did not return data.";
     throw new Error(`No response body from server (${response.status}). ${hint}`);
   }
   try {
@@ -3567,8 +3570,9 @@ function App() {
     );
 
     if (managerEmails.length > 0) {
-      void fetch("/api/manager/non-compliance-alert", {
+      void fetch(apiUrl("/api/manager/non-compliance-alert"), {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -3620,7 +3624,7 @@ function App() {
     let cancelled = false;
     (async () => {
       try {
-        const mr = await fetch("/api/auth/master/session", { credentials: "include" });
+        const mr = await fetch(apiUrl("/api/auth/master/session"), { credentials: "include" });
         const mp = (await parseJsonApiResponse(mr)) as {
           ok?: boolean;
           operator?: { email: string; name: string };
@@ -3655,7 +3659,7 @@ function App() {
       }
 
       try {
-        const cr = await fetch("/api/auth/company/session", { credentials: "include" });
+        const cr = await fetch(apiUrl("/api/auth/company/session"), { credentials: "include" });
         const cp = (await parseJsonApiResponse(cr)) as {
           ok?: boolean;
           user?: { email: string; role: Role; name: string };
@@ -3901,8 +3905,9 @@ function App() {
   };
 
   const sendIncidentNotification = async (incident: IncidentRecord) => {
-    const response = await fetch("/api/incidents/notify", {
+    const response = await fetch(apiUrl("/api/incidents/notify"), {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         incidentId: incident.incidentId,
@@ -4258,7 +4263,7 @@ function App() {
     }
 
     try {
-      const response = await fetch("/api/google/status");
+      const response = await fetch(apiUrl("/api/google/status"), { credentials: "include" });
       const payload = (await response.json()) as GoogleBackendStatus;
 
       setBackendConfigured(Boolean(payload.configured));
@@ -4297,7 +4302,7 @@ function App() {
     }
 
     try {
-      const response = await fetch("/api/onboarding/submissions");
+      const response = await fetch(apiUrl("/api/onboarding/submissions"), { credentials: "include" });
       const payload = (await response.json()) as OnboardingSubmissionsResponse;
 
       if (!response.ok || !payload.ok) {
@@ -4326,7 +4331,7 @@ function App() {
 
   const loadCompanySheet = async (folderId: string, options?: { silent?: boolean }) => {
     try {
-      const response = await fetch(`/api/company-sheet/${encodeURIComponent(folderId)}`);
+      const response = await fetch(apiUrl(`/api/company-sheet/${encodeURIComponent(folderId)}`), { credentials: "include" });
       const payload = (await response.json()) as CompanySheetPayload;
 
       if (!response.ok || !payload.ok) {
@@ -4396,7 +4401,7 @@ function App() {
     options?: { silent?: boolean },
   ) => {
     try {
-      const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}`);
+      const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}`), { credentials: "include" });
       const payload = (await response.json()) as CompanySheetPayload;
 
       if (!response.ok || !payload.ok) {
@@ -4489,7 +4494,7 @@ function App() {
     }
 
     try {
-      const response = await fetch(`/api/company-folder/${encodeURIComponent(folderId)}`);
+      const response = await fetch(apiUrl(`/api/company-folder/${encodeURIComponent(folderId)}`), { credentials: "include" });
       const payload = (await response.json()) as FolderInspection;
 
       if (!response.ok || !payload.ok) {
@@ -4525,8 +4530,9 @@ function App() {
       setWorkspaceValidationLoading(true);
     }
     try {
-      const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/validate`, {
+      const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/validate`), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           companyFolderId,
@@ -4564,8 +4570,9 @@ function App() {
     }
     setWorkspaceValidationLoading(true);
     try {
-      const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/repair`, {
+      const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/repair`), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           companyFolderId,
@@ -4590,7 +4597,7 @@ function App() {
   };
 
   const loadGoogleFile = async (fileId: string) => {
-    const response = await fetch(`/api/google-file/${encodeURIComponent(fileId)}`);
+    const response = await fetch(apiUrl(`/api/google-file/${encodeURIComponent(fileId)}`), { credentials: "include" });
     const payload = (await response.json()) as GoogleDriveFilePayload;
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || "Unable to load the Google Drive item.");
@@ -4599,7 +4606,7 @@ function App() {
   };
 
   const loadFormsFolder = async (folderId: string) => {
-    const response = await fetch(`/api/google-forms-folder/${encodeURIComponent(folderId)}`);
+    const response = await fetch(apiUrl(`/api/google-forms-folder/${encodeURIComponent(folderId)}`), { credentials: "include" });
     const payload = (await response.json()) as GoogleFormsFolderPayload;
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || "Unable to load the audit forms folder.");
@@ -4622,14 +4629,16 @@ function App() {
     const loginIdentity = username.trim().toLowerCase();
     const pwd = password;
 
-    const applySignedInUser = (match: User) => {
+    const applySignedInUser = (match: User, options?: { workspaceSetupOnly?: boolean }) => {
       if (companySetupLoginPortal && match.role !== "Master") {
         pushToast("Master only", "Company setup sign-in is only for the workspace setup (Master) account.", "warning");
         return;
       }
+      const workspaceSetupShell =
+        match.role === "Master" && (companySetupLoginPortal || options?.workspaceSetupOnly === true);
       try {
         if (match.role === "Master") {
-          if (companySetupLoginPortal) {
+          if (workspaceSetupShell) {
             window.localStorage.setItem(masterCompanySetupSessionKey, "1");
             setGodCompanySetupSession(true);
           } else {
@@ -4661,6 +4670,10 @@ function App() {
       pushToast("Welcome back", `Signed in as ${getRoleDisplayName(match.role)}.`, "success");
     };
 
+    const persistedMasterSheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput) || "";
+    const masterFailureGuidesUx = companySetupLoginPortal || !persistedMasterSheetId;
+    let masterGuidedFailure: null | "auth" | "network" = null;
+
     const tryServerMasterLogin = async (): Promise<boolean> => {
       if (!pwd || !loginIdentity) {
         return false;
@@ -4668,32 +4681,50 @@ function App() {
       if (!loginIdentity.includes("@")) {
         return false;
       }
+      let response: Response;
       try {
-        const response = await fetch("/api/auth/master/login", {
+        response = await fetch(apiUrl("/api/auth/master/login"), {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: loginIdentity, password: pwd }),
         });
-        const data = (await parseJsonApiResponse(response)) as {
-          ok?: boolean;
-          operator?: { email: string; name: string };
-          error?: string;
-        };
-        if (!response.ok || !data.ok || !data.operator) {
-          return false;
-        }
-        const match: User = {
-          username: String(data.operator.email).toLowerCase(),
-          password: "",
-          role: "Master",
-          name: data.operator.name || data.operator.email,
-        };
-        applySignedInUser(match);
-        return true;
       } catch {
+        if (masterFailureGuidesUx) {
+          masterGuidedFailure = "network";
+        }
         return false;
       }
+      let data: { ok?: boolean; operator?: { email: string; name: string }; error?: string };
+      try {
+        const text = (await response.text()).trim();
+        data = text ? (JSON.parse(text) as typeof data) : {};
+      } catch {
+        if (masterFailureGuidesUx) {
+          masterGuidedFailure = "network";
+        }
+        return false;
+      }
+      if (!response.ok || !data.ok || !data.operator) {
+        if (masterFailureGuidesUx) {
+          if (response.status === 401 || response.status === 403) {
+            masterGuidedFailure = "auth";
+          } else if (response.status >= 400 && response.status < 500) {
+            masterGuidedFailure = "auth";
+          } else {
+            masterGuidedFailure = "network";
+          }
+        }
+        return false;
+      }
+      const match: User = {
+        username: String(data.operator.email).toLowerCase(),
+        password: "",
+        role: "Master",
+        name: data.operator.name || data.operator.email,
+      };
+      applySignedInUser(match, { workspaceSetupOnly: true });
+      return true;
     };
 
     const tryServerCompanyLogin = async (): Promise<boolean> => {
@@ -4705,7 +4736,7 @@ function App() {
         return false;
       }
       try {
-        const response = await fetch("/api/auth/company/login", {
+        const response = await fetch(apiUrl("/api/auth/company/login"), {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
@@ -4776,6 +4807,19 @@ function App() {
         applySignedInUser(clientMatch);
         return;
       }
+    }
+
+    if (masterGuidedFailure === "auth") {
+      pushToast("Sign in failed", "Email or password is incorrect.", "warning");
+      return;
+    }
+    if (masterGuidedFailure === "network") {
+      pushToast(
+        "Sign in failed",
+        "BERT cannot reach the setup server. Check your internet connection or contact BERT support.",
+        "warning",
+      );
+      return;
     }
 
     pushToast("Sign in failed", "Please check your username and password.", "warning");
@@ -4874,8 +4918,9 @@ function App() {
       return;
     }
     try {
-      const response = await fetch("/api/onboarding/app-invites/new-company", {
+      const response = await fetch(apiUrl("/api/onboarding/app-invites/new-company"), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: trimmed, invitedBy: currentUser.name }),
       });
@@ -4959,8 +5004,9 @@ function App() {
     let inviteSenderEmail = "";
     let appOnboardingUrl = "";
     try {
-      const response = await fetch("/api/onboarding/app-invites/company-user", {
+      const response = await fetch(apiUrl("/api/onboarding/app-invites/company-user"), {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -5047,8 +5093,9 @@ function App() {
     let inviteSenderEmail = invite.senderEmail || "";
     let appOnboardingUrl = invite.appOnboardingUrl || "";
     try {
-      const response = await fetch("/api/onboarding/app-invites/company-user", {
+      const response = await fetch(apiUrl("/api/onboarding/app-invites/company-user"), {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -5163,8 +5210,9 @@ function App() {
       throw new Error("Company master sheet link is required before saving users.");
     }
 
-    const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/users`, {
+    const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/users`), {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -5186,8 +5234,9 @@ function App() {
       throw new Error("Company master sheet link is required before saving actions.");
     }
 
-    const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/actions`, {
+    const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/actions`), {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -5211,10 +5260,21 @@ function App() {
     setScreen(intent.screen);
   }, []);
 
+  const handleLeaveMasterWorkspaceSetupOnly = () => {
+    try {
+      window.localStorage.removeItem(masterCompanySetupSessionKey);
+    } catch {
+      /* ignore */
+    }
+    setGodCompanySetupSession(false);
+    setScreen(getHomeScreenForRole("Master"));
+    pushToast("Full navigation", "All BERT areas are available on this device until you sign out.", "success");
+  };
+
   const handleLogout = () => {
-    fetch("/auth/google/logout", { method: "POST" }).catch(() => undefined);
-    fetch("/api/auth/master/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
-    fetch("/api/auth/company/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
+    fetch(apiUrl("/auth/google/logout"), { method: "POST", credentials: "include" }).catch(() => undefined);
+    fetch(apiUrl("/api/auth/master/logout"), { method: "POST", credentials: "include" }).catch(() => undefined);
+    fetch(apiUrl("/api/auth/company/logout"), { method: "POST", credentials: "include" }).catch(() => undefined);
     try {
       window.localStorage.removeItem(masterCompanySetupSessionKey);
     } catch {
@@ -5523,8 +5583,9 @@ function App() {
 
     if (createdRecord?.assignedLineManagerEmail) {
       const investigationLink = `${window.location.origin}?ncr=${encodeURIComponent(createdRecord.reference)}`;
-      void fetch("/api/ncr/escalation-alert", {
+      void fetch(apiUrl("/api/ncr/escalation-alert"), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: createdRecord.assignedLineManagerEmail,
@@ -5948,12 +6009,12 @@ function App() {
       return;
     }
 
-    window.location.href = "/auth/google/login";
+    window.location.href = apiUrl("/auth/google/login");
   };
 
   const handleGoogleDisconnect = async () => {
     try {
-      await fetch("/auth/google/logout", { method: "POST", credentials: "same-origin" });
+      await fetch(apiUrl("/auth/google/logout"), { method: "POST", credentials: "include" });
     } catch {
       pushToast("Disconnect issue", "Google sign-out could not be confirmed, but the local link has been cleared.", "warning");
     }
@@ -7240,8 +7301,9 @@ function App() {
       throw new Error("Company master sheet link is required before saving schedules.");
     }
 
-    const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/schedules`, {
+    const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/schedules`), {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -8572,6 +8634,8 @@ function App() {
                 onAccountPhotoChange={handleAccountPhotoChange}
                 onThemeModeChange={setThemeMode}
                 onSave={handleSaveAccountSettings}
+                workspaceSetupLimitedShell={godCompanySetupOnlyShell}
+                onOpenFullAppNavigation={godCompanySetupOnlyShell ? handleLeaveMasterWorkspaceSetupOnly : undefined}
               />
             )}
 

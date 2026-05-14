@@ -20,4 +20,8 @@ export type AccountSettingsScreenProps = {
   onAccountPhotoChange: (file: File) => void;
   onThemeModeChange: (value: ThemeMode) => void;
   onSave: () => void;
+  /** Master is in workspace-setup-only shell (narrow nav). */
+  workspaceSetupLimitedShell?: boolean;
+  /** Leave setup-only shell and show full Master navigation. */
+  onOpenFullAppNavigation?: () => void;
 };

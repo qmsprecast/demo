@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { BertLogo } from "../components/BertLogo";
+import { apiUrl } from "../config/apiBase";
 import type { Role } from "../permissions";
 
 type AppInviteProvisionMeta = {
@@ -42,7 +43,9 @@ export function AppHostedOnboardingCompletion({ inviteToken, parseJsonApiRespons
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}`);
+        const response = await fetch(apiUrl(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}`), {
+          credentials: "include",
+        });
         const payload = (await parseJsonApiResponse(response)) as AppInviteDetails & { ok?: boolean; error?: string };
         if (cancelled) return;
         if (!response.ok || !payload.ok) {
@@ -85,8 +88,9 @@ export function AppHostedOnboardingCompletion({ inviteToken, parseJsonApiRespons
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), completeTimeoutMs);
     try {
-      const response = await fetch(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}/complete`, {
+      const response = await fetch(apiUrl(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}/complete`), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fullName: fullName.trim(),
@@ -111,8 +115,9 @@ export function AppHostedOnboardingCompletion({ inviteToken, parseJsonApiRespons
           await new Promise((resolve) => {
             window.setTimeout(resolve, 2000);
           });
-          const pr = await fetch(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}`, {
+          const pr = await fetch(apiUrl(`/api/onboarding/app-invites/${encodeURIComponent(inviteToken)}`), {
             signal: controller.signal,
+            credentials: "include",
           });
           const pp = (await parseJsonApiResponse(pr)) as AppInviteStatusPayload;
           if (

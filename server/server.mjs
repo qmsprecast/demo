@@ -6,7 +6,9 @@ import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import { google } from "googleapis";
 import nodemailer from "nodemailer";
+import { bertCorsMiddleware } from "./bert-cors.mjs";
 import { hashPassword, installMasterAuthRoutes } from "./master-auth.mjs";
+import { getSessionCookieOptions } from "./session-cookie-options.mjs";
 import { migrateAllPlainUserAuthKeys, verifyUserAuthLoginOrMigrate } from "./userauth-password.mjs";
 
 dotenv.config();
@@ -573,12 +575,10 @@ function sensitiveAbusePostRateLimit(req, res, next) {
 }
 
 app.use(securityHeadersMiddleware);
+app.use(bertCorsMiddleware);
 app.use(express.json({ limit: "512kb" }));
 app.use(cookieParser(requiredEnv.SESSION_SECRET));
-installMasterAuthRoutes(app, {
-  sessionDir,
-  isProduction: process.env.NODE_ENV === "production",
-});
+installMasterAuthRoutes(app, { sessionDir });
 app.use(httpRequestLogMiddleware);
 app.use(sensitiveAbusePostRateLimit);
 
@@ -651,6 +651,13 @@ function evaluateProductionEnvironment() {
     if (!loopbackOk) {
       warnings.push("GOOGLE_REDIRECT_URI uses http:// for a non-loopback host; Google OAuth should use https in production.");
     }
+  }
+
+  const allowedOrigins = String(process.env.BERT_ALLOWED_ORIGINS || "").trim();
+  if (!allowedOrigins) {
+    warnings.push(
+      "BERT_ALLOWED_ORIGINS is unset: credentialed cross-origin browsers (hosted SPA or Capacitor) need an explicit allowlist so CORS can reflect Access-Control-Allow-Origin.",
+    );
   }
 
   return { isProduction: true, blockingIssues, warnings };
@@ -4256,14 +4263,7 @@ app.post("/api/auth/company/login", requireGoogleSession, async (req, res) => {
       role: rec.role,
       name: rec.name,
     });
-    res.cookie(COMPANY_SESSION_COOKIE, payload, {
-      signed: true,
-      httpOnly: true,
-      secure: isProductionRuntime(),
-      sameSite: "lax",
-      maxAge: COMPANY_SESSION_MS,
-      path: "/",
-    });
+    res.cookie(COMPANY_SESSION_COOKIE, payload, getSessionCookieOptions({ maxAge: COMPANY_SESSION_MS }));
     return res.json({
       ok: true,
       user: { email, role: rec.role, name: rec.name },
@@ -4275,13 +4275,7 @@ app.post("/api/auth/company/login", requireGoogleSession, async (req, res) => {
 });
 
 app.post("/api/auth/company/logout", (req, res) => {
-  res.clearCookie(COMPANY_SESSION_COOKIE, {
-    signed: true,
-    httpOnly: true,
-    secure: isProductionRuntime(),
-    sameSite: "lax",
-    path: "/",
-  });
+  res.clearCookie(COMPANY_SESSION_COOKIE, getSessionCookieOptions());
   return res.json({ ok: true });
 });
 
@@ -4303,13 +4297,7 @@ app.get("/api/auth/company/session", requireGoogleSession, async (req, res) => {
     const auth = getAuthedClient();
     const rec = await readCompanyUsersTabRecord(auth, data.masterSheetId, data.email);
     if (!rec) {
-      res.clearCookie(COMPANY_SESSION_COOKIE, {
-        signed: true,
-        httpOnly: true,
-        secure: isProductionRuntime(),
-        sameSite: "lax",
-        path: "/",
-      });
+      res.clearCookie(COMPANY_SESSION_COOKIE, getSessionCookieOptions());
       return res.status(401).json({ ok: false, error: "Session invalid." });
     }
     return res.json({

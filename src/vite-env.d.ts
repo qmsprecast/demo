@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly VITE_SHOW_DEBUG_UI?: string;
   readonly VITE_SHOW_ADMIN_DEBUG_UI?: string;
   readonly VITE_ENABLE_DEMO_LOGIN?: string;
+  /** When set (e.g. https://api.usebert.co.uk), browser and Capacitor builds call that host for `/api` and `/auth` routes. Omit for same-origin. */
+  readonly VITE_API_BASE_URL?: string;
   readonly VITE_GODMODE_USERNAME?: string;
   readonly VITE_GODMODE_PASSWORD?: string;
 }
