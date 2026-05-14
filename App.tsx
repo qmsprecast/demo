@@ -22,7 +22,7 @@ import {
   getRolePermissions,
 } from "./src/permissions";
 import { navItems } from "./src/config/navItems";
-import { isMoreMenuNavId, isPrimaryNavId } from "./src/config/navStructure";
+import { MORE_MENU_NAV_IDS, PRIMARY_NAV_IDS } from "./src/config/navStructure";
 import { storageKeys } from "./src/config/storageKeys";
 import { slatePrimaryCtaInteract } from "./src/styles/interactions";
 import { getGreetingFirstName, getTimeBasedGreeting, getUserInitials } from "./src/utils/userDisplay";
@@ -3131,18 +3131,52 @@ function App() {
     return filtered;
   }, [currentUser, roleNavVisibility, godCompanySetupSession]);
 
-  const primaryNavItems = useMemo(
-    () => visibleNavItems.filter((item) => isPrimaryNavId(item.id)),
-    [visibleNavItems],
-  );
-  const moreNavItems = useMemo(
-    () => visibleNavItems.filter((item) => isMoreMenuNavId(item.id)),
-    [visibleNavItems],
-  );
-  const mobileMoreDestinations = useMemo(
-    () => visibleNavItems.filter((item) => !["dashboard", "audits", "actions", "reports"].includes(item.id)),
-    [visibleNavItems],
-  );
+  const visibleNavIdSet = useMemo(() => new Set(visibleNavItems.map((item) => item.id)), [visibleNavItems]);
+
+  /** Tablet sidebar primary row — fixed order from `navStructure`, intersected with role visibility. */
+  const primaryNavItems = useMemo(() => {
+    return PRIMARY_NAV_IDS.flatMap((id) => {
+      if (!visibleNavIdSet.has(id)) {
+        return [];
+      }
+      const item = navItems.find((entry) => entry.id === id);
+      return item ? [item] : [];
+    });
+  }, [visibleNavIdSet]);
+
+  /** Tablet sidebar “More” — fixed order from `navStructure`, intersected with role visibility. */
+  const moreNavItems = useMemo(() => {
+    return MORE_MENU_NAV_IDS.flatMap((id) => {
+      if (!visibleNavIdSet.has(id)) {
+        return [];
+      }
+      const item = navItems.find((entry) => entry.id === id);
+      return item ? [item] : [];
+    });
+  }, [visibleNavIdSet]);
+
+  const mobileTabBarIds = useMemo(() => new Set<string>(["dashboard", "audits", "actions", "reports"]), []);
+
+  /** Mobile “More” sheet — same ordering as tablet (primary extras not on tab bar, then More menu ids). */
+  const mobileMoreDestinations = useMemo(() => {
+    const orderedIds = [...PRIMARY_NAV_IDS, ...MORE_MENU_NAV_IDS];
+    const seen = new Set<string>();
+    const out: Array<(typeof navItems)[number]> = [];
+    for (const id of orderedIds) {
+      if (seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      if (!visibleNavIdSet.has(id) || mobileTabBarIds.has(id)) {
+        continue;
+      }
+      const item = navItems.find((entry) => entry.id === id);
+      if (item) {
+        out.push(item);
+      }
+    }
+    return out;
+  }, [visibleNavIdSet, mobileTabBarIds]);
 
   const mobileBottomNavEntries = useMemo(() => {
     const entries: Array<{ id: Screen | "__more__"; label: string; icon: string }> = [
@@ -7205,6 +7239,12 @@ function App() {
                           <> — use the password configured for the Master account in your environment.</>
                         )}
                       </p>
+                      {!isDemoLoginEnabled && !loginUsers.some((user) => user.role === "Master") ? (
+                        <p className="mt-2 rounded-xl border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-[11px] leading-snug text-amber-50 sm:text-xs">
+                          The Master demo account is not in this build. Use <span className="font-semibold">npm run dev</span>, or rebuild with{" "}
+                          <span className="font-semibold">VITE_ENABLE_DEMO_LOGIN=true</span> (and set <span className="font-semibold">VITE_GODMODE_PASSWORD</span> if needed).
+                        </p>
+                      ) : null}
                       <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
                         <div>
                           <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Username or email</label>
@@ -7362,6 +7402,14 @@ function App() {
                         Sign in with the email and password issued by your administrator.
                       </p>
                     )}
+                    {!isDemoLoginEnabled && loginUsers.length === 0 ? (
+                      <p className="mt-2 rounded-xl border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-[11px] leading-snug text-amber-50 sm:text-xs">
+                        No sign-in accounts are available in this build (demo accounts are off, and no invites are loaded). For local
+                        testing use <span className="font-semibold">npm run dev</span>, or rebuild with{" "}
+                        <span className="font-semibold">VITE_ENABLE_DEMO_LOGIN=true</span>. Otherwise use an invited email and the
+                        password your administrator issued once onboarding is connected.
+                      </p>
+                    ) : null}
                     <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Username or email</label>
@@ -7724,17 +7772,13 @@ function App() {
               ) : null}
             </nav>
             <div className="mt-auto shrink-0 space-y-2 border-t border-white/10 px-2 py-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setScreen("account");
-                  setShellMoreExpanded(false);
-                  setMobileMoreOpen(false);
-                }}
+              <div
                 className={[
-                  "flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition hover:bg-white/8",
+                  "flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left",
                   desktopSidebarCollapsed ? "justify-center" : "",
                 ].join(" ")}
+                role="group"
+                aria-label="Signed-in user"
               >
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold text-white ring-1 ring-white/20">
                   {getUserInitials(currentUser.name, currentUser.username)}
@@ -7745,7 +7789,7 @@ function App() {
                     <span className="block truncate text-xs text-slate-400">{getRoleDisplayName(currentUser.role)}</span>
                   </span>
                 )}
-              </button>
+              </div>
               <button
                 type="button"
                 onClick={() => setDesktopSidebarCollapsed((current) => !current)}
