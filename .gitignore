@@ -1,7 +1,12 @@
 node_modules/
 dist/
+.DS_Store
+**/.DS_Store
 .env
 .sessions/
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
+android/keystore.properties
+android/*.jks
+android/*.keystore

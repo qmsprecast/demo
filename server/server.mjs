@@ -6,10 +6,19 @@ import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import { google } from "googleapis";
 import nodemailer from "nodemailer";
+import { bertCorsMiddleware } from "./bert-cors.mjs";
+import { hashPassword, installMasterAuthRoutes } from "./master-auth.mjs";
+import { getSessionCookieOptions } from "./session-cookie-options.mjs";
+import { migrateAllPlainUserAuthKeys, verifyUserAuthLoginOrMigrate } from "./userauth-password.mjs";
 
 dotenv.config();
 
 const app = express();
+app.disable("x-powered-by");
+/** Paid pilot / production: trust first reverse-proxy hop for accurate req.ip (rate limits, logs). */
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
 const port = Number(process.env.PORT || 8787);
 const rootDir = process.cwd();
 const sessionDir = path.join(rootDir, ".sessions");
@@ -22,14 +31,36 @@ const requiredEnv = {
   GOOGLE_SHARED_DRIVE_ID: process.env.GOOGLE_SHARED_DRIVE_ID || "",
   GOOGLE_ONBOARDING_FORM_ID: process.env.GOOGLE_ONBOARDING_FORM_ID || "",
   GOOGLE_ONBOARDING_SHEET_ID: process.env.GOOGLE_ONBOARDING_SHEET_ID || "",
+  /** Public origin of the SPA (must match where users open the app). Default matches Vite dev (`npm run dev`). Set in .env for real emails, e.g. https://app.example.com */
+  FRONTEND_URL: process.env.FRONTEND_URL || "http://127.0.0.1:5173",
   SESSION_SECRET: process.env.SESSION_SECRET || "qms-local-dev-secret",
   SMTP_HOST: process.env.SMTP_HOST || "",
   SMTP_PORT: process.env.SMTP_PORT || "",
+  SMTP_SECURE: process.env.SMTP_SECURE || "false",
   SMTP_USER: process.env.SMTP_USER || "",
   SMTP_PASS: process.env.SMTP_PASS || "",
-  SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || "",
-  SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || "QMS Precast",
+  SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || process.env.SMTP_FROM || "",
+  SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || process.env.APP_BRAND_NAME || "BERT",
 };
+const APP_BRAND_NAME = (process.env.APP_BRAND_NAME || "BERT — Business. Evaluate. Report. Tool.").trim();
+/** Customer-facing inbox for server-driven mail (e.g. incident notifications). Override with APP_SUPPORT_EMAIL or APP_ADMIN_EMAIL. */
+const APP_SUPPORT_EMAIL = String(
+  process.env.APP_SUPPORT_EMAIL || process.env.APP_ADMIN_EMAIL || "admin@usebert.co.uk",
+).trim();
+const ONBOARDING_INVITE_TTL_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.ONBOARDING_INVITE_TTL_MS || String(7 * 24 * 60 * 60 * 1000)),
+);
+const INVITE_STORE_PATH = path.join(sessionDir, "app-onboarding-invites.json");
+/** Pilot visibility only: `demo` = current client-side password auth. See docs/security-hardening-plan.md */
+const APP_AUTH_MODE = String(process.env.APP_AUTH_MODE || "demo").trim().toLowerCase();
+
+/** Company sheet user session (httpOnly signed cookie; separate from Master). */
+const COMPANY_SESSION_COOKIE = "bert_company_session";
+const COMPANY_SESSION_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.COMPANY_USER_SESSION_TTL_MS || String(7 * 24 * 60 * 60 * 1000)),
+);
 
 const scopes = [
   "openid",
@@ -38,6 +69,75 @@ const scopes = [
   "https://www.googleapis.com/auth/drive",
   "https://www.googleapis.com/auth/spreadsheets",
 ];
+
+/** Pause between sequential Sheets reads (values.get / spreadsheets.get) to stay under per-user per-minute read quotas. Override with SHEETS_READ_GAP_MS (50–3000). */
+const SHEETS_READ_GAP_MS = Math.min(3000, Math.max(50, Number(process.env.SHEETS_READ_GAP_MS || 500)));
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isSheetsQuotaOrRateLimitError(err) {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const status = err.code ?? err.response?.status ?? err.status;
+  if (status === 429) {
+    return true;
+  }
+  const msg = String(err.message || (typeof err.toString === "function" ? err.toString() : "") || "");
+  if (/quota|resource_exhausted|rate limit|429/i.test(msg)) {
+    return true;
+  }
+  const apiStatus = err.response?.data?.error?.status;
+  if (apiStatus === "RESOURCE_EXHAUSTED") {
+    return true;
+  }
+  const reasons = err.errors || err.response?.data?.error?.errors;
+  if (Array.isArray(reasons)) {
+    for (const entry of reasons) {
+      const reason = String(entry?.reason || "").toLowerCase();
+      if (
+        reason.includes("quota") ||
+        reason.includes("ratelimit") ||
+        reason === "userratelimitexceeded" ||
+        reason === "ratelimitexceeded"
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Retries a Sheets API operation on HTTP 429 / quota / RESOURCE_EXHAUSTED (default 8 retries, exponential backoff capped at 45s, honors Retry-After when present).
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @param {{ maxRetries?: number }} [options]
+ * @returns {Promise<T>}
+ */
+async function withSheetsQuotaRetry(fn, { maxRetries = 8 } = {}) {
+  const cap = Math.max(1, Number(process.env.SHEETS_QUOTA_MAX_RETRIES || maxRetries) || maxRetries);
+  for (let attempt = 0; attempt <= cap; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isSheetsQuotaOrRateLimitError(err) || attempt === cap) {
+        throw err;
+      }
+      let delayMs = Math.min(45_000, 1000 * 2 ** attempt);
+      const retryAfter = err.response?.headers?.["retry-after"];
+      if (retryAfter) {
+        const secs = Number(retryAfter);
+        if (Number.isFinite(secs) && secs > 0) {
+          delayMs = Math.max(delayMs, Math.min(120_000, secs * 1000));
+        }
+      }
+      await sleep(delayMs);
+    }
+  }
+}
 
 const APP_VERSION = (() => {
   try {
@@ -49,7 +149,7 @@ const APP_VERSION = (() => {
 })();
 
 const CURRENT_SCHEMA_VERSION = "3.0.0";
-const REQUIRED_TABS = ["Config", "Onboarding", "Users", "Schedule", "Actions", "ActionComments", "AuditResults", "AuditFindings", "Evidence", "Reports", "SyncLog", "Notes"];
+const REQUIRED_TABS = ["Config", "Onboarding", "Users", "Schedule", "Actions", "ActionComments", "AuditResults", "AuditFindings", "Evidence", "Incidents", "IncidentActions", "Reports", "SyncLog", "Notes"];
 const TAB_COLUMNS = {
   Config: ["Key", "Value", "Updated At"],
   Onboarding: [
@@ -250,6 +350,71 @@ const TAB_COLUMNS = {
     "Remote Row ID",
     "Schema Version",
   ],
+  Incidents: [
+    "Incident Record ID",
+    "Incident ID",
+    "Company ID",
+    "Status",
+    "Priority",
+    "Incident Type",
+    "Severity",
+    "Incident Date",
+    "Incident Time",
+    "Reporter Name",
+    "Reporter Email",
+    "Department / Area",
+    "Location",
+    "Description",
+    "Immediate Action",
+    "Injured",
+    "Injury Details",
+    "Contributing Factors",
+    "Witnesses",
+    "Evidence Links",
+    "Assigned To",
+    "Investigation Notes",
+    "Root Cause",
+    "Corrective Actions",
+    "Preventive Actions",
+    "Action Owner",
+    "Due Date",
+    "Completion Date",
+    "RIDDOR Required",
+    "Closed By",
+    "Closed At",
+    "Notification Status",
+    "Status History",
+    "Created At",
+    "Created By",
+    "Updated At",
+    "Updated By",
+    "Sync Status",
+    "Sync Attempts",
+    "Last Sync Error",
+    "Remote Row ID",
+    "Schema Version",
+  ],
+  IncidentActions: [
+    "Action ID",
+    "Incident Record ID",
+    "Incident ID",
+    "Company ID",
+    "Description",
+    "Owner",
+    "Due Date",
+    "Status",
+    "Completed At",
+    "Completed By",
+    "Created At",
+    "Created By",
+    "Updated At",
+    "Updated By",
+    "Sync Status",
+    "Sync Attempts",
+    "Last Sync Error",
+    "Remote Row ID",
+    "Schema Version",
+  ],
   Reports: [
     "Report ID",
     "Company ID",
@@ -316,6 +481,8 @@ const ID_COLUMNS = {
   AuditResults: "Result ID",
   AuditFindings: "Finding ID",
   Evidence: "Evidence ID",
+  Incidents: "Incident Record ID",
+  IncidentActions: "Action ID",
   Reports: "Report ID",
   Schedule: "Schedule ID",
   SyncLog: "Sync Item ID",
@@ -325,8 +492,95 @@ if (!fs.existsSync(sessionDir)) {
   fs.mkdirSync(sessionDir, { recursive: true });
 }
 
-app.use(express.json());
+function securityHeadersMiddleware(req, res, next) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.removeHeader("X-Powered-By");
+  if (process.env.NODE_ENV === "production") {
+    const xfProto = String(req.headers["x-forwarded-proto"] || "")
+      .split(",")[0]
+      .trim()
+      .toLowerCase();
+    if (xfProto === "https") {
+      res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+    }
+  }
+  next();
+}
+
+function httpRequestLogMiddleware(req, res, next) {
+  const started = Date.now();
+  res.on("finish", () => {
+    const path = req.originalUrl || req.url || "";
+    if (path.includes("/favicon")) {
+      return;
+    }
+    console.log(`[http] ${req.method} ${path.split("?")[0]} ${res.statusCode} ${Date.now() - started}ms`);
+  });
+  next();
+}
+
+/** Simple in-memory fixed-window rate limiter (no extra deps). Not distributed across instances. */
+function createWindowRateLimiter({ windowMs, max, name }) {
+  const buckets = new Map();
+  return function windowRateLimitMiddleware(req, res, next) {
+    const ip = req.ip || req.socket?.remoteAddress || "unknown";
+    const key = `${name}:${ip}`;
+    const now = Date.now();
+    let b = buckets.get(key);
+    if (!b || b.resetAt <= now) {
+      b = { count: 0, resetAt: now + windowMs };
+      buckets.set(key, b);
+    }
+    b.count += 1;
+    if (b.count > max) {
+      res.setHeader("Retry-After", String(Math.ceil((b.resetAt - now) / 1000)));
+      return res.status(429).json({ ok: false, error: "Too many requests; try again shortly." });
+    }
+    next();
+  };
+}
+
+const isProdRuntime = () => process.env.NODE_ENV === "production";
+const sensitivePostRateLimit = createWindowRateLimiter({
+  name: "sensitive-post",
+  windowMs: 60_000,
+  max: isProdRuntime() ? 45 : 200,
+});
+const smtpStatusGetRateLimit = createWindowRateLimiter({
+  name: "smtp-status-get",
+  windowMs: 60_000,
+  max: isProdRuntime() ? 30 : 120,
+});
+
+function sensitiveAbusePostRateLimit(req, res, next) {
+  if (req.method !== "POST") {
+    return next();
+  }
+  const p = req.path || req.url || "";
+  if (
+    p.startsWith("/api/onboarding") ||
+    p === "/api/auth/master/login" ||
+    p === "/api/auth/company/login" ||
+    p === "/api/tools/migrate-userauth-passwords" ||
+    p === "/api/manager/non-compliance-alert" ||
+    p === "/api/ncr/escalation-alert" ||
+    p === "/api/incidents/notify"
+  ) {
+    return sensitivePostRateLimit(req, res, next);
+  }
+  return next();
+}
+
+app.use(securityHeadersMiddleware);
+app.use(bertCorsMiddleware);
+app.use(express.json({ limit: "512kb" }));
 app.use(cookieParser(requiredEnv.SESSION_SECRET));
+installMasterAuthRoutes(app, { sessionDir });
+app.use(httpRequestLogMiddleware);
+app.use(sensitiveAbusePostRateLimit);
 
 function createOAuthClient() {
   return new google.auth.OAuth2(
@@ -343,6 +597,162 @@ function envConfigured() {
       requiredEnv.GOOGLE_REDIRECT_URI &&
       requiredEnv.GOOGLE_SHARED_DRIVE_ID,
   );
+}
+
+const DEFAULT_SESSION_SECRET = "qms-local-dev-secret";
+
+function nodeEnvLabel() {
+  return String(process.env.NODE_ENV || "development").trim() || "development";
+}
+
+function isProductionRuntime() {
+  return nodeEnvLabel() === "production";
+}
+
+/**
+ * Production-only gates. Warnings are logged; blocking issues fail boot in production.
+ * @returns {{ isProduction: boolean, blockingIssues: string[], warnings: string[] }}
+ */
+function evaluateProductionEnvironment() {
+  const blockingIssues = [];
+  const warnings = [];
+  if (!isProductionRuntime()) {
+    return { isProduction: false, blockingIssues, warnings };
+  }
+
+  const secret = String(process.env.SESSION_SECRET || "").trim();
+  if (!secret || secret === DEFAULT_SESSION_SECRET) {
+    blockingIssues.push("SESSION_SECRET must be set to a strong secret (not the local default) when NODE_ENV=production.");
+  } else if (secret.length < 24) {
+    blockingIssues.push("SESSION_SECRET is too short for production (use at least 24 random characters).");
+  }
+
+  if (parseBooleanEnv(process.env.ALLOW_INSECURE_OAUTH_STATE)) {
+    blockingIssues.push("ALLOW_INSECURE_OAUTH_STATE must not be true in production.");
+  }
+
+  if (!envConfigured()) {
+    blockingIssues.push(
+      `Google server environment is incomplete. Missing: ${collectMissingGoogleEnvKeys().join(", ") || "(see GOOGLE_* vars)"}.`,
+    );
+  }
+
+  const fe = String(requiredEnv.FRONTEND_URL || "").trim();
+  if (fe.startsWith("http://")) {
+    const loopbackOk = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(fe);
+    if (!loopbackOk) {
+      warnings.push("FRONTEND_URL uses http:// for a non-loopback host; use https behind TLS in production.");
+    }
+  }
+
+  const redirect = String(requiredEnv.GOOGLE_REDIRECT_URI || "").trim();
+  if (redirect.startsWith("http://")) {
+    const loopbackOk = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(redirect);
+    if (!loopbackOk) {
+      warnings.push("GOOGLE_REDIRECT_URI uses http:// for a non-loopback host; Google OAuth should use https in production.");
+    }
+  }
+
+  const allowedOrigins = String(process.env.BERT_ALLOWED_ORIGINS || "").trim();
+  if (!allowedOrigins) {
+    warnings.push(
+      "BERT_ALLOWED_ORIGINS is unset: credentialed cross-origin browsers (hosted SPA or Capacitor) need an explicit allowlist so CORS can reflect Access-Control-Allow-Origin.",
+    );
+  }
+
+  return { isProduction: true, blockingIssues, warnings };
+}
+
+function assertSafeProductionBoot() {
+  const evaluation = evaluateProductionEnvironment();
+  for (const w of evaluation.warnings) {
+    console.warn(`[api][production] ${w}`);
+  }
+  if (evaluation.isProduction && evaluation.blockingIssues.length > 0) {
+    console.error("[api] Refusing to start API in production with blocking configuration issues:");
+    for (const issue of evaluation.blockingIssues) {
+      console.error(`  - ${issue}`);
+    }
+    process.exit(1);
+  }
+}
+
+function sessionStoreWritable() {
+  try {
+    fs.accessSync(sessionDir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function smtpStartupLogPayload() {
+  const config = smtpConfigSummary();
+  const diag = smtpCredentialDiagnostics();
+  if (isProductionRuntime()) {
+    return {
+      smtpConfigured: emailConfigured(),
+      hostSet: Boolean(config.host),
+      port: config.port,
+      secure: config.secure,
+      fromSet: Boolean(config.from),
+      passwordProvided: diag.passwordProvided,
+    };
+  }
+  return {
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    user: config.user,
+    from: config.from,
+    ...diag,
+  };
+}
+
+function getHealthPayload() {
+  return {
+    ok: true,
+    service: "bert-api",
+    version: APP_VERSION,
+    environment: nodeEnvLabel(),
+    /** @deprecated use googleEnvConfigured */
+    configured: envConfigured(),
+    googleEnvConfigured: envConfigured(),
+    sharedDriveConfigured: Boolean(requiredEnv.GOOGLE_SHARED_DRIVE_ID),
+    uptimeSeconds: Math.round(process.uptime()),
+  };
+}
+
+function getReadinessPayload() {
+  const evaluation = evaluateProductionEnvironment();
+  const writable = sessionStoreWritable();
+  const googleOk = envConfigured();
+  const productionOk = !evaluation.isProduction || evaluation.blockingIssues.length === 0;
+  const ready = googleOk && writable && productionOk;
+  return {
+    ok: ready,
+    ready,
+    service: "bert-api",
+    version: APP_VERSION,
+    environment: nodeEnvLabel(),
+    checks: {
+      googleEnvConfigured: googleOk,
+      sessionStoreWritable: writable,
+      productionEnvOk: productionOk,
+    },
+    missingGoogleKeys: googleOk ? [] : collectMissingGoogleEnvKeys(),
+    warnings: evaluation.warnings,
+    errors: evaluation.blockingIssues,
+  };
+}
+
+function collectMissingGoogleEnvKeys() {
+  const missing = [];
+  if (!requiredEnv.GOOGLE_CLIENT_ID) missing.push("GOOGLE_CLIENT_ID");
+  if (!requiredEnv.GOOGLE_CLIENT_SECRET) missing.push("GOOGLE_CLIENT_SECRET");
+  if (!requiredEnv.GOOGLE_REDIRECT_URI) missing.push("GOOGLE_REDIRECT_URI");
+  if (!requiredEnv.GOOGLE_SHARED_DRIVE_ID) missing.push("GOOGLE_SHARED_DRIVE_ID");
+  return missing;
 }
 
 function readStoredSession() {
@@ -431,8 +841,8 @@ function sendCallbackPage(res, options) {
         margin-bottom: 16px;
         padding: 6px 12px;
         border-radius: 999px;
-        background: ${success ? "rgba(16,185,129,0.14)" : "rgba(245,158,11,0.14)"};
-        color: ${success ? "#6ee7b7" : "#fcd34d"};
+        background: ${success ? "rgba(29,78,216,0.18)" : "rgba(245,158,11,0.14)"};
+        color: ${success ? "#93c5fd" : "#fcd34d"};
         font-size: 12px;
         font-weight: 600;
       }
@@ -443,7 +853,7 @@ function sendCallbackPage(res, options) {
       <div class="pill">${success ? "Google connected" : "Connection issue"}</div>
       <h1>${title}</h1>
       <p>${message}</p>
-      <p style="margin-top:16px;"><a href="${redirectUrl}">Return to QMS Precast</a></p>
+      <p style="margin-top:16px;"><a href="${redirectUrl}">Return to ${APP_BRAND_NAME}</a></p>
     </div>
   </body>
 </html>`);
@@ -459,8 +869,28 @@ function getAuthedClient() {
   return auth;
 }
 
+/**
+ * Pilot: require stored Google OAuth on the API host (Drive/Sheets service identity).
+ * Not end-user SSO. Use only where the SPA already expects Google (see docs/security-hardening-plan.md).
+ */
+function requireGoogleSession(req, res, next) {
+  if (!getAuthedClient()) {
+    return res.status(401).json({ ok: false, error: "Google connection required for this action." });
+  }
+  next();
+}
+
 function safeLower(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function buildOnboardingFormViewUrl(formId) {
+  const clean = String(formId || "").trim();
+  if (!clean) return "";
+  if (clean.startsWith("1FAIpQL")) {
+    return `https://docs.google.com/forms/d/e/${clean}/viewform`;
+  }
+  return `https://docs.google.com/forms/d/${clean}/viewform`;
 }
 
 function emailConfigured() {
@@ -473,6 +903,98 @@ function emailConfigured() {
   );
 }
 
+function parseBooleanEnv(value, fallback = false) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return fallback;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
+}
+
+function smtpConfigSummary() {
+  const port = Number(requiredEnv.SMTP_PORT || 0);
+  const secure = parseBooleanEnv(requiredEnv.SMTP_SECURE, port === 465);
+  return {
+    host: requiredEnv.SMTP_HOST || "",
+    port,
+    secure,
+    user: requiredEnv.SMTP_USER || "",
+    from: requiredEnv.SMTP_FROM_EMAIL || "",
+  };
+}
+
+function smtpCredentialDiagnostics() {
+  const pass = String(requiredEnv.SMTP_PASS || "");
+  return {
+    passwordProvided: pass.length > 0,
+    passwordLength: pass.length,
+    userLooksEmail: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requiredEnv.SMTP_USER || ""),
+    fromLooksEmail: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requiredEnv.SMTP_FROM_EMAIL || ""),
+    userMatchesFrom:
+      safeLower(requiredEnv.SMTP_USER || "") === safeLower(requiredEnv.SMTP_FROM_EMAIL || ""),
+  };
+}
+
+function createSmtpTransport() {
+  const config = smtpConfigSummary();
+  return nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    requireTLS: config.port === 587,
+    auth: {
+      user: requiredEnv.SMTP_USER,
+      pass: requiredEnv.SMTP_PASS,
+    },
+  });
+}
+
+let smtpVerificationState = {
+  checkedAt: "",
+  ok: false,
+  error: "Not checked",
+};
+
+async function verifySmtpTransport() {
+  if (!emailConfigured()) {
+    smtpVerificationState = {
+      checkedAt: new Date().toISOString(),
+      ok: false,
+      error: "SMTP is not configured.",
+    };
+    return smtpVerificationState;
+  }
+  try {
+    const transporter = createSmtpTransport();
+    await transporter.verify();
+    smtpVerificationState = {
+      checkedAt: new Date().toISOString(),
+      ok: true,
+      error: "",
+    };
+  } catch (error) {
+    smtpVerificationState = {
+      checkedAt: new Date().toISOString(),
+      ok: false,
+      error: error instanceof Error ? error.message : "SMTP verification failed.",
+    };
+  }
+  return smtpVerificationState;
+}
+
+function buildOnboardingInviteMailto({ toEmail, inviteRole, invitedBy, onboardingFormUrl }) {
+  const subject = `${APP_BRAND_NAME} ${inviteRole} onboarding`;
+  const body = [
+    `You have been invited to ${APP_BRAND_NAME} as ${inviteRole}.`,
+    "",
+    `Invited by: ${invitedBy}`,
+    "",
+    "Complete your onboarding form:",
+    onboardingFormUrl,
+  ].join("\n");
+  return `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
 async function sendOnboardingInviteEmail({
   toEmail,
   inviteRole,
@@ -483,17 +1005,7 @@ async function sendOnboardingInviteEmail({
     throw new Error("SMTP is not configured. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM_EMAIL.");
   }
 
-  const port = Number(requiredEnv.SMTP_PORT);
-  const secure = port === 465;
-  const transporter = nodemailer.createTransport({
-    host: requiredEnv.SMTP_HOST,
-    port,
-    secure,
-    auth: {
-      user: requiredEnv.SMTP_USER,
-      pass: requiredEnv.SMTP_PASS,
-    },
-  });
+  const transporter = createSmtpTransport();
 
   const lineManagerRule =
     inviteRole === "Admin"
@@ -510,7 +1022,7 @@ async function sendOnboardingInviteEmail({
   ];
 
   const textBody = [
-    `You have been invited to QMS Precast as ${inviteRole}.`,
+    `You have been invited to ${APP_BRAND_NAME} as ${inviteRole}.`,
     "",
     `Invited by: ${invitedBy}`,
     "",
@@ -526,7 +1038,7 @@ async function sendOnboardingInviteEmail({
   ].join("\n");
 
   const htmlBody = `
-    <p>You have been invited to QMS Precast as <strong>${inviteRole}</strong>.</p>
+    <p>You have been invited to ${APP_BRAND_NAME} as <strong>${inviteRole}</strong>.</p>
     <p><strong>Invited by:</strong> ${invitedBy}</p>
     <p>Complete your onboarding form:</p>
     <p><a href="${onboardingFormUrl}">${onboardingFormUrl}</a></p>
@@ -545,7 +1057,7 @@ async function sendOnboardingInviteEmail({
   await transporter.sendMail({
     from,
     to: toEmail,
-    subject: `QMS Precast ${inviteRole} onboarding`,
+    subject: `${APP_BRAND_NAME} ${inviteRole} onboarding`,
     text: textBody,
     html: htmlBody,
   });
@@ -565,17 +1077,7 @@ async function sendManagerNonComplianceAlertEmail({
     throw new Error("At least one manager recipient is required.");
   }
 
-  const port = Number(requiredEnv.SMTP_PORT);
-  const secure = port === 465;
-  const transporter = nodemailer.createTransport({
-    host: requiredEnv.SMTP_HOST,
-    port,
-    secure,
-    auth: {
-      user: requiredEnv.SMTP_USER,
-      pass: requiredEnv.SMTP_PASS,
-    },
-  });
+  const transporter = createSmtpTransport();
 
   const syncLine = queuedForSync
     ? "Submission status: queued offline and will sync once the device reconnects."
@@ -627,17 +1129,7 @@ async function sendNcrEscalationEmail({
   if (!emailConfigured()) {
     throw new Error("SMTP is not configured. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM_EMAIL.");
   }
-  const port = Number(requiredEnv.SMTP_PORT);
-  const secure = port === 465;
-  const transporter = nodemailer.createTransport({
-    host: requiredEnv.SMTP_HOST,
-    port,
-    secure,
-    auth: {
-      user: requiredEnv.SMTP_USER,
-      pass: requiredEnv.SMTP_PASS,
-    },
-  });
+  const transporter = createSmtpTransport();
 
   const subject = `[${ncrReference}] Non-Conformance Raised`;
   const textBody = [
@@ -668,6 +1160,73 @@ async function sendNcrEscalationEmail({
   await transporter.sendMail({
     from,
     to: toEmail,
+    subject,
+    text: textBody,
+    html: htmlBody,
+  });
+}
+
+async function sendIncidentReportEmail({
+  incidentId,
+  incidentType,
+  severity,
+  reporter,
+  department,
+  location,
+  status,
+  incidentDate,
+  incidentTime,
+  priority,
+  escalated,
+  viewLink,
+}) {
+  if (!emailConfigured()) {
+    throw new Error("SMTP is not configured. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM_EMAIL.");
+  }
+  const transporter = createSmtpTransport();
+  const to = APP_SUPPORT_EMAIL;
+  const subject = `New Incident Report - ${incidentId}${escalated ? " [ESCALATED]" : ""}`;
+  const lines = [
+    "A new accident / near miss report has been submitted.",
+    "",
+    `Incident Number: ${incidentId}`,
+    `Incident Type: ${incidentType}`,
+    `Severity: ${severity}`,
+    `Reporter: ${reporter}`,
+    `Department / Area: ${department}`,
+    `Location: ${location}`,
+    `Status: ${status}`,
+    `Date and Time: ${incidentDate} ${incidentTime || ""}`.trim(),
+    `Priority: ${priority}`,
+    viewLink ? `View link: ${viewLink}` : "",
+    "",
+    escalated
+      ? "Escalation: High severity incident. Immediate management review required."
+      : "Escalation: Not required.",
+  ].filter(Boolean);
+  const textBody = lines.join("\n");
+  const htmlBody = `
+    <p>A new accident / near miss report has been submitted.</p>
+    <p>
+      <strong>Incident Number:</strong> ${incidentId}<br/>
+      <strong>Incident Type:</strong> ${incidentType}<br/>
+      <strong>Severity:</strong> ${severity}<br/>
+      <strong>Reporter:</strong> ${reporter}<br/>
+      <strong>Department / Area:</strong> ${department}<br/>
+      <strong>Location:</strong> ${location}<br/>
+      <strong>Status:</strong> ${status}<br/>
+      <strong>Date and Time:</strong> ${incidentDate} ${incidentTime || ""}<br/>
+      <strong>Priority:</strong> ${priority}
+    </p>
+    ${viewLink ? `<p><a href="${viewLink}">Open incident in app</a></p>` : ""}
+    <p>${escalated ? "<strong>Escalation:</strong> High severity incident. Immediate management review required." : "Escalation: Not required."}</p>
+  `;
+  const from = requiredEnv.SMTP_FROM_NAME
+    ? `"${requiredEnv.SMTP_FROM_NAME}" <${requiredEnv.SMTP_FROM_EMAIL}>`
+    : requiredEnv.SMTP_FROM_EMAIL;
+  await transporter.sendMail({
+    from,
+    to,
     subject,
     text: textBody,
     html: htmlBody,
@@ -774,7 +1333,34 @@ async function discoverOnboardingSource(auth) {
     null;
 
   if (!masterControl) {
-    return resolved;
+    const fallbackSearch = await drive.files.list({
+      corpora: "drive",
+      driveId: requiredEnv.GOOGLE_SHARED_DRIVE_ID,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      q: "trashed = false and (mimeType = 'application/vnd.google-apps.form' or mimeType = 'application/vnd.google-apps.spreadsheet')",
+      fields: "files(id,name,mimeType)",
+      pageSize: 200,
+      orderBy: "name_natural",
+    });
+    const fallbackFiles = fallbackSearch.data.files || [];
+    const onboardingForm = fallbackFiles.find(
+      (file) =>
+        file.mimeType === "application/vnd.google-apps.form" &&
+        safeLower(file.name).includes("onboarding"),
+    );
+    const onboardingSheet = fallbackFiles.find(
+      (file) =>
+        file.mimeType === "application/vnd.google-apps.spreadsheet" &&
+        safeLower(file.name).includes("onboarding"),
+    );
+    return {
+      formId: resolved.formId || onboardingForm?.id || "",
+      formName: onboardingForm?.name || resolved.formName,
+      sheetId: resolved.sheetId || onboardingSheet?.id || "",
+      sheetName: onboardingSheet?.name || resolved.sheetName,
+      configured: Boolean(resolved.formId || resolved.sheetId || onboardingForm || onboardingSheet),
+    };
   }
 
   const contents = await drive.files.list({
@@ -815,17 +1401,21 @@ async function readOnboardingSubmissions(auth, onboardingSource) {
   }
 
   const sheets = google.sheets({ version: "v4", auth });
-  const workbook = await sheets.spreadsheets.get({
-    spreadsheetId: onboardingSource.sheetId,
-    fields: "sheets(properties(title))",
-  });
+  const workbook = await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.get({
+      spreadsheetId: onboardingSource.sheetId,
+      fields: "sheets(properties(title))",
+    }),
+  );
 
   const firstTab = workbook.data.sheets?.[0]?.properties?.title;
   const range = firstTab ? `${firstTab}!A1:ZZ500` : "A1:ZZ500";
-  const valuesResponse = await sheets.spreadsheets.values.get({
-    spreadsheetId: onboardingSource.sheetId,
-    range,
-  });
+  const valuesResponse = await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.get({
+      spreadsheetId: onboardingSource.sheetId,
+      range,
+    }),
+  );
 
   const rows = valuesResponse.data.values || [];
   if (rows.length === 0) {
@@ -849,6 +1439,272 @@ async function readOnboardingSubmissions(auth, onboardingSource) {
   return {
     headers,
     records,
+  };
+}
+
+function readInviteStore() {
+  try {
+    const raw = fs.readFileSync(INVITE_STORE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeInviteStore(store) {
+  try {
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true });
+    }
+    fs.writeFileSync(INVITE_STORE_PATH, JSON.stringify(store, null, 2), "utf8");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Cannot write invite store (${INVITE_STORE_PATH}): ${msg}`);
+  }
+}
+
+function createInviteRecord(payload) {
+  const store = readInviteStore();
+  const id = crypto.randomBytes(24).toString("hex");
+  const now = Date.now();
+  const record = {
+    ...payload,
+    createdAt: now,
+    expiresAt: now + ONBOARDING_INVITE_TTL_MS,
+    consumedAt: null,
+    provisionStatus: payload.provisionStatus ?? "idle",
+    provisionStartedAt: payload.provisionStartedAt ?? null,
+    provisionFinishedAt: payload.provisionFinishedAt ?? null,
+    provisionError: payload.provisionError ?? null,
+    provisionDriveFolderId: payload.provisionDriveFolderId ?? null,
+    provisionMasterSheetId: payload.provisionMasterSheetId ?? null,
+  };
+  store[id] = record;
+  writeInviteStore(store);
+  return { id, record };
+}
+
+function getInviteRecord(id) {
+  const store = readInviteStore();
+  return store[id] || null;
+}
+
+function markInviteConsumed(id) {
+  const store = readInviteStore();
+  if (!store[id]) {
+    return false;
+  }
+  store[id] = { ...store[id], consumedAt: Date.now() };
+  writeInviteStore(store);
+  return true;
+}
+
+/** @typedef {"idle"|"running"|"succeeded"|"failed"} InviteProvisionStatus */
+
+const INVITE_PROVISION_STALE_RUNNING_MS = 10 * 60 * 1000;
+
+/**
+ * Serializes invite completion per tokenId so parallel POST /complete cannot double-provision.
+ * Single-process dev server only — for production use a distributed lock or transactional store.
+ */
+function createPerTokenAsyncQueue() {
+  /** @type {Map<string, Promise<void>>} */
+  const tails = new Map();
+  return async (tokenId, fn) => {
+    const prev = tails.get(tokenId) || Promise.resolve();
+    let release = () => {};
+    const next = new Promise((resolve) => {
+      release = resolve;
+    });
+    tails.set(
+      tokenId,
+      prev.then(() => next, () => next),
+    );
+    await prev.catch(() => {});
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  };
+}
+
+const runWithInviteCompletionLock = createPerTokenAsyncQueue();
+
+function patchInviteRecord(id, partial) {
+  const store = readInviteStore();
+  if (!store[id]) {
+    return null;
+  }
+  store[id] = { ...store[id], ...partial };
+  writeInviteStore(store);
+  return store[id];
+}
+
+function normalizeInviteProvisionFields(record) {
+  if (!record) return null;
+  const provisionStatus =
+    record.provisionStatus ||
+    (record.consumedAt ? "succeeded" : "idle");
+  return {
+    ...record,
+    provisionStatus,
+    provisionStartedAt: record.provisionStartedAt ?? null,
+    provisionFinishedAt: record.provisionFinishedAt ?? null,
+    provisionError: record.provisionError ?? null,
+    provisionDriveFolderId: record.provisionDriveFolderId ?? null,
+    provisionMasterSheetId: record.provisionMasterSheetId ?? null,
+  };
+}
+
+function buildAppOnboardingUrl(tokenId) {
+  const base = requiredEnv.FRONTEND_URL.replace(/\/$/, "");
+  return `${base}/?invite=${encodeURIComponent(tokenId)}`;
+}
+
+function buildAppOnboardingInviteMailto({ toEmail, subjectLine, invitedBy, onboardingUrl }) {
+  const body = [
+    `You have been invited to complete ${APP_BRAND_NAME} onboarding.`,
+    "",
+    `Invited by: ${invitedBy}`,
+    "",
+    "Open this link to finish setup in the app:",
+    onboardingUrl,
+  ].join("\n");
+  return `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subjectLine)}&body=${encodeURIComponent(body)}`;
+}
+
+async function sendAppHostedOnboardingEmail({ toEmail, subjectLine, invitedBy, onboardingUrl, htmlIntro }) {
+  if (!emailConfigured()) {
+    throw new Error("SMTP is not configured.");
+  }
+  const transporter = createSmtpTransport();
+  const from = requiredEnv.SMTP_FROM_NAME
+    ? `"${requiredEnv.SMTP_FROM_NAME}" <${requiredEnv.SMTP_FROM_EMAIL}>`
+    : requiredEnv.SMTP_FROM_EMAIL;
+  const textBody = [
+    `You have been invited to complete ${APP_BRAND_NAME} onboarding.`,
+    "",
+    `Invited by: ${invitedBy}`,
+    "",
+    "Open this link to finish setup in the app:",
+    onboardingUrl,
+  ].join("\n");
+  const htmlBody = `
+    <p>${htmlIntro}</p>
+    <p><strong>Invited by:</strong> ${invitedBy}</p>
+    <p><a href="${onboardingUrl}" target="_blank" rel="noopener noreferrer">Complete onboarding in ${APP_BRAND_NAME}</a></p>
+    <p style="word-break:break-all;font-size:12px;color:#64748b;">${onboardingUrl}</p>
+  `;
+  await transporter.sendMail({
+    from,
+    to: toEmail,
+    subject: subjectLine,
+    text: textBody,
+    html: htmlBody,
+  });
+}
+
+async function createDriveFolder(auth, name, parentId) {
+  const drive = google.drive({ version: "v3", auth });
+  const res = await drive.files.create({
+    supportsAllDrives: true,
+    requestBody: {
+      name,
+      mimeType: "application/vnd.google-apps.folder",
+      parents: [parentId],
+    },
+    fields: "id,name",
+  });
+  return res.data;
+}
+
+async function createBlankSpreadsheet(auth, name, parentId) {
+  const drive = google.drive({ version: "v3", auth });
+  const res = await drive.files.create({
+    supportsAllDrives: true,
+    requestBody: {
+      name,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      parents: [parentId],
+    },
+    fields: "id,name",
+  });
+  return res.data;
+}
+
+async function provisionNewCompanyWorkspace(
+  auth,
+  { companyName, adminEmail, adminFullName, password },
+  onProvisionProgress,
+) {
+  if (!requiredEnv.GOOGLE_SHARED_DRIVE_ID) {
+    throw new Error("GOOGLE_SHARED_DRIVE_ID is not configured on the server.");
+  }
+  const safeName = String(companyName || "New company")
+    .trim()
+    .slice(0, 120);
+  const adminEmailDomain = String(adminEmail || "").includes("@")
+    ? String(adminEmail)
+        .split("@")
+        .pop()
+        ?.toLowerCase() || ""
+    : "";
+  console.log("[provision] new_company_workspace start", {
+    companyNameLen: safeName.length,
+    adminEmailDomain: adminEmailDomain || undefined,
+  });
+  const root = await createDriveFolder(auth, safeName, requiredEnv.GOOGLE_SHARED_DRIVE_ID);
+  console.log("[provision] milestone", { step: "company_root_folder", folderId: root.id });
+  if (typeof onProvisionProgress === "function") {
+    await onProvisionProgress({ provisionDriveFolderId: root.id });
+  }
+  const auditForms = await createDriveFolder(auth, "02 Audit Forms", root.id);
+  const masterData = await createDriveFolder(auth, "03 Master Data Sheet", root.id);
+  await createDriveFolder(auth, "04 Evidence", root.id);
+  await createDriveFolder(auth, "05 Exports", root.id);
+  await createDriveFolder(auth, "06 Admin Notes", root.id);
+  const masterSheet = await createBlankSpreadsheet(auth, "Company Master Sheet", masterData.id);
+  console.log("[provision] milestone", { step: "master_sheet_created", spreadsheetId: masterSheet.id });
+  if (typeof onProvisionProgress === "function") {
+    await onProvisionProgress({ provisionMasterSheetId: masterSheet.id });
+  }
+  await ensureTabsAndColumns(auth, masterSheet.id, {
+    companyId: root.id,
+    companyName: safeName,
+  });
+  const userId = `app-${String(adminEmail || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gi, "-")}`;
+  await writeCompanyUsers(auth, masterSheet.id, root.id, [
+    {
+      id: userId,
+      email: adminEmail,
+      role: "Admin",
+      name: adminFullName || adminEmail,
+      invitedBy: APP_BRAND_NAME,
+      senderEmail: "",
+      sentAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      syncStatus: "Synced",
+    },
+  ]);
+  const authKey = `UserAuth.${String(adminEmail || "").toLowerCase()}`;
+  await updateConfig(auth, masterSheet.id, {
+    ...(await getConfig(auth, masterSheet.id)),
+    [authKey]: hashPassword(password),
+  });
+  console.log("[provision] new_company_workspace done", {
+    companyFolderId: root.id,
+    masterSheetId: masterSheet.id,
+  });
+  return {
+    companyFolderId: root.id,
+    companyFolderName: root.name,
+    masterSheetId: masterSheet.id,
+    auditFormsFolderId: auditForms.id,
+    masterDataFolderId: masterData.id,
   };
 }
 
@@ -1057,10 +1913,12 @@ async function inspectCompanyFolder(auth, folderId) {
 
   let masterSheetTabs = [];
   if (masterSheet?.id) {
-    const workbook = await sheets.spreadsheets.get({
-      spreadsheetId: masterSheet.id,
-      fields: "sheets(properties(title))",
-    });
+    const workbook = await withSheetsQuotaRetry(() =>
+      sheets.spreadsheets.get({
+        spreadsheetId: masterSheet.id,
+        fields: "sheets(properties(title))",
+      }),
+    );
 
     masterSheetTabs =
       workbook.data.sheets?.map((sheet) => sheet.properties?.title).filter(Boolean) || [];
@@ -1162,19 +2020,23 @@ function toObjectArray(value) {
 
 async function getWorkbook(auth, spreadsheetId) {
   const sheets = google.sheets({ version: "v4", auth });
-  return sheets.spreadsheets.get({
-    spreadsheetId,
-    fields: "properties(title),sheets(properties(sheetId,title))",
-  });
+  return withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.get({
+      spreadsheetId,
+      fields: "properties(title),sheets(properties(sheetId,title))",
+    }),
+  );
 }
 
 async function getTabValues(auth, spreadsheetId, tabName, range = "A1:ZZ5000") {
   const sheets = google.sheets({ version: "v4", auth });
   try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${tabName}!${range}`,
-    });
+    const response = await withSheetsQuotaRetry(() =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${tabName}!${range}`,
+      }),
+    );
     return response.data.values || [];
   } catch {
     return [];
@@ -1198,33 +2060,39 @@ async function createBackupSheets(auth, spreadsheetId, tabNames) {
   }
 
   const sheets = google.sheets({ version: "v4", auth });
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: { requests: backupRequests },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: backupRequests },
+    }),
+  );
 
   return backupRequests.map((request) => request.duplicateSheet.newSheetName);
 }
 
-async function ensureTabExists(auth, spreadsheetId, tabName) {
-  const workbook = await getWorkbook(auth, spreadsheetId);
+/** When `existingWorkbook` is set, skips an extra spreadsheets.get for that tab check. */
+async function ensureTabExists(auth, spreadsheetId, tabName, existingWorkbook = null) {
+  let workbook = existingWorkbook ?? (await getWorkbook(auth, spreadsheetId));
   if (ensureSheetTab(workbook, tabName)) {
-    return false;
+    return { added: false, workbook };
   }
 
   const sheets = google.sheets({ version: "v4", auth });
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [{ addSheet: { properties: { title: tabName } } }],
-    },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: tabName } } }],
+      },
+    }),
+  );
 
-  return true;
+  workbook = await getWorkbook(auth, spreadsheetId);
+  return { added: true, workbook };
 }
 
 async function ensureColumns(auth, spreadsheetId, tabName, expectedHeaders) {
-  await ensureTabExists(auth, spreadsheetId, tabName);
+  await ensureTabExists(auth, spreadsheetId, tabName, null);
 
   const sheets = google.sheets({ version: "v4", auth });
   const rows = await getTabValues(auth, spreadsheetId, tabName);
@@ -1234,12 +2102,14 @@ async function ensureColumns(auth, spreadsheetId, tabName, expectedHeaders) {
   );
 
   if (rows.length === 0) {
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${tabName}!A1`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: [expectedHeaders] },
-    });
+    await withSheetsQuotaRetry(() =>
+      sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${tabName}!A1`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: { values: [expectedHeaders] },
+      }),
+    );
     return { addedColumns: [...expectedHeaders], headers: expectedHeaders };
   }
 
@@ -1256,16 +2126,20 @@ async function ensureColumns(auth, spreadsheetId, tabName, expectedHeaders) {
     return padded;
   });
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: `${tabName}!A:ZZ`,
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `${tabName}!A1`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [nextHeaders, ...remainingRows] },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `${tabName}!A:ZZ`,
+    }),
+  );
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${tabName}!A1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [nextHeaders, ...remainingRows] },
+    }),
+  );
 
   return { addedColumns: missing, headers: nextHeaders };
 }
@@ -1299,23 +2173,91 @@ async function updateConfig(auth, spreadsheetId, patch) {
   Object.assign(merged, patch);
 
   const orderedKeys = Array.from(new Set([...CONFIG_KEYS, ...Object.keys(merged)]));
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: "Config!A:C",
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: "Config!A1",
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [
-        TAB_COLUMNS.Config,
-        ...orderedKeys.map((key) => [key, merged[key] || "", new Date().toISOString()]),
-      ],
-    },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: "Config!A:C",
+    }),
+  );
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: "Config!A1",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [
+          TAB_COLUMNS.Config,
+          ...orderedKeys.map((key) => [key, merged[key] || "", new Date().toISOString()]),
+        ],
+      },
+    }),
+  );
 
   return merged;
+}
+
+function parseRoleFromUsersSheet(raw) {
+  const r = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (r === "master") {
+    return "Master";
+  }
+  if (r === "admin" || r === "administrator") {
+    return "Admin";
+  }
+  if (r === "manager") {
+    return "Manager";
+  }
+  if (r === "auditor") {
+    return "Auditor";
+  }
+  if (r === "owner") {
+    return "Admin";
+  }
+  return "";
+}
+
+async function readCompanyUsersTabRecord(auth, spreadsheetId, email) {
+  const rows = await getTabValues(auth, spreadsheetId, "Users");
+  if (!rows.length) {
+    return null;
+  }
+  const headers = rows[0].map((cell) => String(cell || "").trim());
+  const emailKeyIndex = headers.findIndex((h) => safeLower(h) === "email");
+  if (emailKeyIndex === -1) {
+    return null;
+  }
+  const target = String(email || "")
+    .trim()
+    .toLowerCase();
+  for (let i = 1; i < rows.length; i += 1) {
+    const row = rows[i];
+    const rowEmail = String(row[emailKeyIndex] || "")
+      .trim()
+      .toLowerCase();
+    if (rowEmail !== target) {
+      continue;
+    }
+    const obj = {};
+    headers.forEach((h, idx) => {
+      obj[h] = String(row[idx] || "").trim();
+    });
+    const roleRaw = obj.Role || obj.role || "";
+    const role = parseRoleFromUsersSheet(roleRaw);
+    if (!role) {
+      return null;
+    }
+    const name =
+      obj["Full Name"] ||
+      obj["Full name"] ||
+      obj.Name ||
+      obj.name ||
+      rowEmail ||
+      target;
+    return { role, name: String(name).trim() || rowEmail };
+  }
+  return null;
 }
 
 function mapRowObjectToHeaders(headers, rowObject) {
@@ -1343,15 +2285,17 @@ async function appendRowObjects(auth, spreadsheetId, tabName, rowObjects) {
   }
 
   const sheets = google.sheets({ version: "v4", auth });
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${tabName}!A1`,
-    valueInputOption: "USER_ENTERED",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: {
-      values: uniqueRows.map((row) => mapRowObjectToHeaders(headers, row)),
-    },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${tabName}!A1`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: uniqueRows.map((row) => mapRowObjectToHeaders(headers, row)),
+      },
+    }),
+  );
 
   return { ok: true, written: uniqueRows.length, skipped: sanitizedRows.length - uniqueRows.length };
 }
@@ -1376,12 +2320,14 @@ async function updateRowById(auth, spreadsheetId, tabName, idColumn, id, patch) 
   }, {});
   const nextRecord = { ...currentRow, ...patch };
   const nextRow = existingHeaders.map((header) => normalizeCellValue(nextRecord[header]));
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `${tabName}!A${rowIndex + 1}`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [nextRow] },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${tabName}!A${rowIndex + 1}`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [nextRow] },
+    }),
+  );
 
   return { ok: true, updated: 1 };
 }
@@ -1404,7 +2350,11 @@ async function ensureTabsAndColumns(auth, spreadsheetId, options = {}) {
   const errors = [];
   const tabsNeedingBackup = [];
 
-  for (const tab of REQUIRED_TABS) {
+  for (let tabIndex = 0; tabIndex < REQUIRED_TABS.length; tabIndex += 1) {
+    const tab = REQUIRED_TABS[tabIndex];
+    if (tabIndex > 0) {
+      await sleep(SHEETS_READ_GAP_MS);
+    }
     if (!ensureSheetTab(workbook, tab)) {
       tabsAdded.push(tab);
     } else {
@@ -1424,11 +2374,13 @@ async function ensureTabsAndColumns(auth, spreadsheetId, options = {}) {
     await createBackupSheets(auth, spreadsheetId, tabsNeedingBackup);
   }
 
-  for (const tab of REQUIRED_TABS) {
-    const added = await ensureTabExists(auth, spreadsheetId, tab);
-    if (added) {
-      workbook = await getWorkbook(auth, spreadsheetId);
+  for (let tabIndex = 0; tabIndex < REQUIRED_TABS.length; tabIndex += 1) {
+    const tab = REQUIRED_TABS[tabIndex];
+    if (tabIndex > 0) {
+      await sleep(SHEETS_READ_GAP_MS);
     }
+    const { workbook: workbookAfterTab } = await ensureTabExists(auth, spreadsheetId, tab, workbook);
+    workbook = workbookAfterTab;
     const { addedColumns } = await ensureColumns(auth, spreadsheetId, tab, TAB_COLUMNS[tab] || []);
     if (addedColumns.length > 0) {
       columnsAdded[tab] = Array.from(new Set([...(columnsAdded[tab] || []), ...addedColumns]));
@@ -1532,20 +2484,67 @@ async function writeCompanySchedules(auth, spreadsheetId, companyFolderId, sched
     ),
   );
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: "Schedule!A:ZZ",
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: "Schedule!A1",
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [headers, ...keptRows, ...nextRows],
-    },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: "Schedule!A:ZZ",
+    }),
+  );
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: "Schedule!A1",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [headers, ...keptRows, ...nextRows],
+      },
+    }),
+  );
 
   return { ok: true, written: nextRows.length, existing: existingRecords.length };
+}
+
+async function writeCompanyUsers(auth, spreadsheetId, companyFolderId, users) {
+  await ensureTabsAndColumns(auth, spreadsheetId, { companyId: companyFolderId });
+  const rows = toObjectArray(users);
+  const timestamp = new Date().toISOString();
+  let written = 0;
+
+  for (const user of rows) {
+    const email = String(user.email || user.Email || "").trim().toLowerCase();
+    const role = String(user.role || user.Role || "").trim();
+    if (!email || !role) {
+      continue;
+    }
+
+    const userId =
+      String(user.id || user["User ID"] || "").trim() ||
+      `invite-${email.replace(/[^a-z0-9]+/gi, "-")}-${role.toLowerCase()}`;
+    const fullName = String(user.name || user["Full Name"] || email).trim() || email;
+    const createdBy = String(user.invitedBy || user["Created By"] || APP_BRAND_NAME).trim() || APP_BRAND_NAME;
+    const senderEmail = String(user.senderEmail || user["Updated By"] || "").trim();
+    const createdAt = String(user.sentAt || user["Created At"] || timestamp).trim() || timestamp;
+    const updatedAt = String(user.updatedAt || user["Updated At"] || timestamp).trim() || timestamp;
+
+    await updateRowById(auth, spreadsheetId, "Users", "User ID", userId, {
+      "Company ID": companyFolderId,
+      "Full Name": fullName,
+      Email: email,
+      Role: role,
+      "Created At": createdAt,
+      "Updated At": updatedAt,
+      "Created By": createdBy,
+      "Updated By": senderEmail || createdBy,
+      "Sync Status": String(user.syncStatus || "Synced"),
+      "Sync Attempts": Number(user.syncAttempts || 0),
+      "Last Sync Error": String(user.lastSyncError || ""),
+      "Remote Row ID": String(user.remoteRowId || ""),
+      "Schema Version": String(user.schemaVersion || CURRENT_SCHEMA_VERSION),
+    });
+    written += 1;
+  }
+
+  return { ok: true, written };
 }
 
 async function writeCompanyActions(auth, spreadsheetId, companyFolderId, actions) {
@@ -1615,18 +2614,22 @@ async function writeCompanyActions(auth, spreadsheetId, companyFolderId, actions
     }),
   );
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: "Actions!A:ZZ",
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: "Actions!A1",
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [headers, ...keptRows, ...nextRows],
-    },
-  });
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: "Actions!A:ZZ",
+    }),
+  );
+  await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: "Actions!A1",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [headers, ...keptRows, ...nextRows],
+      },
+    }),
+  );
 
   return { ok: true, written: nextRows.length };
 }
@@ -1772,15 +2775,24 @@ async function validateWorkspace(auth, input) {
       validation.lastRepairedAt = config.lastRepairedAt || "";
 
       if (!validation.schemaVersion) {
-        validation.repairableIssues.push("The Config tab does not store a schemaVersion yet.");
+        validation.repairableIssues.push("The Config tab does not record the sheet format version yet.");
       } else if (validation.schemaVersion !== CURRENT_SCHEMA_VERSION) {
-        validation.warnings.push(`Schema version mismatch: found ${validation.schemaVersion}, expected ${CURRENT_SCHEMA_VERSION}.`);
-        validation.repairableIssues.push("The Company Master Sheet schema version is behind the app version.");
+        validation.warnings.push(
+          `Company sheet format mismatch: on sheet ${validation.schemaVersion}, this app expects ${CURRENT_SCHEMA_VERSION}.`,
+        );
+        validation.repairableIssues.push("The company master sheet format is older than this app version.");
       }
 
-      for (const [tab, headers] of Object.entries(TAB_COLUMNS)) {
-        const rows = await getTabValues(auth, sheetId, tab, "A1:ZZ2");
-        const existingHeaders = rows[0] || [];
+      const tabColumnEntries = Object.entries(TAB_COLUMNS);
+      for (let entryIndex = 0; entryIndex < tabColumnEntries.length; entryIndex += 1) {
+        const [tab, headers] = tabColumnEntries[entryIndex];
+        let existingHeaders = Array.isArray(payload.headerRowByTab?.[tab]) ? payload.headerRowByTab[tab] : null;
+        if (!existingHeaders) {
+          if (entryIndex > 0) {
+            await sleep(SHEETS_READ_GAP_MS);
+          }
+          existingHeaders = (await getTabValues(auth, sheetId, tab, "A1:ZZ2"))[0] || [];
+        }
         const missing = headers.filter(
           (header) => !existingHeaders.some((existing) => safeLower(existing) === safeLower(header)),
         );
@@ -1828,25 +2840,48 @@ async function validateWorkspace(auth, input) {
 
 async function readCompanySheetById(auth, spreadsheetId) {
   const sheets = google.sheets({ version: "v4", auth });
-  const workbook = await sheets.spreadsheets.get({
-    spreadsheetId,
-    fields: "properties(title),sheets(properties(title))",
-  });
+  const workbook = await withSheetsQuotaRetry(() =>
+    sheets.spreadsheets.get({
+      spreadsheetId,
+      fields: "properties(title),sheets(properties(title))",
+    }),
+  );
 
   const availableTabs = workbook.data.sheets?.map((sheet) => sheet.properties?.title).filter(Boolean) || [];
   const tabData = {};
+  /** First row per required tab (for validation without a second values.get pass). */
+  const headerRowByTab = {};
 
-  for (const tab of REQUIRED_TABS) {
+  for (let tabIndex = 0; tabIndex < REQUIRED_TABS.length; tabIndex += 1) {
+    const tab = REQUIRED_TABS[tabIndex];
+    if (tabIndex > 0) {
+      await sleep(SHEETS_READ_GAP_MS);
+    }
     if (!availableTabs.some((name) => safeLower(name) === safeLower(tab))) {
       tabData[tab] = [];
+      headerRowByTab[tab] = [];
       continue;
     }
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${tab}!A1:ZZ500`,
-    });
-    tabData[tab] = rowsToRecords(response.data.values || []);
+    const response = await withSheetsQuotaRetry(() =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${tab}!A1:ZZ500`,
+      }),
+    );
+    const rawValues = response.data.values || [];
+    headerRowByTab[tab] = rawValues[0] || [];
+    let records = rowsToRecords(rawValues);
+    if (safeLower(tab) === "config") {
+      records = records.map((row) => {
+        const key = String(row.Key || row.key || "").trim();
+        if (key.toLowerCase().startsWith("userauth.")) {
+          return { ...row, Value: "", value: "" };
+        }
+        return row;
+      });
+    }
+    tabData[tab] = records;
   }
 
   return {
@@ -1855,6 +2890,7 @@ async function readCompanySheetById(auth, spreadsheetId) {
     sheetName: workbook.data.properties?.title || "Company Master Sheet",
     tabs: availableTabs,
     data: tabData,
+    headerRowByTab,
   };
 }
 
@@ -1872,11 +2908,11 @@ app.get("/api/google/status", async (_req, res) => {
 
   let companies = [];
   let onboardingSource = {
-    configured: false,
-    formId: "",
-    formName: "",
-    sheetId: "",
-    sheetName: "",
+    configured: Boolean(requiredEnv.GOOGLE_ONBOARDING_FORM_ID || requiredEnv.GOOGLE_ONBOARDING_SHEET_ID),
+    formId: requiredEnv.GOOGLE_ONBOARDING_FORM_ID || "",
+    formName: requiredEnv.GOOGLE_ONBOARDING_FORM_ID ? "QMS Company Onboarding Form" : "",
+    sheetId: requiredEnv.GOOGLE_ONBOARDING_SHEET_ID || "",
+    sheetName: requiredEnv.GOOGLE_ONBOARDING_SHEET_ID ? "QMS Company Onboarding Responses" : "",
   };
 
   if (authed && envConfigured()) {
@@ -1909,7 +2945,7 @@ app.get("/api/onboarding/submissions", async (_req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before loading onboarding submissions.",
+      error: "Please connect Google before loading onboarding submissions.",
     });
   }
 
@@ -1937,7 +2973,7 @@ app.get("/api/company-folder/:folderId", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before checking the company folder.",
+      error: "Please connect Google before checking the company folder.",
     });
   }
 
@@ -1958,7 +2994,7 @@ app.get("/api/google-file/:fileId", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before checking Google Drive items.",
+      error: "Please connect Google before checking Google Drive items.",
     });
   }
 
@@ -1979,7 +3015,7 @@ app.get("/api/google-forms-folder/:folderId", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before checking the audit forms folder.",
+      error: "Please connect Google before checking the audit forms folder.",
     });
   }
 
@@ -2004,7 +3040,7 @@ app.get("/api/company-sheet/:folderId", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before loading the company master sheet.",
+      error: "Please connect Google before loading the company master sheet.",
     });
   }
 
@@ -2025,7 +3061,7 @@ app.get("/api/google-sheet-by-id/:sheetId", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before loading the company master sheet.",
+      error: "Please connect Google before loading the company master sheet.",
     });
   }
 
@@ -2046,7 +3082,7 @@ app.post("/api/google-sheet-by-id/:sheetId/schedules", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving schedules.",
+      error: "Please connect Google before saving schedules.",
     });
   }
 
@@ -2071,13 +3107,44 @@ app.post("/api/google-sheet-by-id/:sheetId/schedules", async (req, res) => {
   }
 });
 
+app.post("/api/google-sheet-by-id/:sheetId/users", async (req, res) => {
+  const authed = getAuthedClient();
+
+  if (!envConfigured() || !authed) {
+    return res.status(401).json({
+      ok: false,
+      error: "Please connect Google before saving users.",
+    });
+  }
+
+  const companyFolderId = String(req.body?.companyFolderId || "").trim();
+  const users = toObjectArray(req.body?.users);
+
+  if (!companyFolderId) {
+    return res.status(400).json({
+      ok: false,
+      error: "Company folder ID is required before saving users.",
+    });
+  }
+
+  try {
+    const payload = await writeCompanyUsers(authed, req.params.sheetId, companyFolderId, users);
+    return res.json(payload);
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to save users to the company master sheet.",
+    });
+  }
+});
+
 app.post("/api/google-sheet-by-id/:sheetId/actions", async (req, res) => {
   const authed = getAuthedClient();
 
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving actions.",
+      error: "Please connect Google before saving actions.",
     });
   }
 
@@ -2108,7 +3175,7 @@ app.post("/api/google-sheet-by-id/:sheetId/action-comments", async (req, res) =>
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving action history.",
+      error: "Please connect Google before saving action history.",
     });
   }
 
@@ -2139,7 +3206,7 @@ app.post("/api/google-sheet-by-id/:sheetId/audit-results", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving audit results.",
+      error: "Please connect Google before saving audit results.",
     });
   }
 
@@ -2170,7 +3237,7 @@ app.post("/api/google-sheet-by-id/:sheetId/audit-findings", async (req, res) => 
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving audit findings.",
+      error: "Please connect Google before saving audit findings.",
     });
   }
 
@@ -2201,7 +3268,7 @@ app.post("/api/google-sheet-by-id/:sheetId/evidence", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving evidence.",
+      error: "Please connect Google before saving evidence.",
     });
   }
 
@@ -2227,13 +3294,75 @@ app.post("/api/google-sheet-by-id/:sheetId/evidence", async (req, res) => {
   }
 });
 
+app.post("/api/google-sheet-by-id/:sheetId/incidents", async (req, res) => {
+  const authed = getAuthedClient();
+
+  if (!envConfigured() || !authed) {
+    return res.status(401).json({
+      ok: false,
+      error: "Please connect Google before saving incidents.",
+    });
+  }
+
+  const companyFolderId = String(req.body?.companyFolderId || "").trim();
+  const incidents = toObjectArray(req.body?.incidents);
+
+  if (!companyFolderId) {
+    return res.status(400).json({
+      ok: false,
+      error: "Company folder ID is required before saving incidents.",
+    });
+  }
+
+  try {
+    const payload = await appendRowObjects(authed, req.params.sheetId, "Incidents", incidents);
+    return res.json(payload);
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to save incidents to the company master sheet.",
+    });
+  }
+});
+
+app.post("/api/google-sheet-by-id/:sheetId/incident-actions", async (req, res) => {
+  const authed = getAuthedClient();
+
+  if (!envConfigured() || !authed) {
+    return res.status(401).json({
+      ok: false,
+      error: "Please connect Google before saving incident actions.",
+    });
+  }
+
+  const companyFolderId = String(req.body?.companyFolderId || "").trim();
+  const incidentActions = toObjectArray(req.body?.incidentActions);
+
+  if (!companyFolderId) {
+    return res.status(400).json({
+      ok: false,
+      error: "Company folder ID is required before saving incident actions.",
+    });
+  }
+
+  try {
+    const payload = await appendRowObjects(authed, req.params.sheetId, "IncidentActions", incidentActions);
+    return res.json(payload);
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to save incident actions to the company master sheet.",
+    });
+  }
+});
+
 app.post("/api/google-sheet-by-id/:sheetId/sync-log", async (req, res) => {
   const authed = getAuthedClient();
 
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before saving sync history.",
+      error: "Please connect Google before saving sync history.",
     });
   }
 
@@ -2264,7 +3393,7 @@ app.post("/api/google-sheet-by-id/:sheetId/audit-bundle", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before syncing audits.",
+      error: "Please connect Google before syncing audits.",
     });
   }
 
@@ -2299,7 +3428,7 @@ app.post("/api/google-sheet-by-id/:sheetId/validate", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before validating the workspace.",
+      error: "Please connect Google before checking the workspace.",
     });
   }
 
@@ -2316,7 +3445,7 @@ app.post("/api/google-sheet-by-id/:sheetId/validate", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       ok: false,
-      error: error instanceof Error ? error.message : "Unable to validate the workspace.",
+      error: error instanceof Error ? error.message : "Unable to check the workspace.",
     });
   }
 });
@@ -2327,7 +3456,7 @@ app.post("/api/google-sheet-by-id/:sheetId/repair", async (req, res) => {
   if (!envConfigured() || !authed) {
     return res.status(401).json({
       ok: false,
-      error: "Google connection is required before repairing the workspace.",
+      error: "Please connect Google before fixing the workspace.",
     });
   }
 
@@ -2349,15 +3478,22 @@ app.post("/api/google-sheet-by-id/:sheetId/repair", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       ok: false,
-      error: error instanceof Error ? error.message : "Unable to repair the workspace.",
+      error: error instanceof Error ? error.message : "Unable to fix the workspace.",
     });
   }
 });
 
+/**
+ * API route protection (paid pilot) — classification:
+ * - publicSafe: GET /api/health, GET /api/readiness, OAuth browser callbacks
+ * - inviteToken: app-hosted invite fetch/complete; new-company POST (may run before API Google is connected)
+ * - googleSession: requireGoogleSession on company-user invite POST (SPA already requires Google)
+ * - deferredAuth: legacy onboarding + notification POSTs — same-origin trust today; rate-limited (see docs/security-hardening-plan.md)
+ */
 app.post("/api/onboarding/invite", async (req, res) => {
   const toEmail = String(req.body?.email || "").trim().toLowerCase();
   const inviteRole = String(req.body?.role || "").trim();
-  const invitedBy = String(req.body?.invitedBy || "QMS Precast").trim();
+  const invitedBy = String(req.body?.invitedBy || APP_BRAND_NAME).trim();
   const onboardingFormId = String(req.body?.onboardingFormId || "").trim();
 
   if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
@@ -2371,7 +3507,22 @@ app.post("/api/onboarding/invite", async (req, res) => {
   }
 
   try {
-    const onboardingFormUrl = `https://docs.google.com/forms/d/${onboardingFormId}/viewform`;
+    const onboardingFormUrl = buildOnboardingFormViewUrl(onboardingFormId);
+    const manualFallback = () => ({
+      ok: true,
+      delivery: "manual",
+      senderEmail: requiredEnv.SMTP_FROM_EMAIL || "",
+      onboardingUrl: onboardingFormUrl,
+      mailtoUrl: buildOnboardingInviteMailto({
+        toEmail,
+        inviteRole,
+        invitedBy,
+        onboardingFormUrl,
+      }),
+    });
+    if (!emailConfigured()) {
+      return res.json(manualFallback());
+    }
     await sendOnboardingInviteEmail({
       toEmail,
       inviteRole,
@@ -2379,13 +3530,497 @@ app.post("/api/onboarding/invite", async (req, res) => {
       onboardingFormUrl,
     });
 
-    return res.json({ ok: true });
+    return res.json({ ok: true, delivery: "smtp", senderEmail: requiredEnv.SMTP_FROM_EMAIL || "" });
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
+    console.warn("[smtp] invite send failed; using manual fallback", {
+      ...smtpConfigSummary(),
+      ...smtpCredentialDiagnostics(),
       error: error instanceof Error ? error.message : "Unable to send onboarding invite email.",
     });
+    const onboardingFormUrl = buildOnboardingFormViewUrl(onboardingFormId);
+    return res.json({
+      ok: true,
+      delivery: "manual",
+      senderEmail: requiredEnv.SMTP_FROM_EMAIL || "",
+      onboardingUrl: onboardingFormUrl,
+      mailtoUrl: buildOnboardingInviteMailto({
+        toEmail,
+        inviteRole,
+        invitedBy,
+        onboardingFormUrl,
+      }),
+    });
   }
+});
+
+app.post("/api/onboarding/app-invites/new-company", (req, res) => {
+  const run = async () => {
+    const toEmail = String(req.body?.email || "").trim().toLowerCase();
+    const invitedBy = String(req.body?.invitedBy || APP_BRAND_NAME).trim();
+
+    if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
+      res.status(400).json({ ok: false, error: "A valid email address is required." });
+      return;
+    }
+
+    try {
+      const { id } = createInviteRecord({
+        kind: "new_company",
+        email: toEmail,
+        invitedBy,
+      });
+      const onboardingUrl = buildAppOnboardingUrl(id);
+      const subjectLine = `${APP_BRAND_NAME} — set up your company workspace`;
+      const manual = () => {
+        res.json({
+          ok: true,
+          delivery: "manual",
+          tokenId: id,
+          onboardingUrl,
+          mailtoUrl: buildAppOnboardingInviteMailto({
+            toEmail,
+            subjectLine,
+            invitedBy,
+            onboardingUrl,
+          }),
+        });
+      };
+      if (!emailConfigured()) {
+        manual();
+        return;
+      }
+      try {
+        await sendAppHostedOnboardingEmail({
+          toEmail,
+          subjectLine,
+          invitedBy,
+          onboardingUrl,
+          htmlIntro: `You have been invited to create a new company workspace in <strong>${APP_BRAND_NAME}</strong>.`,
+        });
+        res.json({ ok: true, delivery: "smtp", tokenId: id, onboardingUrl });
+      } catch (err) {
+        console.warn("[smtp] app new-company invite failed; manual fallback", err);
+        manual();
+      }
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Unable to create onboarding invite.",
+      });
+    }
+  };
+
+  void run().catch((err) => {
+    console.error("[api] POST /api/onboarding/app-invites/new-company", err);
+    if (!res.headersSent) {
+      try {
+        res.status(500).json({
+          ok: false,
+          error: err instanceof Error ? err.message : "Unable to create onboarding invite.",
+        });
+      } catch (sendErr) {
+        console.error("[api] failed to write JSON error for new-company invite", sendErr);
+      }
+    }
+  });
+});
+
+app.post("/api/onboarding/app-invites/company-user", requireGoogleSession, (req, res) => {
+  const run = async () => {
+    const toEmail = String(req.body?.email || "").trim().toLowerCase();
+    const inviteRole = String(req.body?.role || "").trim();
+    const invitedBy = String(req.body?.invitedBy || APP_BRAND_NAME).trim();
+    const companyFolderId = String(req.body?.companyFolderId || "").trim();
+    const masterSheetId = String(req.body?.masterSheetId || "").trim();
+    const companyName = String(req.body?.companyName || "").trim();
+
+    if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
+      res.status(400).json({ ok: false, error: "A valid email address is required." });
+      return;
+    }
+    if (!["Admin", "Manager", "Auditor"].includes(inviteRole)) {
+      res.status(400).json({ ok: false, error: "Role must be Admin, Manager, or Auditor." });
+      return;
+    }
+    if (!companyFolderId || !masterSheetId) {
+      res.status(400).json({
+        ok: false,
+        error: "companyFolderId and masterSheetId are required.",
+      });
+      return;
+    }
+
+    try {
+      const { id } = createInviteRecord({
+        kind: "company_user",
+        email: toEmail,
+        role: inviteRole,
+        invitedBy,
+        companyFolderId,
+        masterSheetId,
+        companyName,
+      });
+      const onboardingUrl = buildAppOnboardingUrl(id);
+      const subjectLine = `${APP_BRAND_NAME} — join ${companyName || "your company"}`;
+      const manual = () => {
+        res.json({
+          ok: true,
+          delivery: "manual",
+          tokenId: id,
+          onboardingUrl,
+          mailtoUrl: buildAppOnboardingInviteMailto({
+            toEmail,
+            subjectLine,
+            invitedBy,
+            onboardingUrl,
+          }),
+        });
+      };
+      if (!emailConfigured()) {
+        manual();
+        return;
+      }
+      try {
+        await sendAppHostedOnboardingEmail({
+          toEmail,
+          subjectLine,
+          invitedBy,
+          onboardingUrl,
+          htmlIntro: `You have been invited to join <strong>${companyName || "your company"}</strong> in ${APP_BRAND_NAME} as <strong>${inviteRole}</strong>.`,
+        });
+        res.json({ ok: true, delivery: "smtp", tokenId: id, onboardingUrl });
+      } catch (err) {
+        console.warn("[smtp] app company-user invite failed; manual fallback", err);
+        manual();
+      }
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Unable to create onboarding invite.",
+      });
+    }
+  };
+
+  void run().catch((err) => {
+    console.error("[api] POST /api/onboarding/app-invites/company-user", err);
+    if (!res.headersSent) {
+      try {
+        res.status(500).json({
+          ok: false,
+          error: err instanceof Error ? err.message : "Unable to create onboarding invite.",
+        });
+      } catch (sendErr) {
+        console.error("[api] failed to write JSON error for company-user invite", sendErr);
+      }
+    }
+  });
+});
+
+app.get("/api/onboarding/app-invites/:tokenId", async (req, res) => {
+  const tokenId = String(req.params.tokenId || "").trim();
+  if (!tokenId) {
+    return res.status(400).json({ ok: false, error: "Invite token is required." });
+  }
+  const recordRaw = getInviteRecord(tokenId);
+  if (!recordRaw) {
+    return res.status(404).json({ ok: false, error: "This invite link is not valid." });
+  }
+  const record = normalizeInviteProvisionFields(recordRaw);
+  if (record.consumedAt) {
+    const folderId = record.provisionDriveFolderId;
+    const consumedBody = {
+      ok: false,
+      error: "This invite has already been used.",
+      provisionStatus: record.provisionStatus || "succeeded",
+      outcome: record.kind === "new_company" ? "new_company" : "company_user",
+      ...(record.kind === "new_company" && folderId
+        ? {
+            folderUrl: `https://drive.google.com/drive/folders/${folderId}`,
+            companyFolderId: folderId,
+            masterSheetId: record.provisionMasterSheetId || "",
+          }
+        : {}),
+    };
+    return res.status(410).json(consumedBody);
+  }
+  if (Date.now() > record.expiresAt) {
+    return res.status(410).json({ ok: false, error: "This invite has expired." });
+  }
+  const provisionExtras = {
+    provisionStatus: record.provisionStatus,
+    provisionStartedAt: record.provisionStartedAt,
+    provisionFinishedAt: record.provisionFinishedAt,
+    provisionError: record.provisionError || "",
+    provisionDriveFolderId: record.provisionDriveFolderId || "",
+    provisionMasterSheetId: record.provisionMasterSheetId || "",
+  };
+  const payload =
+    record.kind === "new_company"
+      ? {
+          ok: true,
+          kind: "new_company",
+          email: record.email,
+          invitedBy: record.invitedBy || "",
+          ...provisionExtras,
+        }
+      : {
+          ok: true,
+          kind: "company_user",
+          email: record.email,
+          role: record.role,
+          invitedBy: record.invitedBy || "",
+          companyName: record.companyName || "",
+          ...provisionExtras,
+        };
+  return res.json(payload);
+});
+
+app.post("/api/onboarding/app-invites/:tokenId/complete", async (req, res) => {
+  try {
+    const authed = getAuthedClient();
+    const tokenId = String(req.params.tokenId || "").trim();
+    const password = String(req.body?.password || "");
+    const fullName = String(req.body?.fullName || "").trim();
+    const companyName = String(req.body?.companyName || "").trim();
+    const confirmPassword = String(req.body?.confirmPassword || "");
+
+    if (!tokenId) {
+      return res.status(400).json({ ok: false, error: "Invite token is required." });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ ok: false, error: "Password must be at least 8 characters." });
+    }
+    if (confirmPassword && confirmPassword !== password) {
+      return res.status(400).json({ ok: false, error: "Password confirmation does not match." });
+    }
+    if (!fullName) {
+      return res.status(400).json({ ok: false, error: "Full name is required." });
+    }
+
+    const missingGoogleEnv = collectMissingGoogleEnvKeys();
+    if (missingGoogleEnv.length > 0) {
+      return res.status(401).json({
+        ok: false,
+        error: `Invite completion needs Google Drive configured on the API server. Missing environment variables: ${missingGoogleEnv.join(
+          ", ",
+        )}. Add them (for example in a .env file next to package.json), restart \`npm run server\`, then try again.`,
+      });
+    }
+    if (!authed) {
+      const frontend = requiredEnv.FRONTEND_URL.replace(/\/$/, "");
+      return res.status(401).json({
+        ok: false,
+        error: `Invite completion uses the API server's Google account to create Drive folders and sheet rows. On the machine where the API runs, sign in once: open http://127.0.0.1:${port}/auth/google/login and finish consent. The return URL must match GOOGLE_REDIRECT_URI in your server settings. If you use Vite dev with the proxy, ${frontend}/auth/google/login also works while \`npm run dev\` and \`npm run server\` are both running. Then click Complete onboarding again.`,
+      });
+    }
+
+    await runWithInviteCompletionLock(tokenId, async () => {
+      let record = normalizeInviteProvisionFields(getInviteRecord(tokenId));
+      if (!record) {
+        res.status(404).json({ ok: false, error: "This invite link is not valid." });
+        return;
+      }
+
+      if (record.consumedAt) {
+        const status = record.provisionStatus || "succeeded";
+        if (status === "succeeded") {
+          if (record.kind === "new_company") {
+            const fid = record.provisionDriveFolderId;
+            res.json({
+              ok: true,
+              outcome: "new_company",
+              companyFolderId: fid || "",
+              masterSheetId: record.provisionMasterSheetId || "",
+              folderUrl: fid ? `https://drive.google.com/drive/folders/${fid}` : "",
+            });
+            return;
+          }
+          if (record.kind === "company_user") {
+            res.json({ ok: true, outcome: "company_user" });
+            return;
+          }
+        }
+        res.status(410).json({ ok: false, error: "This invite has already been used." });
+        return;
+      }
+
+      if (Date.now() > record.expiresAt) {
+        res.status(410).json({ ok: false, error: "This invite has expired." });
+        return;
+      }
+
+      if (record.provisionStatus === "running" && record.provisionStartedAt != null) {
+        const elapsed = Date.now() - Number(record.provisionStartedAt);
+        if (elapsed >= 0 && elapsed < INVITE_PROVISION_STALE_RUNNING_MS) {
+          res.status(202).json({
+            ok: false,
+            provisionStatus: "running",
+            error: "Workspace setup is already in progress. Please try again shortly.",
+          });
+          return;
+        }
+        patchInviteRecord(tokenId, {
+          provisionStatus: "failed",
+          provisionFinishedAt: Date.now(),
+          provisionError:
+            "The previous workspace setup attempt appears stuck or timed out. You can try completing onboarding again.",
+        });
+      }
+
+      if (record.kind === "new_company" && !companyName) {
+        res.status(400).json({ ok: false, error: "Company name is required." });
+        return;
+      }
+
+      try {
+        /**
+         * On failure after Drive/Sheets partial work we mark failed and do NOT consume the invite,
+         * so the same token can be retried (may orphan folders — same as pre–Phase 2 behaviour).
+         * Success writes succeeded + consumedAt in one patch so GET never exposes a succeeded unconsumed window.
+         */
+        patchInviteRecord(tokenId, {
+          provisionStatus: "running",
+          provisionStartedAt: Date.now(),
+          provisionFinishedAt: null,
+          provisionError: null,
+        });
+
+        if (record.kind === "new_company") {
+          const inviteEmailDomain = String(record.email || "").includes("@")
+            ? String(record.email)
+                .split("@")
+                .pop()
+                ?.toLowerCase() || ""
+            : "";
+          console.log("[invite] new_company provision start", {
+            tokenIdPrefix: tokenId.slice(0, 8),
+            companyNameLen: companyName.trim().length,
+            inviteEmailDomain: inviteEmailDomain || undefined,
+          });
+          const result = await provisionNewCompanyWorkspace(
+            authed,
+            {
+              companyName,
+              adminEmail: record.email,
+              adminFullName: fullName,
+              password,
+            },
+            async (progressPatch) => {
+              patchInviteRecord(tokenId, progressPatch);
+            },
+          );
+          console.log("[invite] new_company provision done", {
+            companyFolderId: result.companyFolderId,
+            masterSheetId: result.masterSheetId,
+          });
+          patchInviteRecord(tokenId, {
+            provisionStatus: "succeeded",
+            provisionFinishedAt: Date.now(),
+            provisionError: null,
+            provisionDriveFolderId: result.companyFolderId,
+            provisionMasterSheetId: result.masterSheetId,
+            consumedAt: Date.now(),
+          });
+          res.json({
+            ok: true,
+            outcome: "new_company",
+            companyFolderId: result.companyFolderId,
+            masterSheetId: result.masterSheetId,
+            folderUrl: `https://drive.google.com/drive/folders/${result.companyFolderId}`,
+          });
+          return;
+        }
+
+        if (record.kind === "company_user") {
+          console.log("[invite] company_user row start", {
+            tokenIdPrefix: tokenId.slice(0, 8),
+            masterSheetId: record.masterSheetId,
+            role: record.role,
+          });
+          const userId = `app-${String(record.email || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/gi, "-")}-${String(record.role || "").toLowerCase()}`;
+          await writeCompanyUsers(authed, record.masterSheetId, record.companyFolderId, [
+            {
+              id: userId,
+              email: record.email,
+              role: record.role,
+              name: fullName,
+              invitedBy: record.invitedBy || APP_BRAND_NAME,
+              senderEmail: "",
+              sentAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              syncStatus: "Synced",
+            },
+          ]);
+          const authKey = `UserAuth.${String(record.email || "").toLowerCase()}`;
+          await updateConfig(authed, record.masterSheetId, {
+            ...(await getConfig(authed, record.masterSheetId)),
+            [authKey]: hashPassword(password),
+          });
+          patchInviteRecord(tokenId, {
+            provisionStatus: "succeeded",
+            provisionFinishedAt: Date.now(),
+            provisionError: null,
+            consumedAt: Date.now(),
+          });
+          console.log("[invite] company_user row done", { tokenIdPrefix: tokenId.slice(0, 8) });
+          res.json({ ok: true, outcome: "company_user" });
+          return;
+        }
+
+        patchInviteRecord(tokenId, {
+          provisionStatus: "failed",
+          provisionFinishedAt: Date.now(),
+          provisionError: "Unknown invite type.",
+        });
+        res.status(400).json({ ok: false, error: "Unknown invite type." });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Unable to complete onboarding.";
+        console.error("[invite] complete provision stage failed", {
+          tokenIdPrefix: tokenId.slice(0, 8),
+          inviteKind: record?.kind,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        patchInviteRecord(tokenId, {
+          provisionStatus: "failed",
+          provisionFinishedAt: Date.now(),
+          provisionError: msg,
+        });
+        res.status(500).json({
+          ok: false,
+          provisionStatus: "failed",
+          error: msg,
+        });
+      }
+    });
+  } catch (error) {
+    console.error("[invite] complete unexpected failure", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    if (!res.headersSent) {
+      return res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Unable to complete onboarding.",
+      });
+    }
+  }
+});
+
+app.get("/api/invites/smtp/status", smtpStatusGetRateLimit, async (_req, res) => {
+  const config = smtpConfigSummary();
+  const diagnostics = smtpCredentialDiagnostics();
+  const verification = await verifySmtpTransport();
+  return res.json({
+    ok: verification.ok,
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    from: config.from,
+    secure: config.secure,
+    verification,
+    diagnostics,
+  });
 });
 
 app.post("/api/manager/non-compliance-alert", async (req, res) => {
@@ -2461,9 +4096,51 @@ app.post("/api/ncr/escalation-alert", async (req, res) => {
   }
 });
 
+app.post("/api/incidents/notify", async (req, res) => {
+  const incidentId = String(req.body?.incidentId || "").trim();
+  const incidentType = String(req.body?.incidentType || "").trim();
+  const severity = String(req.body?.severity || "").trim();
+  const reporter = String(req.body?.reporter || "").trim();
+  const department = String(req.body?.department || "").trim();
+  const location = String(req.body?.location || "").trim();
+  const status = String(req.body?.status || "Open").trim();
+  const incidentDate = String(req.body?.incidentDate || "").trim();
+  const incidentTime = String(req.body?.incidentTime || "").trim();
+  const priority = String(req.body?.priority || "Normal").trim();
+  const escalated = Boolean(req.body?.escalated);
+  const viewLink = String(req.body?.viewLink || "").trim();
+
+  if (!incidentId || !incidentType || !severity || !reporter || !department || !location || !incidentDate) {
+    return res.status(400).json({ ok: false, error: "Missing required incident notification fields." });
+  }
+
+  try {
+    await sendIncidentReportEmail({
+      incidentId,
+      incidentType,
+      severity,
+      reporter,
+      department,
+      location,
+      status,
+      incidentDate,
+      incidentTime,
+      priority,
+      escalated,
+      viewLink,
+    });
+    return res.json({ ok: true, escalated });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to send incident notification email.",
+    });
+  }
+});
+
 app.get("/auth/google/login", (req, res) => {
   if (!envConfigured()) {
-    return res.status(400).send("Google OAuth environment variables are missing.");
+    return res.status(400).send("Google sign-in environment variables are missing.");
   }
 
   const auth = createOAuthClient();
@@ -2497,7 +4174,7 @@ app.get("/auth/google/callback", async (req, res) => {
     if ((!signedState || signedState !== state) && !localDevBypass) {
       return sendCallbackPage(res, {
         title: "Google connection could not be completed",
-        message: "The sign-in state could not be verified. Please start the connection again from QMS Precast.",
+        message: `The sign-in state could not be verified. Please start the connection again from ${APP_BRAND_NAME}.`,
         success: false,
       });
     }
@@ -2524,15 +4201,15 @@ app.get("/auth/google/callback", async (req, res) => {
     res.clearCookie("qms_google_state");
     return sendCallbackPage(res, {
       title: "Google connection completed",
-      message: "Your Google Drive root folder is now linked. Returning to QMS Precast now.",
+      message: `Your Google Drive root folder is now linked. Returning to ${APP_BRAND_NAME} now.`,
       success: true,
-      redirectUrl: "http://127.0.0.1:4173/?google=connected",
+      redirectUrl: `${requiredEnv.FRONTEND_URL.replace(/\/$/, "")}/?google=connected`,
     });
   } catch (error) {
-    console.error("Google OAuth callback failed:", error);
+    console.error("Google sign-in callback failed:", error);
     return sendCallbackPage(res, {
       title: "Google connection failed",
-      message: error instanceof Error ? error.message : "Google OAuth callback failed.",
+      message: error instanceof Error ? error.message : "Google sign-in could not be completed.",
       success: false,
     });
   }
@@ -2554,14 +4231,162 @@ app.post("/auth/google/logout", async (_req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/auth/company/login", requireGoogleSession, async (req, res) => {
+  try {
+    const auth = getAuthedClient();
+    const masterSheetId = String(req.body?.masterSheetId || "").trim();
+    const email = String(req.body?.email || req.body?.username || "")
+      .trim()
+      .toLowerCase();
+    const password = String(req.body?.password || "");
+    if (!masterSheetId || !email || !password) {
+      return res.status(400).json({ ok: false, error: "Master sheet ID, email, and password are required." });
+    }
+    if (!email.includes("@")) {
+      return res.status(400).json({ ok: false, error: "A valid email address is required." });
+    }
+    const login = await verifyUserAuthLoginOrMigrate(auth, masterSheetId, email, password, getConfig, updateConfig);
+    if (!login.ok) {
+      return res.status(401).json({ ok: false, error: "Invalid email or password." });
+    }
+    const rec = await readCompanyUsersTabRecord(auth, masterSheetId, email);
+    if (!rec) {
+      return res.status(403).json({
+        ok: false,
+        error: "This account is not listed on the company Users tab or the role is not supported.",
+      });
+    }
+    const payload = JSON.stringify({
+      v: 1,
+      email,
+      masterSheetId,
+      role: rec.role,
+      name: rec.name,
+    });
+    res.cookie(COMPANY_SESSION_COOKIE, payload, getSessionCookieOptions({ maxAge: COMPANY_SESSION_MS }));
+    return res.json({
+      ok: true,
+      user: { email, role: rec.role, name: rec.name },
+    });
+  } catch (error) {
+    console.error("[company-auth] login failed:", error);
+    return res.status(500).json({ ok: false, error: "Unable to complete sign in." });
+  }
+});
+
+app.post("/api/auth/company/logout", (req, res) => {
+  res.clearCookie(COMPANY_SESSION_COOKIE, getSessionCookieOptions());
+  return res.json({ ok: true });
+});
+
+app.get("/api/auth/company/session", requireGoogleSession, async (req, res) => {
+  try {
+    const raw = req.signedCookies?.[COMPANY_SESSION_COOKIE];
+    if (!raw || typeof raw !== "string") {
+      return res.status(401).json({ ok: false, error: "No company session." });
+    }
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return res.status(401).json({ ok: false, error: "Invalid session." });
+    }
+    if (data.v !== 1 || !data.email || !data.masterSheetId) {
+      return res.status(401).json({ ok: false, error: "Invalid session." });
+    }
+    const auth = getAuthedClient();
+    const rec = await readCompanyUsersTabRecord(auth, data.masterSheetId, data.email);
+    if (!rec) {
+      res.clearCookie(COMPANY_SESSION_COOKIE, getSessionCookieOptions());
+      return res.status(401).json({ ok: false, error: "Session invalid." });
+    }
+    return res.json({
+      ok: true,
+      user: { email: data.email, role: rec.role, name: rec.name },
+    });
+  } catch (error) {
+    console.error("[company-auth] session read failed:", error);
+    return res.status(401).json({ ok: false, error: "Session invalid." });
+  }
+});
+
+app.post("/api/tools/migrate-userauth-passwords", requireGoogleSession, async (req, res) => {
+  try {
+    const toolSecret = String(process.env.BERT_TOOL_SECRET || "").trim();
+    if (!toolSecret) {
+      return res.status(404).json({ ok: false, error: "Not found." });
+    }
+    const headerSecret = String(req.headers["x-bert-tool-secret"] || "").trim();
+    if (headerSecret !== toolSecret) {
+      return res.status(403).json({ ok: false, error: "Forbidden." });
+    }
+    const masterSheetId = String(req.body?.masterSheetId || "").trim();
+    if (!masterSheetId) {
+      return res.status(400).json({ ok: false, error: "masterSheetId is required." });
+    }
+    const auth = getAuthedClient();
+    const result = await migrateAllPlainUserAuthKeys(auth, masterSheetId, getConfig, updateConfig);
+    return res.json({ ok: true, migrated: result.migrated });
+  } catch (error) {
+    console.error("[tools] migrate-userauth-passwords failed:", error);
+    return res.status(500).json({ ok: false, error: "Migration failed." });
+  }
+});
+
+assertSafeProductionBoot();
+
 app.get("/api/health", (_req, res) => {
-  res.json({
-    ok: true,
-    configured: envConfigured(),
-    sharedDriveId: requiredEnv.GOOGLE_SHARED_DRIVE_ID || "",
+  res.json(getHealthPayload());
+});
+
+app.get("/api/readiness", (_req, res) => {
+  const body = getReadinessPayload();
+  const statusCode = body.ready ? 200 : isProductionRuntime() ? 503 : 200;
+  res.status(statusCode).json(body);
+});
+
+app.use((err, req, res, _next) => {
+  if (res.headersSent) {
+    console.error("[express] error after headers sent:", err);
+    return;
+  }
+  res.status(500).json({
+    ok: false,
+    error: err instanceof Error ? err.message : "Internal server error",
   });
 });
 
-app.listen(port, () => {
-  console.log(`QMS backend listening on http://127.0.0.1:${port}`);
+const httpServer = app.listen(port, "0.0.0.0", () => {
+  console.log(
+    `[api] listening on http://127.0.0.1:${port} (NODE_ENV=${nodeEnvLabel()}, googleEnvConfigured=${envConfigured()}, sessionStoreWritable=${sessionStoreWritable()})`,
+  );
+  console.log(`[api] PORT env: ${process.env.PORT || "(unset, using 8787)"}`);
+  if (
+    isProductionRuntime() &&
+    (!process.env.APP_AUTH_MODE || APP_AUTH_MODE === "demo" || APP_AUTH_MODE === "local")
+  ) {
+    console.warn(
+      "[api][security] APP_AUTH_MODE is unset, demo, or local — SPA auth remains client-side (localStorage). OK only inside a trusted pilot boundary. Public self-serve needs provider/server app auth; see docs/security-hardening-plan.md.",
+    );
+  }
+  console.log("[smtp] startup", smtpStartupLogPayload());
+  void verifySmtpTransport().then((result) => {
+    if (isProductionRuntime()) {
+      console.log("[smtp] verify", { ok: result.ok, checkedAt: result.checkedAt });
+    } else {
+      console.log("[smtp] verify", result);
+    }
+  });
+});
+
+httpServer.on("error", (err) => {
+  if (err && "code" in err && err.code === "EADDRINUSE") {
+    console.error(
+      `[api] Port ${port} is already in use. You already have an API on this port (another terminal running \`npm run server\` or \`npm run dev:full\`). Stop that process first, or use a different port: PORT=8790 npm run server`,
+    );
+    process.exit(1);
+    return;
+  }
+  console.error("[api] Failed to listen:", err);
+  process.exit(1);
 });

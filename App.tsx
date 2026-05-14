@@ -1,6 +1,72 @@
-import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BertLogo } from "./src/components/BertLogo";
+import type { NavItemId, Role, RoutedScreen } from "./src/permissions";
+import {
+  canAccessActions,
+  canAccessAdmin,
+  canAccessAdminOnboardingWorkspace,
+  canAccessAuditsCentre,
+  canAccessCompletedNcrReports,
+  canAccessControlScreen,
+  canAccessOnboardingNav,
+  canAccessReports,
+  canAccessSchedules,
+  canCompleteAuditAsAuditor,
+  canEditLegalName,
+  canRoleAccessNavItem,
+  canSubmitAuditForReview,
+  canSubmitIncidents,
+  getCreatableRoles,
+  getHomeScreenForRole,
+  getRoleDisplayName,
+  getRolePermissions,
+} from "./src/permissions";
+import { navItems } from "./src/config/navItems";
+import { MORE_MENU_NAV_IDS, PRIMARY_NAV_IDS } from "./src/config/navStructure";
+import { storageKeys } from "./src/config/storageKeys";
+import { apiUrl } from "./src/config/apiBase";
+import { slatePrimaryCtaInteract } from "./src/styles/interactions";
+import { getGreetingFirstName, getTimeBasedGreeting, getUserInitials } from "./src/utils/userDisplay";
+import { isDebugUiAllowed } from "./src/utils/debugUiVisibility";
+import { AuditorTaskDashboard } from "./src/components/dashboard/AuditorTaskDashboard";
+import { AdminDashboard } from "./src/components/dashboard/AdminDashboard";
+import { ManagerDashboard } from "./src/components/dashboard/ManagerDashboard";
+import { AccountSettingsScreen } from "./src/screens/AccountSettingsScreen";
+import { ActionsScreen } from "./src/screens/ActionsScreen";
+import { AdminScreen } from "./src/screens/AdminScreen";
+import { AppHostedOnboardingCompletion } from "./src/screens/AppHostedOnboardingCompletion";
+import { DashboardScreen } from "./src/screens/DashboardScreen";
+import { AuditsScreen } from "./src/screens/AuditsScreen";
+import { AuditModeScreen } from "./src/screens/AuditModeScreen";
+import { CompleteAuditScreen } from "./src/screens/CompleteAuditScreen";
+import { IncidentReportingScreen } from "./src/screens/IncidentReportingScreen";
+import { NonConformanceScreen } from "./src/screens/NonConformanceScreen";
+import { ReportsScreen } from "./src/screens/ReportsScreen";
+import { SchedulesScreen } from "./src/screens/SchedulesScreen";
+import { SyncCentreScreen } from "./src/screens/SyncCentreScreen";
+import {
+  EmptyPanel,
+  KpiCard,
+  MiniMetric,
+  SectionHeader,
+  StatusBadge,
+  TrendBar,
+} from "./src/components/dashboard/DashboardPrimitives";
+import { pickNextAuditorAudit } from "./src/utils/auditorDashboard";
+import { isEscalated, isOverdue, isStuck } from "./src/utils/managerDashboard";
+import { getNextBestAction } from "./src/utils/nextBestAction";
+import type { DashboardSummaryForNextAction, NextBestActionIntent } from "./src/utils/nextBestAction";
+import {
+  amberThresholdHours,
+  computeScheduleHealthState,
+  getAuditTrafficStatus,
+  getDueWarning,
+  statusStyles,
+} from "./src/utils/dashboardHealth";
+import type { CompanyReportUser, ReportItem, ReportSectionKey, ReportTemplateType } from "./src/types/reports";
+import type { NonConformanceRecord } from "./src/types/nonConformanceScreenProps";
+import type { SyncQueueItem, SyncStatus } from "./src/types/sync";
 
-type Role = "Master" | "Admin" | "Manager" | "Auditor";
 type AuditStatus = "green" | "amber" | "red";
 type Answer = "pass" | "nc" | "fail";
 type Priority = "High" | "Medium" | "Low";
@@ -11,23 +77,17 @@ type ScheduleFrequency =
   | "Daily"
   | "Weekly"
   | "Bi-Weekly"
-  | "Monthly"
-  | "Bi-Monthly"
-  | "3 Monthly"
-  | "6 Monthly"
-  | "12 Monthly";
+  | "Monthly";
 type ScheduleScope = "Company schedule" | "Personal schedule";
 type OverdueAlertTiming = "At due time" | "30 minutes overdue" | "1 hour overdue" | "2 hours overdue";
 type CompletionCheckTiming = "30 minutes after send" | "1 hour after send" | "At due time" | "2 hours after due";
-type Screen = "dashboard" | "audits" | "actions" | "nonConformance" | "reports" | "sync" | "schedules" | "admin" | "onboarding" | "account" | "complete";
+/** Routed shell screen — alias of `RoutedScreen` from `src/types/navigation.ts` (re-exported via `src/permissions.ts`). */
+type Screen = RoutedScreen;
 type ThemeMode = "light" | "dark";
-type ReportTemplateType = "Executive summary" | "Overdue audit pack" | "Corrective action pack" | "Evidence pack" | "Full report";
 type ScheduleDay = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
 type ScheduleLifecycle = "Live" | "Archived";
 type ScheduleListFilter = "Live" | "Archived" | "All schedules";
 type ScheduleHealthState = "Healthy" | "Due Soon" | "Overdue" | "Failing" | "Paused";
-type SyncItemType = "auditSubmission" | "actionUpdate" | "evidenceUpload" | "scheduleEdit" | "reportExport";
-type SyncStatus = "Pending Sync" | "Syncing" | "Synced" | "Failed" | "Conflict";
 type PreviewOrientation = "portrait" | "landscape";
 
 type User = {
@@ -37,14 +97,19 @@ type User = {
   name: string;
 };
 
+type RoleNavVisibilityMatrix = Record<Role, Record<NavItemId, boolean>>;
+type RoleSiteSelectorVisibility = Record<Role, boolean>;
+
 type UserInvite = {
   id: string;
   email: string;
   role: Role;
   invitedBy: string;
+  senderEmail?: string;
   sentAt: string;
   status: "Invite sent";
   mailtoUrl?: string;
+  appOnboardingUrl?: string;
 };
 
 type AuditQuestion = {
@@ -106,6 +171,7 @@ type EvidenceItem = {
 type ActionItem = {
   id: string;
   companyId: string;
+  siteArea?: string;
   auditId: string;
   auditName: string;
   questionId: string;
@@ -155,6 +221,16 @@ type CompanyFolder = {
   auditFormsVerified: boolean;
   responseSheetVerified: boolean;
 };
+
+type Site = {
+  id: string;
+  name: string;
+  code: string;
+  active: boolean;
+};
+
+/** Normalized user email -> site ids they may access. Empty or missing entry means no restriction (all sites). */
+type UserSiteAssignments = Record<string, string[]>;
 
 type OnboardingSource = {
   configured: boolean;
@@ -355,41 +431,6 @@ type DraftTemplateQuestion = {
   answerPrompts?: Partial<Record<Answer, string[]>>;
 };
 
-type NonConformanceEvidence = {
-  id: string;
-  name: string;
-  previewUrl: string;
-  addedAt: string;
-  note?: string;
-};
-
-type NonConformanceRecord = {
-  id: string;
-  reference: string;
-  auditId: string;
-  auditName: string;
-  auditQuestionId: string;
-  auditQuestion: string;
-  selectedAnswer: Answer;
-  auditorName: string;
-  auditorUserId: string;
-  site: string;
-  raisedAt: string;
-  status: "Raised" | "In Progress" | "Completed";
-  assignedLineManager: string;
-  assignedLineManagerUserId: string;
-  assignedLineManagerEmail: string;
-  investigationIsoClause: string;
-  investigationNotes: string;
-  rootCause: string;
-  correctiveAction: string;
-  investigationExtraNotes: string;
-  evidence: NonConformanceEvidence[];
-  completionDateTime?: string;
-  completedByName?: string;
-  completedByUserId?: string;
-};
-
 type OfflineSubmission = {
   id: string;
   audit: Audit;
@@ -399,23 +440,6 @@ type OfflineSubmission = {
   signatureDataUrl: string;
   queuedAt: string;
   submittedBy: string;
-};
-
-type ReportItem = {
-  id: string;
-  title: string;
-  type: "PDF report" | "Text audit pack";
-  createdAt: string;
-  createdBy: string;
-  visibleTo: string[];
-  template: ReportTemplateType;
-};
-
-type CompanyReportUser = {
-  email: string;
-  name: string;
-  role: Role;
-  username?: string;
 };
 
 type AuditAccessLevel = "Full access" | "Oversight" | "Complete" | "No access";
@@ -437,34 +461,6 @@ type AuditAccessMatrixRow = {
 };
 
 type AuditAccessOverrideMap = Record<string, AuditAccessLevel>;
-
-type ReportSectionKey =
-  | "compliance"
-  | "overdueAudits"
-  | "correctiveActions"
-  | "overdueActions"
-  | "criticalFindings"
-  | "repeatFailures"
-  | "evidence"
-  | "auditHistory"
-  | "verificationHistory"
-  | "scheduleCompliance"
-  | "auditCompletion"
-  | "syncExceptions"
-  | "templates"
-  | "offlineQueue";
-
-type SyncQueueItem = {
-  id: string;
-  itemType: SyncItemType;
-  localId: string;
-  status: SyncStatus;
-  createdAt: string;
-  updatedAt: string;
-  retryCount: number;
-  lastError: string;
-  payload: Record<string, unknown>;
-};
 
 type WorkspaceValidation = {
   ok: boolean;
@@ -511,11 +507,77 @@ type ManagerAlert = {
   readBy: string[];
 };
 
+type IncidentStatus = "Open" | "Under Investigation" | "Closed";
+type IncidentPriority = "Normal" | "High";
+type IncidentType = "Accident" | "Near Miss" | "Dangerous Occurrence" | "Property Damage" | "Environmental";
+type IncidentSeverity =
+  | "Minor"
+  | "Medical Treatment"
+  | "Lost Time Injury"
+  | "Major Incident"
+  | "Fatality";
+
+type IncidentEvidenceItem = {
+  id: string;
+  name: string;
+  mimeType: string;
+  previewUrl: string;
+  addedAt: string;
+};
+
+type IncidentRecord = {
+  id: string;
+  incidentId: string;
+  status: IncidentStatus;
+  priority: IncidentPriority;
+  incidentType: IncidentType;
+  severity: IncidentSeverity;
+  incidentDate: string;
+  incidentTime: string;
+  reporterName: string;
+  reporterEmail: string;
+  department: string;
+  location: string;
+  description: string;
+  immediateAction: string;
+  injured: boolean;
+  injuryDetails: string;
+  contributingFactors: string;
+  witnesses: string;
+  evidenceUrls: IncidentEvidenceItem[];
+  assignedTo: string;
+  investigationNotes: string;
+  rootCause: string;
+  correctiveActions: string;
+  preventiveActions: string;
+  actionOwner: string;
+  dueDate: string;
+  completionDate: string;
+  riddorRequired: boolean;
+  closedBy: string;
+  closedAt: string;
+  notificationStatus: string;
+  statusHistory: { at: string; from: IncidentStatus | ""; to: IncidentStatus; by: string; note: string }[];
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+};
+
+type IncidentCorrectiveAction = {
+  id: string;
+  incidentId: string;
+  description: string;
+  owner: string;
+  dueDate: string;
+  status: "Open" | "In Progress" | "Complete";
+  completedAt: string;
+  completedBy: string;
+};
+
 type IssuePromptState = {
   question: AuditQuestion;
   answer: Exclude<Answer, "pass">;
-  actionPrompts: string[];
-  solved: boolean | null;
 };
 
 type AuditCompletionSummaryState = {
@@ -529,7 +591,24 @@ type AuditCompletionSummaryState = {
   syncLabel: string;
 };
 
-const companyName = "QMS Precast";
+const DEFAULT_APP_DISPLAY_NAME = "bert.";
+/** Short product name in shell chrome, notifications, and `document.title`. Override with `VITE_APP_NAME` (e.g. white-label). */
+function resolveAppDisplayNameFromEnv(): string {
+  const raw = String(import.meta.env.VITE_APP_NAME ?? "").trim();
+  return raw || DEFAULT_APP_DISPLAY_NAME;
+}
+const companyName = resolveAppDisplayNameFromEnv();
+const PRODUCT_TAGLINE = "Business. Evaluate. Report. Tool.";
+function isDemoRoleSwitchEnabled() {
+  const rawValue = String(import.meta.env.VITE_ENABLE_DEMO_ROLE_SWITCH || "").trim().toLowerCase();
+  return rawValue === "true" || rawValue === "1" || rawValue === "yes" || rawValue === "on";
+}
+function canCreatePreviewProfile() {
+  return isDemoRoleSwitchEnabled();
+}
+const demoRoleSwitchEnabled = isDemoRoleSwitchEnabled();
+/** Sign-in / landing demo copy — display names only; internal `Role` values are unchanged (`Master`, etc.). */
+const roles = ["Workspace setup", "Admin", "Manager", "Auditor"] as const;
 const CURRENT_SCHEMA_VERSION = "2.0.0";
 const REQUIRED_WORKSPACE_TABS = ["Onboarding", "Users", "Schedule", "Actions", "Notes", "Config"] as const;
 const ACTION_DUE_DAYS_BY_SEVERITY: Record<RiskLevel, number> = {
@@ -539,13 +618,32 @@ const ACTION_DUE_DAYS_BY_SEVERITY: Record<RiskLevel, number> = {
   Low: 14,
 };
 
-const users: User[] = [
-  { username: "master", password: "demo", role: "Master", name: "System Setup" },
-  { username: "admin", password: "demo", role: "Admin", name: "Andy Hall" },
-  { username: "manager", password: "demo", role: "Manager", name: "James Cole" },
-  { username: "tom", password: "demo", role: "Auditor", name: "Tom Blake" },
-  { username: "sarah", password: "demo", role: "Auditor", name: "Sarah Evans" },
-];
+/** When true, static demo login users and related UI are included (dev or `VITE_ENABLE_DEMO_LOGIN=true`). */
+const isDemoLoginEnabled = import.meta.env.DEV === true || import.meta.env.VITE_ENABLE_DEMO_LOGIN === "true";
+const GOD_MODE_USERNAME = (import.meta.env.VITE_GODMODE_USERNAME || "master").trim().toLowerCase();
+
+/** Demo passwords come only from env — never hard-coded — so production bundles stay clean. Set in `.env.local` for dev. */
+const DEMO_USER_PASSWORD = String(import.meta.env.VITE_DEMO_USER_PASSWORD ?? "").trim();
+const GODMODE_PASSWORD = String(import.meta.env.VITE_GODMODE_PASSWORD ?? "").trim();
+
+const users: User[] = isDemoLoginEnabled
+  ? [
+      ...(GODMODE_PASSWORD
+        ? [{ username: GOD_MODE_USERNAME, password: GODMODE_PASSWORD, role: "Master" as const, name: "System Setup" }]
+        : []),
+      ...(DEMO_USER_PASSWORD
+        ? [
+            { username: "admin", password: DEMO_USER_PASSWORD, role: "Admin" as const, name: "Audit Control" },
+            { username: "manager", password: DEMO_USER_PASSWORD, role: "Manager" as const, name: "James Preston" },
+            { username: "tom", password: DEMO_USER_PASSWORD, role: "Auditor" as const, name: "Tom Hughes" },
+          ]
+        : []),
+    ]
+  : [];
+
+const DEFAULT_MANAGER_NAME = users.find((user) => user.role === "Manager")?.name || "Unassigned";
+const DEFAULT_AUDITOR_NAME = users.find((user) => user.role === "Auditor")?.name || "Unassigned";
+const DEFAULT_ESCALATION_NAME = users.find((user) => user.role === "Master")?.name || "System Setup";
 
 const initialAudits: Audit[] = [];
 
@@ -556,81 +654,22 @@ const initialSyncQueue: SyncQueueItem[] = [];
 const initialSchedules: ScheduleItem[] = [];
 const initialTemplates: AuditTemplate[] = [];
 const initialNonConformances: NonConformanceRecord[] = [];
-const amberThresholdHours = 2;
-const scheduleDayOptions: ScheduleDay[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const scheduleFrequencyOptions: ScheduleFrequency[] = [
-  "Daily",
-  "Weekly",
-  "Bi-Weekly",
-  "Monthly",
-  "Bi-Monthly",
-  "3 Monthly",
-  "6 Monthly",
-  "12 Monthly",
-];
-const scheduleDurationOptions = [1, 2, 4, 8, 12, 24, 48];
-const scheduleTimeOptions = Array.from({ length: 48 }, (_, index) => {
-  const hours = String(Math.floor(index / 2)).padStart(2, "0");
-  const minutes = index % 2 === 0 ? "00" : "30";
-  return `${hours}:${minutes}`;
-});
-
-const statusStyles: Record<
-  AuditStatus,
-  {
-    label: string;
-    dot: string;
-    soft: string;
-    ring: string;
-    text: string;
-  }
-> = {
-  green: {
-    label: `More than ${amberThresholdHours} hours`,
-    dot: "bg-emerald-500",
-    soft: "bg-emerald-500/12",
-    ring: "ring-emerald-500/25",
-    text: "text-emerald-700",
-  },
-  amber: {
-    label: `Less than ${amberThresholdHours} hours`,
-    dot: "bg-amber-500",
-    soft: "bg-amber-500/12",
-    ring: "ring-amber-500/25",
-    text: "text-amber-700",
-  },
-  red: {
-    label: "Overdue",
-    dot: "bg-rose-500",
-    soft: "bg-rose-500/12",
-    ring: "ring-rose-500/25",
-    text: "text-rose-700",
-  },
-};
-
-const navItems: { id: Exclude<Screen, "complete">; label: string; icon: string }[] = [
-  { id: "dashboard", label: "Dashboard", icon: "dashboard" },
-  { id: "audits", label: "Audits", icon: "clipboard" },
-  { id: "actions", label: "Actions", icon: "warningTriangle" },
-  { id: "nonConformance", label: "Non-Conformance", icon: "checklist" },
-  { id: "reports", label: "Report creator", icon: "chart" },
-  { id: "sync", label: "Sync Centre", icon: "sync" },
-  { id: "schedules", label: "Schedules", icon: "clock" },
-  { id: "admin", label: "Control", icon: "shield" },
-  { id: "onboarding", label: "Onboarding", icon: "spark" },
-  { id: "account", label: "Account settings", icon: "user" },
-];
-
-const compactNavLabels: Partial<Record<Exclude<Screen, "complete">, string>> = {
-  actions: "Actions",
-  nonConformance: "NCR",
-  reports: "Reports",
-  sync: "Sync",
-  account: "Settings",
-};
+const initialIncidents: IncidentRecord[] = [];
+const initialIncidentActions: IncidentCorrectiveAction[] = [];
 
 /** Transitions only — hover uses shell-wide 15% contrasting overlay (.qms-app-shell / .qms-login-shell). */
-const slatePrimaryCtaInteract = "transition-colors duration-200 ease-in-out";
+
+/** Accent-filled fields (signal orange) — schedule editor; avoids washed-out OS styling on pale backgrounds in dark theme. */
+const brandAccentFormField =
+  "border border-[rgba(249,115,22,0.5)] bg-[var(--bert-signal-orange)] text-[var(--qms-navy-950)] shadow-[0_10px_26px_rgba(249,115,22,0.22)] outline-none transition focus:border-[var(--qms-navy-850)]";
+
+/** Slate surface + accent outline for dropdowns and secondary inputs on dark panels (filters, assignees, file inputs). */
+const brandDarkFormControl =
+  "border border-[rgba(249,115,22,0.45)] bg-slate-950 text-slate-100 outline-none focus:border-[var(--bert-signal-orange)]";
+const qmsDarkShellGradient =
+  "bg-[radial-gradient(circle_at_top,var(--qms-shell-dark-radial),_transparent_35%),linear-gradient(180deg,var(--qms-shell-dark-start)_0%,var(--qms-shell-dark-mid)_45%,var(--qms-shell-dark-end)_100%)]";
+const qmsLightShellGradient =
+  "bg-[radial-gradient(circle_at_top,var(--qms-shell-light-radial),_transparent_35%),linear-gradient(180deg,var(--qms-shell-light-start)_0%,var(--qms-shell-light-mid)_45%,var(--qms-shell-light-end)_100%)]";
 
 const appMotionStyles = `
   @keyframes qmsFadeSlideUp {
@@ -649,16 +688,16 @@ const appMotionStyles = `
     padding-top: 0.75rem;
     padding-left: 0.85rem;
     padding-right: 0.85rem;
-    padding-bottom: 6.5rem;
+    padding-bottom: 1.5rem;
   }
 
   /* Compact fit pass: reduce chunky spacing while keeping readability. */
   .qms-screen-stage .space-y-4 > * + * {
-    margin-top: 0.75rem;
+    margin-top: 0.65rem;
   }
 
   .qms-screen-stage .space-y-3 > * + * {
-    margin-top: 0.6rem;
+    margin-top: 0.5rem;
   }
 
   .qms-screen-stage [class*="rounded-[1.75rem]"] {
@@ -666,11 +705,143 @@ const appMotionStyles = `
   }
 
   .qms-screen-stage section[class*="rounded-[1.75rem]"] {
-    padding: 0.9rem !important;
+    padding: 0.82rem !important;
   }
 
   .qms-screen-stage section[class*="rounded-[1.6rem]"] {
-    padding: 0.8rem !important;
+    padding: 0.72rem !important;
+  }
+
+  /* Global aesthetic normalization (workflow-safe): cards, controls, and small actions. */
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage section {
+    border-color: rgba(148, 163, 184, 0.28);
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage section {
+    border-color: rgba(148, 163, 184, 0.2);
+    box-shadow: 0 12px 30px rgba(2, 6, 23, 0.3);
+  }
+
+  .qms-screen-stage input,
+  .qms-screen-stage select,
+  .qms-screen-stage textarea {
+    border-radius: 0.95rem;
+  }
+
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage input,
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage select,
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage textarea {
+    border-color: rgba(148, 163, 184, 0.35);
+    background-color: rgba(255, 255, 255, 0.82);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage input,
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage select,
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage textarea {
+    border-color: rgba(148, 163, 184, 0.32);
+    background-color: rgba(2, 6, 23, 0.72);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  .qms-screen-stage button {
+    border-radius: 0.9rem;
+  }
+
+  .qms-screen-stage .rounded-2xl {
+    border-radius: 1rem;
+  }
+
+  .qms-screen-stage input,
+  .qms-screen-stage select,
+  .qms-screen-stage textarea,
+  .qms-screen-stage button {
+    min-height: 2.5rem;
+  }
+
+  .qms-screen-stage .h-14 {
+    height: 3.15rem !important;
+  }
+
+  .qms-screen-stage .h-12 {
+    height: 2.85rem !important;
+  }
+
+  .qms-screen-stage .h-11 {
+    height: 2.65rem !important;
+  }
+
+  .qms-screen-stage .h-10 {
+    height: 2.45rem !important;
+  }
+
+  .qms-screen-stage [class*="px-5"] {
+    padding-left: 1.1rem !important;
+    padding-right: 1.1rem !important;
+  }
+
+  .qms-screen-stage [class*="py-5"] {
+    padding-top: 1.05rem !important;
+    padding-bottom: 1.05rem !important;
+  }
+
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage button {
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage button {
+    box-shadow: 0 8px 20px rgba(2, 6, 23, 0.28);
+  }
+
+  /* Typography rhythm pass (aesthetic only): clearer hierarchy, tighter enterprise feel. */
+  .qms-screen-stage h1 {
+    font-size: clamp(1.55rem, 2.1vw, 1.95rem);
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+  }
+
+  .qms-screen-stage h2 {
+    font-size: clamp(1.25rem, 1.65vw, 1.55rem);
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+
+  .qms-screen-stage h3 {
+    font-size: clamp(1.06rem, 1.25vw, 1.24rem);
+    line-height: 1.28;
+    letter-spacing: -0.005em;
+  }
+
+  .qms-screen-stage p,
+  .qms-screen-stage li {
+    line-height: 1.5;
+  }
+
+  .qms-screen-stage p {
+    font-size: clamp(0.88rem, 0.9vw, 0.96rem);
+  }
+
+  .qms-screen-stage label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .qms-screen-stage small,
+  .qms-screen-stage .text-xs {
+    letter-spacing: 0.025em;
+  }
+
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage h1,
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage h2,
+  .qms-app-shell[data-qms-theme="light"] .qms-screen-stage h3 {
+    color: rgb(15 23 42);
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage h1,
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage h2,
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage h3 {
+    color: rgb(241 245 249);
   }
 
   .qms-app-shell button:not(:disabled),
@@ -686,22 +857,31 @@ const appMotionStyles = `
   /* 15% opposite-colour tint (readable: inset shadow sits beneath button content) */
   .qms-app-shell[data-qms-theme="light"] button:enabled:hover,
   .qms-login-shell[data-qms-theme="light"] button:enabled:hover {
-    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-light);
   }
 
   .qms-app-shell[data-qms-theme="dark"] button:enabled:hover,
   .qms-login-shell[data-qms-theme="dark"] button:enabled:hover {
-    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-dark);
+  }
+
+  /* Dark theme: slate rows must not hover to white (would clash with light body copy colours). */
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage .hover\\:bg-white:hover {
+    background-color: rgb(30 41 59) !important;
+  }
+
+  .qms-app-shell[data-qms-theme="dark"] .qms-screen-stage .hover\\:border-slate-300:hover {
+    border-color: rgb(71 85 105) !important;
   }
 
   .qms-app-shell[data-qms-theme="light"] button:enabled:active,
   .qms-login-shell[data-qms-theme="light"] button:enabled:active {
-    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.22);
+    box-shadow: inset 0 0 0 9999px var(--qms-active-overlay-light);
   }
 
   .qms-app-shell[data-qms-theme="dark"] button:enabled:active,
   .qms-login-shell[data-qms-theme="dark"] button:enabled:active {
-    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.22);
+    box-shadow: inset 0 0 0 9999px var(--qms-active-overlay-dark);
   }
 
   .qms-app-shell button:disabled,
@@ -719,22 +899,22 @@ const appMotionStyles = `
 
   .qms-app-shell[data-qms-theme="light"] label.inline-flex.cursor-pointer:hover,
   .qms-login-shell[data-qms-theme="light"] label.inline-flex.cursor-pointer:hover {
-    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-light);
   }
 
   .qms-app-shell[data-qms-theme="dark"] label.inline-flex.cursor-pointer:hover,
   .qms-login-shell[data-qms-theme="dark"] label.inline-flex.cursor-pointer:hover {
-    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-dark);
   }
 
   .qms-app-shell[data-qms-theme="light"] a.inline-flex[class*="rounded"]:hover,
   .qms-login-shell[data-qms-theme="light"] a.inline-flex[class*="rounded"]:hover {
-    box-shadow: inset 0 0 0 9999px rgb(15 23 42 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-light);
   }
 
   .qms-app-shell[data-qms-theme="dark"] a.inline-flex[class*="rounded"]:hover,
   .qms-login-shell[data-qms-theme="dark"] a.inline-flex[class*="rounded"]:hover {
-    box-shadow: inset 0 0 0 9999px rgb(255 255 255 / 0.15);
+    box-shadow: inset 0 0 0 9999px var(--qms-hover-overlay-dark);
   }
 
   .qms-tablet-stage {
@@ -742,6 +922,22 @@ const appMotionStyles = `
     min-height: 100%;
     align-items: center;
     justify-content: center;
+  }
+
+  /* Sign-in: landscape frame so left/right columns fit without scrolling. */
+  .qms-tablet-device.qms-tablet-device--signin {
+    width: min(96vw, 52rem);
+    aspect-ratio: 16 / 10;
+    max-height: min(90dvh, 34rem);
+    overflow: hidden;
+  }
+
+  @media (max-width: 639px) {
+    .qms-tablet-device.qms-tablet-device--signin {
+      width: min(92vw, 26rem);
+      aspect-ratio: 10 / 13;
+      max-height: min(86dvh, 38rem);
+    }
   }
 
   .qms-tablet-device {
@@ -752,7 +948,7 @@ const appMotionStyles = `
     overflow: hidden;
     border-radius: 2.8rem;
     background:
-      linear-gradient(145deg, rgba(2,6,23,0.98), rgba(15,23,42,0.95)),
+      linear-gradient(145deg, var(--qms-navy-950), var(--qms-navy-900)),
       linear-gradient(180deg, rgba(0,0,0,0.4), rgba(0,0,0,0.2));
     box-shadow:
       0 30px 90px rgba(2, 6, 23, 0.45),
@@ -822,7 +1018,7 @@ const appMotionStyles = `
   .qms-force-landscape .qms-screen-stage {
     padding-left: 1.25rem;
     padding-right: 1.25rem;
-    padding-bottom: 7.25rem;
+    padding-bottom: 2rem;
   }
 
   .qms-force-landscape .qms-bottom-nav {
@@ -884,7 +1080,7 @@ const appMotionStyles = `
     .qms-screen-stage {
       padding-left: 1.25rem;
       padding-right: 1.25rem;
-      padding-bottom: 7.25rem;
+      padding-bottom: 2rem;
     }
 
     .qms-bottom-nav {
@@ -921,17 +1117,38 @@ const appMotionStyles = `
   }
 `;
 
-const userStorageKey = "qms-precast-current-user";
-const offlineQueueStorageKey = "qms-precast-offline-submissions";
-const themeStorageKey = "qms-precast-theme";
-const previewOrientationStorageKey = "qms-precast-preview-orientation";
-const desktopSidebarCollapsedStorageKey = "qms-precast-desktop-sidebar-collapsed";
-const dashboardPreferencesStorageKey = "qms-precast-dashboard-preferences";
-const dashboardSectionOrderStorageKey = "qms-precast-dashboard-section-order";
-const folderLinksStorageKey = "qms-precast-folder-links";
-const workspaceStateStorageKey = "qms-precast-workspace-state";
-const userProfilePhotosStorageKey = "qms-precast-user-profile-photos";
-const userNicknamesStorageKey = "qms-precast-user-nicknames";
+/** Parse JSON from `fetch` responses — avoids `response.json()` throwing on empty/HTML proxy errors. */
+async function parseJsonApiResponse<T = Record<string, unknown>>(response: Response): Promise<T> {
+  const text = await response.text();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    const hint =
+      import.meta.env.DEV === true
+        ? "Start the API: from the project root run `npm run server` (default port 8787) while using `npm run dev`."
+        : "The setup server did not return data.";
+    throw new Error(`No response body from server (${response.status}). ${hint}`);
+  }
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    const snippet = trimmed.length > 120 ? `${trimmed.slice(0, 120)}…` : trimmed;
+    throw new Error(`Invalid response (${response.status}): ${snippet}`);
+  }
+}
+
+const userStorageKey = storageKeys.currentUser;
+/** When set, Master session is limited to company onboarding (no other nav or tools). Cleared on staff sign-in or logout. */
+const masterCompanySetupSessionKey = storageKeys.masterCompanySetupSession;
+const offlineQueueStorageKey = storageKeys.offlineSubmissions;
+const themeStorageKey = storageKeys.theme;
+const previewOrientationStorageKey = storageKeys.previewOrientation;
+const desktopSidebarCollapsedStorageKey = storageKeys.desktopSidebarCollapsed;
+const dashboardPreferencesStorageKey = storageKeys.dashboardPreferences;
+const dashboardSectionOrderStorageKey = storageKeys.dashboardSectionOrder;
+const folderLinksStorageKey = storageKeys.folderLinks;
+const workspaceStateStorageKey = storageKeys.workspaceState;
+const userProfilePhotosStorageKey = storageKeys.userProfilePhotos;
+const userNicknamesStorageKey = storageKeys.userNicknames;
 const scheduleTimeZone = "Europe/London";
 
 function AppIcon({ name, className = "h-5 w-5" }: { name: string; className?: string }) {
@@ -953,6 +1170,15 @@ function AppIcon({ name, className = "h-5 w-5" }: { name: string; className?: st
           <rect x="13" y="3" width="8" height="5" rx="2" />
           <rect x="13" y="10" width="8" height="11" rx="2" />
           <rect x="3" y="13" width="8" height="8" rx="2" />
+        </svg>
+      );
+    case "grid":
+      return (
+        <svg {...shared}>
+          <rect x="3" y="3" width="6.5" height="6.5" rx="1.25" />
+          <rect x="14.5" y="3" width="6.5" height="6.5" rx="1.25" />
+          <rect x="3" y="14.5" width="6.5" height="6.5" rx="1.25" />
+          <rect x="14.5" y="14.5" width="6.5" height="6.5" rx="1.25" />
         </svg>
       );
     case "clipboard":
@@ -1054,46 +1280,6 @@ function AppIcon({ name, className = "h-5 w-5" }: { name: string; className?: st
   }
 }
 
-function SectionHeader({
-  icon,
-  eyebrow,
-  title,
-  subtitle,
-}: {
-  icon: string;
-  eyebrow?: string;
-  title: string;
-  subtitle: string;
-}) {
-  return (
-    <div className="mb-4 flex items-start gap-3">
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
-        <AppIcon name={icon} className="h-5 w-5" />
-      </div>
-      <div className="min-w-0">
-        {eyebrow ? <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">{eyebrow}</p> : null}
-        <h3 className="text-base font-semibold text-slate-900">{title}</h3>
-        <p className="text-sm text-slate-500">{subtitle}</p>
-      </div>
-    </div>
-  );
-}
-
-function MetaPill({
-  icon,
-  label,
-}: {
-  icon: string;
-  label: string;
-}) {
-  return (
-    <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-600">
-      <AppIcon name={icon} className="h-3.5 w-3.5" />
-      <span>{label}</span>
-    </div>
-  );
-}
-
 function getUkTimeZoneLabel(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: scheduleTimeZone,
@@ -1119,59 +1305,14 @@ function buildAuditAccessOverrideKey(email: string, auditId: string) {
   return `${email}::${auditId}`;
 }
 
-const reportTemplates: {
-  type: ReportTemplateType;
-  title: string;
-  subtitle: string;
-}[] = [
-  {
-    type: "Executive summary",
-    title: "Executive summary",
-    subtitle: "High-level compliance, pressure areas, and readiness for managers or clients.",
-  },
-  {
-    type: "Overdue audit pack",
-    title: "Overdue audit pack",
-    subtitle: "Focus on missed audits, due risk, and who owns the next action.",
-  },
-  {
-    type: "Corrective action pack",
-    title: "Corrective action pack",
-    subtitle: "Open CAPA items, severity, evidence, and close-out ownership.",
-  },
-  {
-    type: "Evidence pack",
-    title: "Evidence pack",
-    subtitle: "Evidence-heavy handover with proof items, completion trail, and audit context.",
-  },
-  {
-    type: "Full report",
-    title: "Full report",
-    subtitle: "Complete compliance pack including schedule, risk, CAPA, evidence, and sync exceptions.",
-  },
-];
-
-const reportSectionOptions: {
-  key: ReportSectionKey;
-  title: string;
-  description: string;
-  icon?: string;
-}[] = [
-  { key: "compliance", title: "Compliance summary", description: "Live compliance and daily completion metrics." },
-  { key: "auditCompletion", title: "Audit completion summary", description: "Completion rate, finished audits, and coverage." },
-  { key: "overdueAudits", title: "Overdue audits", description: "Audits that are currently overdue." },
-  { key: "correctiveActions", title: "Corrective actions", description: "Open and overdue CAPA items.", icon: "warningTriangle" },
-  { key: "overdueActions", title: "Overdue actions", description: "Corrective actions past due date.", icon: "warningTriangle" },
-  { key: "criticalFindings", title: "Critical/high findings", description: "Highest-risk audit findings needing attention." },
-  { key: "repeatFailures", title: "Repeat failures", description: "Questions or findings repeatedly failing over time." },
-  { key: "evidence", title: "Evidence summary", description: "Captured evidence and proof counts." },
-  { key: "auditHistory", title: "Audit history", description: "Recent completed audit records." },
-  { key: "verificationHistory", title: "Verification history", description: "Action verification and close-out activity.", icon: "warningTriangle" },
-  { key: "scheduleCompliance", title: "Schedule compliance", description: "Schedule health, missed audits, and due-soon items." },
-  { key: "syncExceptions", title: "Offline sync exceptions", description: "Items failed or conflicted during sync." },
-  { key: "templates", title: "Audit templates", description: "Active templates included in the workspace." },
-  { key: "offlineQueue", title: "Offline queue", description: "Queued submissions still waiting to sync." },
-];
+function buildOnboardingFormViewUrl(formId: string) {
+  const clean = formId.trim();
+  if (!clean) return "";
+  if (clean.startsWith("1FAIpQL")) {
+    return `https://docs.google.com/forms/d/e/${clean}/viewform`;
+  }
+  return `https://docs.google.com/forms/d/${clean}/viewform`;
+}
 
 const reportTemplateDefaults: Record<ReportTemplateType, ReportSectionKey[]> = {
   "Executive summary": ["compliance", "auditCompletion", "correctiveActions", "overdueAudits", "auditHistory"],
@@ -1180,26 +1321,6 @@ const reportTemplateDefaults: Record<ReportTemplateType, ReportSectionKey[]> = {
   "Evidence pack": ["evidence", "criticalFindings", "auditHistory", "templates"],
   "Full report": ["compliance", "auditCompletion", "overdueAudits", "correctiveActions", "overdueActions", "criticalFindings", "repeatFailures", "verificationHistory", "scheduleCompliance", "evidence", "syncExceptions", "auditHistory", "templates", "offlineQueue"],
 };
-
-function getAuditTrafficStatus(dueHours: number): AuditStatus {
-  if (dueHours < 0) {
-    return "red";
-  }
-  if (dueHours < amberThresholdHours) {
-    return "amber";
-  }
-  return "green";
-}
-
-function getDueWarning(dueHours: number) {
-  if (dueHours < 0) {
-    return `Overdue by ${Math.abs(dueHours)} hour${Math.abs(dueHours) === 1 ? "" : "s"}`;
-  }
-  if (dueHours < amberThresholdHours) {
-    return `Warning: less than ${amberThresholdHours} hours remaining`;
-  }
-  return `${dueHours} hours remaining`;
-}
 
 function getDueLabel(dueHours: number) {
   if (dueHours < 0) {
@@ -1212,64 +1333,6 @@ function getDueLabel(dueHours: number) {
     return "Due today";
   }
   return "Due later";
-}
-
-function rankAuditorAudit(audit: Audit, hasDraft: boolean) {
-  if (hasDraft) return 0;
-  if (audit.dueHours < 0) return 1;
-  if (getAuditTrafficStatus(audit.dueHours) === "amber") return 2;
-  if (audit.dueHours <= 24) return 3;
-  return 4;
-}
-
-function pickNextAuditorAudit(audits: Audit[], drafts: Record<string, AuditDraft>) {
-  return [...audits].sort((a, b) => {
-    const rankDiff = rankAuditorAudit(a, Boolean(drafts[a.id])) - rankAuditorAudit(b, Boolean(drafts[b.id]));
-    if (rankDiff !== 0) return rankDiff;
-    return a.dueHours - b.dueHours;
-  })[0] ?? null;
-}
-
-function isActionOverdue(action: ActionItem) {
-  return action.status !== "Closed" && action.dueHours < 0;
-}
-
-function isActionEscalated(action: ActionItem) {
-  if (action.escalated !== undefined) {
-    return action.escalated;
-  }
-  return isActionOverdue(action) && Math.abs(action.dueHours) > 24;
-}
-
-function isActionStuck(action: ActionItem) {
-  if (action.isStuck !== undefined) {
-    return action.isStuck;
-  }
-  return action.status === "Awaiting Verification" && action.dueHours < -24;
-}
-
-function isActionDueSoon(action: ActionItem) {
-  return action.status !== "Closed" && action.dueHours >= 0 && action.dueHours <= 24;
-}
-
-function getActionUrgency(action: ActionItem): "Escalated" | "Overdue" | "Stuck" | "Due soon" | "Normal" {
-  if (isActionEscalated(action)) return "Escalated";
-  if (isActionOverdue(action)) return "Overdue";
-  if (isActionStuck(action)) return "Stuck";
-  if (isActionDueSoon(action)) return "Due soon";
-  return "Normal";
-}
-
-function isOverdue(action: ActionItem) {
-  return isActionOverdue(action);
-}
-
-function isEscalated(action: ActionItem) {
-  return isActionEscalated(action);
-}
-
-function isStuck(action: ActionItem) {
-  return isActionStuck(action);
 }
 
 function buildDefaultQuestions(auditName: string): AuditQuestion[] {
@@ -1698,6 +1761,7 @@ function buildDemoPrecastWorkspace(): {
       status: "Failed",
       createdAt: "Today 10:20",
       updatedAt: "Today 10:21",
+      attemptedAt: "Today 10:21",
       retryCount: 1,
       lastError: "Evidence upload failed: network timeout",
       payload: {},
@@ -1714,7 +1778,7 @@ function buildDemoPrecastWorkspace(): {
 
   const companySheetSync: CompanySheetSyncStatus = {
     sheetId: "demo-master-sheet",
-    sheetName: "QMS Precast Master Sheet",
+    sheetName: `${companyName} Master Sheet`,
     tabs: ["Onboarding", "Users", "Schedule", "Actions", "Notes", "Config"],
     usersCount: 5,
     schedulesCount: 4,
@@ -1759,6 +1823,91 @@ function parsePeopleList(value: string) {
     .filter(Boolean);
 }
 
+function normalizeSiteName(value: string | null | undefined) {
+  return String(value || "").trim();
+}
+
+function createSiteId(name: string) {
+  const normalized = normalizeSiteName(name).toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return normalized || `site-${Date.now()}`;
+}
+
+function resolveUserSiteAssignmentKey(user: User, invitedUsers: UserInvite[]): string {
+  const invite = invitedUsers.find(
+    (inv) =>
+      normalizeIdentity(inv.email.split("@")[0]) === normalizeIdentity(user.username) ||
+      normalizeIdentity(inv.email) === normalizeIdentity(user.username),
+  );
+  if (invite) return normalizeIdentity(invite.email);
+  if (user.name.includes("@")) return normalizeIdentity(user.name);
+  return normalizeIdentity(`${user.username}@usebert.co.uk`);
+}
+
+function getUserAssignedSiteIds(
+  role: Role,
+  user: User | null,
+  invitedUsers: UserInvite[],
+  userSiteAssignments: UserSiteAssignments,
+): Set<string> | null {
+  if (!user) return null;
+  if (role === "Master" || role === "Admin") return null;
+  const key = resolveUserSiteAssignmentKey(user, invitedUsers);
+  const ids = userSiteAssignments[key];
+  if (!ids || ids.length === 0) return null;
+  return new Set(ids);
+}
+
+function filterByAssignedSites<T extends { siteArea?: string }>(
+  items: T[],
+  allowedSiteIds: Set<string> | null,
+  sites: Site[],
+): T[] {
+  if (!allowedSiteIds) return items;
+  const allowedNames = new Set(
+    sites.filter((s) => allowedSiteIds.has(s.id) && s.active).map((s) => normalizeIdentity(s.name)),
+  );
+  if (allowedNames.size === 0) return [];
+  return items.filter((item) => {
+    const area = normalizeIdentity(item.siteArea || "");
+    return area && allowedNames.has(area);
+  });
+}
+
+function filterNonConformancesByAssignedSites(
+  records: NonConformanceRecord[],
+  allowedSiteIds: Set<string> | null,
+  sites: Site[],
+): NonConformanceRecord[] {
+  if (!allowedSiteIds) return records;
+  const allowedNames = new Set(
+    sites.filter((s) => allowedSiteIds.has(s.id) && s.active).map((s) => normalizeIdentity(s.name)),
+  );
+  if (allowedNames.size === 0) return [];
+  return records.filter((r) => allowedNames.has(normalizeIdentity(r.site)));
+}
+
+function deriveSitesFromWorkspace(audits: Audit[], schedules: ScheduleItem[], managedSchedules: ManagedSchedule[]) {
+  const names = new Set<string>();
+  audits.forEach((audit) => {
+    const site = normalizeSiteName(audit.siteArea);
+    if (site) names.add(site);
+  });
+  schedules.forEach((schedule) => {
+    const site = normalizeSiteName(schedule.siteArea);
+    if (site) names.add(site);
+  });
+  void managedSchedules;
+  if (names.size === 0) {
+    names.add("Main site");
+  }
+  return Array.from(names).map((name) => ({
+    id: createSiteId(name),
+    name,
+    code: name.slice(0, 3).toUpperCase(),
+    active: true,
+  }));
+}
+
 function safeLower(value: string | null | undefined) {
   return (value || "").trim().toLowerCase();
 }
@@ -1792,53 +1941,24 @@ function normalizeFolderName(value: string) {
   return trimmed.toLowerCase().startsWith("qms - ") ? trimmed : `QMS - ${trimmed}`;
 }
 
-function canAccessAdmin(role: Role) {
-  return role === "Master" || role === "Admin";
+function buildDefaultRoleNavVisibilityMatrix(): RoleNavVisibilityMatrix {
+  const roles: Role[] = ["Master", "Admin", "Manager", "Auditor"];
+  return roles.reduce((matrix, role) => {
+    const visibility = navItems.reduce(
+      (entry, item) => ({ ...entry, [item.id]: canRoleAccessNavItem(role, item.id) }),
+      {} as Record<NavItemId, boolean>,
+    );
+    return { ...matrix, [role]: visibility };
+  }, {} as RoleNavVisibilityMatrix);
 }
 
-function canAccessSchedules(role: Role) {
-  return role === "Master" || role === "Admin" || role === "Manager";
-}
-
-function canAccessOnboarding(role: Role) {
-  return role === "Master";
-}
-
-function canAccessReports(role: Role) {
-  return role !== "Auditor";
-}
-
-function canAccessActions(role: Role) {
-  return role === "Master" || role === "Admin" || role === "Manager" || role === "Auditor";
-}
-
-function canAccessCompletedNcrReports(role: Role) {
-  return role === "Master" || role === "Admin" || role === "Manager";
-}
-
-function canAccessAuditsCentre(role: Role) {
-  return role !== "Auditor";
-}
-
-function canEditLegalName(role: Role) {
-  return role === "Master" || role === "Admin";
-}
-
-function getRolePermissions(role: Role) {
+function buildDefaultRoleSiteSelectorVisibility(): RoleSiteSelectorVisibility {
   return {
-    canManageUsers: role === "Master" || role === "Admin",
-    canManageSchedules: role === "Master" || role === "Admin" || role === "Manager",
-    canManageTemplates: role === "Master" || role === "Admin",
-    canAssignActions: role === "Master" || role === "Admin" || role === "Manager",
-    canVerifyActions: role === "Master" || role === "Admin" || role === "Manager",
-    canExportReports: role !== "Auditor",
-    canRepairWorkspace: role === "Master",
-    canViewAllReports: role !== "Auditor",
+    Master: true,
+    Admin: true,
+    Manager: true,
+    Auditor: true,
   };
-}
-
-function getRoleDisplayName(role: Role) {
-  return role === "Master" ? "God Mode" : role;
 }
 
 function normalizeScheduleFrequency(value: string): ScheduleFrequency {
@@ -1849,16 +1969,6 @@ function normalizeScheduleFrequency(value: string): ScheduleFrequency {
     return "Monthly";
   }
   return "Weekly";
-}
-
-function getCreatableRoles(role: Role) {
-  if (role === "Master" || role === "Admin") {
-    return ["Admin", "Manager", "Auditor"] as Role[];
-  }
-  if (role === "Manager") {
-    return ["Manager", "Auditor"] as Role[];
-  }
-  return [] as Role[];
 }
 
 function extractByKeys(record: Record<string, string>, candidates: string[]) {
@@ -2031,6 +2141,7 @@ function parseCompanySheetActions(records: Record<string, string>[], companyFold
       return {
         id: actionId,
         companyId: rowCompanyId || companyFolderId,
+        siteArea: extractByKeys(record, ["site area", "site", "area"]),
         auditId,
         auditName,
         questionId: extractByKeys(record, ["source question id", "question id"]),
@@ -2112,21 +2223,6 @@ function getNextNcrSequence(items: NonConformanceRecord[]) {
 
 function formatNcrReference(sequence: number) {
   return `NCR-${String(sequence).padStart(4, "0")}`;
-}
-
-function computeScheduleHealthState(schedule: ManagedSchedule): ScheduleHealthState {
-  if (schedule.lifecycle === "Archived") {
-    return "Paused";
-  }
-  if ((schedule.missedAuditCount || 0) > 0) {
-    return "Failing";
-  }
-  if (schedule.nextDueAt) {
-    const diffHours = Math.round((new Date(schedule.nextDueAt).getTime() - Date.now()) / 36e5);
-    if (diffHours < 0) return "Overdue";
-    if (diffHours < amberThresholdHours) return "Due Soon";
-  }
-  return "Healthy";
 }
 
 function downloadTextFile(filename: string, content: string) {
@@ -2221,6 +2317,7 @@ function readStoredFolderLinks() {
       auditFormsFolderInput?: string;
       masterSheetInput?: string;
       evidenceFolderInput?: string;
+      healthSafetyFolderInput?: string;
       exportsFolderInput?: string;
       adminNotesFolderInput?: string;
     };
@@ -2248,11 +2345,18 @@ function readStoredWorkspaceState() {
       selectedFolderId?: string;
       syncState?: string;
       invitedUsers?: UserInvite[];
+      sites?: Site[];
+      selectedSiteId?: string;
       companySheetSync?: CompanySheetSyncStatus | null;
       reportInbox?: ReportItem[];
       syncQueue?: SyncQueueItem[];
+      incidents?: IncidentRecord[];
+      incidentActions?: IncidentCorrectiveAction[];
       auditAccessOverrides?: AuditAccessOverrideMap;
       managerAlerts?: ManagerAlert[];
+      roleNavVisibility?: RoleNavVisibilityMatrix;
+      roleSiteSelectorVisibility?: RoleSiteSelectorVisibility;
+      userSiteAssignments?: UserSiteAssignments;
     };
   } catch {
     return null;
@@ -2298,11 +2402,18 @@ function getWorkspaceBootstrap() {
       selectedFolderId: "",
       syncState: "Synced",
       invitedUsers: [] as UserInvite[],
+      sites: deriveSitesFromWorkspace(demo.audits, initialSchedules, []),
+      selectedSiteId: "",
       companySheetSync: demo.companySheetSync,
       reportInbox: [] as ReportItem[],
       syncQueue: demo.syncQueue,
+      incidents: [] as IncidentRecord[],
+      incidentActions: [] as IncidentCorrectiveAction[],
       auditAccessOverrides: {} as AuditAccessOverrideMap,
       managerAlerts: [] as ManagerAlert[],
+      roleNavVisibility: buildDefaultRoleNavVisibilityMatrix(),
+      roleSiteSelectorVisibility: buildDefaultRoleSiteSelectorVisibility(),
+      userSiteAssignments: {} as UserSiteAssignments,
     };
   }
 
@@ -2319,11 +2430,18 @@ function getWorkspaceBootstrap() {
     selectedFolderId: stored?.selectedFolderId ?? "",
     syncState: stored?.syncState ?? "Not synced",
     invitedUsers: stored?.invitedUsers ?? [],
+    sites: stored?.sites ?? deriveSitesFromWorkspace(stored?.audits ?? initialAudits, stored?.schedules ?? initialSchedules, stored?.managedSchedules ?? []),
+    selectedSiteId: stored?.selectedSiteId ?? "",
     companySheetSync: stored?.companySheetSync ?? null,
     reportInbox: stored?.reportInbox ?? [],
     syncQueue: stored?.syncQueue ?? initialSyncQueue,
+    incidents: stored?.incidents ?? initialIncidents,
+    incidentActions: stored?.incidentActions ?? initialIncidentActions,
     auditAccessOverrides: stored?.auditAccessOverrides ?? {},
     managerAlerts: stored?.managerAlerts ?? [],
+    roleNavVisibility: stored?.roleNavVisibility ?? buildDefaultRoleNavVisibilityMatrix(),
+    roleSiteSelectorVisibility: stored?.roleSiteSelectorVisibility ?? buildDefaultRoleSiteSelectorVisibility(),
+    userSiteAssignments: stored?.userSiteAssignments ?? {},
   };
 }
 
@@ -2347,7 +2465,7 @@ function defaultDashboardPreferences(): DashboardPreferences {
 }
 
 function defaultDashboardSectionOrder(): DashboardSectionKey[] {
-  return ["trafficBoard", "liveSummary", "upcomingAudits", "openActions", "complianceSnapshot"];
+  return ["trafficBoard", "upcomingAudits", "openActions", "liveSummary", "complianceSnapshot"];
 }
 
 function readStoredDashboardPreferences(): DashboardPreferences {
@@ -2382,76 +2500,147 @@ function readStoredDashboardSectionOrder(): DashboardSectionKey[] {
   }
 }
 
-function useDashboardSectionLayout(storageKey: string, defaultOrder: string[]) {
-  const [showLayoutOptions, setShowLayoutOptions] = useState(false);
-  const [sectionOrder, setSectionOrder] = useState<string[]>(() => {
-    try {
-      const raw = window.localStorage.getItem(storageKey);
-      if (!raw) return defaultOrder;
-      const parsed = JSON.parse(raw) as { order?: string[] };
-      const safeOrder = (parsed.order || []).filter((item) => defaultOrder.includes(item));
-      const missing = defaultOrder.filter((item) => !safeOrder.includes(item));
-      return [...safeOrder, ...missing];
-    } catch {
-      return defaultOrder;
-    }
-  });
-  const [sectionVisibility, setSectionVisibility] = useState<Record<string, boolean>>(() => {
-    const defaults = Object.fromEntries(defaultOrder.map((key) => [key, true])) as Record<string, boolean>;
-    try {
-      const raw = window.localStorage.getItem(storageKey);
-      if (!raw) return defaults;
-      const parsed = JSON.parse(raw) as { visibility?: Record<string, boolean> };
-      const visibility = { ...defaults };
-      Object.entries(parsed.visibility || {}).forEach(([key, value]) => {
-        if (key in visibility) visibility[key] = Boolean(value);
-      });
-      return visibility;
-    } catch {
-      return defaults;
-    }
-  });
+function DataFlowBackground({ className = "", showBase = true }: { className?: string; showBase?: boolean }) {
+  return (
+    <div className={`pointer-events-none absolute inset-0 overflow-hidden ${showBase ? "bg-[#020817]" : ""} ${className}`.trim()}>
+      {showBase && <div className="absolute inset-0 bg-[#020617]" />}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_58%_42%,rgba(59,130,246,0.14),transparent_14%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_22%_48%,rgba(249,115,22,0.07),transparent_30%)]" />
+      <svg
+        className="absolute left-1/2 top-1/3 h-full w-[120%] -translate-x-1/2 opacity-50"
+        viewBox="0 0 1600 900"
+        preserveAspectRatio="xMidYMid slice"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient id="heroStrand" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0" />
+            <stop offset="18%" stopColor="#3b82f6" stopOpacity="0.5" />
+            <stop offset="50%" stopColor="#dbeafe" stopOpacity="1" />
+            <stop offset="76%" stopColor="#2563eb" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#1d4ed8" stopOpacity="0" />
+          </linearGradient>
+          <radialGradient id="coreLight" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#eff6ff" stopOpacity="1" />
+            <stop offset="35%" stopColor="#93c5fd" stopOpacity="0.65" />
+            <stop offset="100%" stopColor="#60a5fa" stopOpacity="0" />
+          </radialGradient>
+        </defs>
 
-  useEffect(() => {
-    window.localStorage.setItem(
-      storageKey,
-      JSON.stringify({
-        order: sectionOrder,
-        visibility: sectionVisibility,
-      }),
-    );
-  }, [storageKey, sectionOrder, sectionVisibility]);
+        <ellipse
+          cx="980"
+          cy="350"
+          rx="230"
+          ry="48"
+          fill="url(#coreLight)"
+          opacity="0.95"
+          stroke="#f97316"
+          strokeOpacity="0.45"
+          strokeWidth="1.2"
+        />
 
-  const visibleSectionOrder = sectionOrder.filter((key) => sectionVisibility[key]);
+        {Array.from({ length: 210 }).map((_, index) => {
+          const t = index / 209;
+          const startY = 20 + t * 650 + Math.sin(index * 0.3) * 22;
+          const gatherY = 350 + (t - 0.5) * 18;
+          const endY = 110 + t * 470;
+          const swingA = Math.sin(index * 0.16) * 220;
+          const swingB = Math.cos(index * 0.21) * 120;
+          const width = index % 18 === 0 ? 1.5 : index % 3 === 0 ? 0.95 : 0.55;
+          const opacity = index % 7 === 0 ? 0.85 : 0.34;
 
-  const toggleSection = (section: string) => {
-    setSectionVisibility((current) => ({
-      ...current,
-      [section]: !current[section],
-    }));
-  };
+          return (
+            <path
+              key={`strand-${index}`}
+              d={`M-80 ${startY}
+                  C 180 ${startY + swingA},
+                    460 ${gatherY + swingB},
+                    820 ${gatherY}
+                  S 1120 ${gatherY + (t - 0.5) * 10},
+                    1480 ${endY}`}
+              stroke="url(#heroStrand)"
+              strokeWidth={width}
+              fill="none"
+              opacity={opacity}
+            />
+          );
+        })}
 
-  const moveSection = (section: string, direction: "up" | "down") => {
-    setSectionOrder((current) => {
-      const index = current.indexOf(section);
-      if (index < 0) return current;
-      const target = direction === "up" ? index - 1 : index + 1;
-      if (target < 0 || target >= current.length) return current;
-      const next = [...current];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
-  };
+        {Array.from({ length: 1400 }).map((_, index) => {
+          const cluster = index % 4 === 0;
+          const x = cluster ? 10 + (index % 80) * 14 : 1130 + (index % 34) * 14;
+          const y = cluster
+            ? 20 + Math.floor(index / 80) * 22 + Math.sin(index * 0.6) * 10
+            : 25 + Math.floor(index / 34) * 16;
 
-  return {
-    showLayoutOptions,
-    setShowLayoutOptions,
-    sectionOrder,
-    sectionVisibility,
-    visibleSectionOrder,
-    toggleSection,
-    moveSection,
-  };
+          if (cluster) {
+            return (
+              <text
+                key={`particle-${index}`}
+                x={x}
+                y={y}
+                fill="#93c5fd"
+                opacity={0.04 + (index % 8) * 0.012}
+                fontSize={index % 20 === 0 ? "10" : "7"}
+                fontFamily="monospace"
+              >
+                {index % 2 === 0 ? "1" : "0"}
+              </text>
+            );
+          }
+
+          return (
+            <circle
+              key={`particle-${index}`}
+              cx={x}
+              cy={y}
+              r={0.45}
+              fill="#93c5fd"
+              opacity="0.07"
+              stroke="#fb923c"
+              strokeOpacity="0.4"
+              strokeWidth="0.35"
+            />
+          );
+        })}
+
+        {Array.from({ length: 1600 }).map((_, index) => {
+          const col = index % 50;
+          const row = Math.floor(index / 50);
+          const x = 1080 + col * 11;
+          const y = 20 + row * 14;
+
+          return (
+            <text
+              key={`binary-${index}`}
+              x={x}
+              y={y}
+              fill="#60a5fa"
+              opacity={Math.max(0.03, 0.46 - col * 0.008)}
+              fontSize="8"
+              fontFamily="monospace"
+            >
+              {index % 4 === 0 ? "01" : index % 4 === 1 ? "10" : index % 4 === 2 ? "11" : "00"}
+            </text>
+          );
+        })}
+
+        {Array.from({ length: 90 }).map((_, index) => {
+          const y = 120 + index * 6;
+          return (
+            <path
+              key={`output-${index}`}
+              d={`M1000 ${y} C 1120 ${y}, 1260 ${y + Math.sin(index) * 12}, 1480 ${y}`}
+              stroke="#3b82f6"
+              strokeWidth="0.5"
+              fill="none"
+              opacity="0.22"
+            />
+          );
+        })}
+      </svg>
+    </div>
+  );
 }
 
 function App() {
@@ -2466,12 +2655,28 @@ function App() {
     }
   });
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [companySetupLoginPortal, setCompanySetupLoginPortal] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get("setup") === "master";
+    } catch {
+      return false;
+    }
+  });
+  const [godCompanySetupSession, setGodCompanySetupSession] = useState(() => {
+    try {
+      return window.localStorage.getItem(masterCompanySetupSessionKey) === "1";
+    } catch {
+      return false;
+    }
+  });
   const workspaceBootstrapRef = useRef<ReturnType<typeof getWorkspaceBootstrap> | null>(null);
   if (!workspaceBootstrapRef.current) {
     workspaceBootstrapRef.current = getWorkspaceBootstrap();
   }
   const storedWorkspaceState = workspaceBootstrapRef.current;
   const [screen, setScreen] = useState<Screen>("dashboard");
+  const [shellMoreExpanded, setShellMoreExpanded] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [dashboardPreferences, setDashboardPreferences] = useState<DashboardPreferences>(() =>
     readStoredDashboardPreferences(),
   );
@@ -2480,6 +2685,7 @@ function App() {
   );
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [accountNameInput, setAccountNameInput] = useState("");
   const [accountNicknameInput, setAccountNicknameInput] = useState("");
   const [accountPhotoUrl, setAccountPhotoUrl] = useState("");
@@ -2489,7 +2695,11 @@ function App() {
   const [history, setHistory] = useState<HistoryEntry[]>(storedWorkspaceState?.history || initialHistory);
   const [actions, setActions] = useState<ActionItem[]>(storedWorkspaceState?.actions || initialActions);
   const [nonConformances, setNonConformances] = useState<NonConformanceRecord[]>(storedWorkspaceState?.nonConformances || initialNonConformances);
+  const [incidents, setIncidents] = useState<IncidentRecord[]>(storedWorkspaceState?.incidents || initialIncidents);
+  const [incidentActions, setIncidentActions] = useState<IncidentCorrectiveAction[]>(storedWorkspaceState?.incidentActions || initialIncidentActions);
   const [schedules, setSchedules] = useState<ScheduleItem[]>(storedWorkspaceState?.schedules || initialSchedules);
+  const [sites, setSites] = useState<Site[]>(storedWorkspaceState?.sites || deriveSitesFromWorkspace(storedWorkspaceState?.audits || initialAudits, storedWorkspaceState?.schedules || initialSchedules, storedWorkspaceState?.managedSchedules || []));
+  const [selectedSiteId, setSelectedSiteId] = useState<string>(storedWorkspaceState?.selectedSiteId || "");
   const [templates, setTemplates] = useState<AuditTemplate[]>(storedWorkspaceState?.templates || initialTemplates);
   const [drafts, setDrafts] = useState<Record<string, AuditDraft>>(storedWorkspaceState?.drafts || {});
   const [activeAuditId, setActiveAuditId] = useState<string | null>(null);
@@ -2523,6 +2733,7 @@ function App() {
   const [auditFormsFolderInput, setAuditFormsFolderInput] = useState(storedFolderLinks?.auditFormsFolderInput || "");
   const [masterSheetInput, setMasterSheetInput] = useState(storedFolderLinks?.masterSheetInput || "");
   const [evidenceFolderInput, setEvidenceFolderInput] = useState(storedFolderLinks?.evidenceFolderInput || "");
+  const [healthSafetyFolderInput, setHealthSafetyFolderInput] = useState(storedFolderLinks?.healthSafetyFolderInput || "");
   const [exportsFolderInput, setExportsFolderInput] = useState(storedFolderLinks?.exportsFolderInput || "");
   const [adminNotesFolderInput, setAdminNotesFolderInput] = useState(storedFolderLinks?.adminNotesFolderInput || "");
   const [templateNameInput, setTemplateNameInput] = useState("");
@@ -2531,14 +2742,14 @@ function App() {
   const [templateDraftQuestions, setTemplateDraftQuestions] = useState<DraftTemplateQuestion[]>([]);
   const [scheduleNameInput, setScheduleNameInput] = useState("");
   const [scheduleAreaInput, setScheduleAreaInput] = useState("");
-  const [scheduleOwnerInput, setScheduleOwnerInput] = useState(users[1].name);
+  const [scheduleOwnerInput, setScheduleOwnerInput] = useState(DEFAULT_MANAGER_NAME);
   const [scheduleScopeInput, setScheduleScopeInput] = useState<ScheduleScope>("Company schedule");
-  const [schedulePersonalAssigneeInput, setSchedulePersonalAssigneeInput] = useState(users[2].name);
+  const [schedulePersonalAssigneeInput, setSchedulePersonalAssigneeInput] = useState(DEFAULT_AUDITOR_NAME);
   const [scheduleFrequencyInput, setScheduleFrequencyInput] = useState<ScheduleFrequency>("Weekly");
   const [scheduleSendTimeInput, setScheduleSendTimeInput] = useState("08:00");
-  const [scheduleRecipientsInput, setScheduleRecipientsInput] = useState(users[2].name);
-  const [scheduleOverdueAlertRecipientsInput, setScheduleOverdueAlertRecipientsInput] = useState(users[1].name);
-  const [scheduleEscalationContactInput, setScheduleEscalationContactInput] = useState(users[0].name);
+  const [scheduleRecipientsInput, setScheduleRecipientsInput] = useState(DEFAULT_AUDITOR_NAME);
+  const [scheduleOverdueAlertRecipientsInput, setScheduleOverdueAlertRecipientsInput] = useState(DEFAULT_MANAGER_NAME);
+  const [scheduleEscalationContactInput, setScheduleEscalationContactInput] = useState(DEFAULT_ESCALATION_NAME);
   const [scheduleOverdueAlertTimingInput, setScheduleOverdueAlertTimingInput] =
     useState<OverdueAlertTiming>("At due time");
   const [scheduleCompletionCheckTimingInput, setScheduleCompletionCheckTimingInput] =
@@ -2563,10 +2774,11 @@ function App() {
   const [inviteEmailInput, setInviteEmailInput] = useState("");
   const [inviteRoleInput, setInviteRoleInput] = useState<Role>("Manager");
   const [invitedUsers, setInvitedUsers] = useState<UserInvite[]>(storedWorkspaceState?.invitedUsers || []);
+  const [godModeAppInviteEmail, setGodModeAppInviteEmail] = useState("");
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [companySheetSync, setCompanySheetSync] = useState<CompanySheetSyncStatus | null>(storedWorkspaceState?.companySheetSync || null);
   const [selectedReportTemplate, setSelectedReportTemplate] = useState<ReportTemplateType>("Executive summary");
-  const [reportTitleInput, setReportTitleInput] = useState("QMS Precast Executive Summary");
+  const [reportTitleInput, setReportTitleInput] = useState(`${companyName} Executive Summary`);
   const [reportRecipients, setReportRecipients] = useState<string[]>([]);
   const [selectedReportSections, setSelectedReportSections] = useState<ReportSectionKey[]>(
     reportTemplateDefaults["Executive summary"],
@@ -2576,6 +2788,15 @@ function App() {
     storedWorkspaceState?.auditAccessOverrides || {},
   );
   const [managerAlerts, setManagerAlerts] = useState<ManagerAlert[]>(storedWorkspaceState?.managerAlerts || []);
+  const [roleNavVisibility, setRoleNavVisibility] = useState<RoleNavVisibilityMatrix>(
+    storedWorkspaceState?.roleNavVisibility || buildDefaultRoleNavVisibilityMatrix(),
+  );
+  const [roleSiteSelectorVisibility, setRoleSiteSelectorVisibility] = useState<RoleSiteSelectorVisibility>(
+    storedWorkspaceState?.roleSiteSelectorVisibility || buildDefaultRoleSiteSelectorVisibility(),
+  );
+  const [userSiteAssignments, setUserSiteAssignments] = useState<UserSiteAssignments>(
+    storedWorkspaceState?.userSiteAssignments ?? {},
+  );
   const [actionFilter, setActionFilter] = useState<"Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity">("Open");
   const [actionSeverityFilter, setActionSeverityFilter] = useState<RiskLevel | "All">("All");
   const [actionNcFilter, setActionNcFilter] = useState<string>("All");
@@ -2591,6 +2812,69 @@ function App() {
     [folders, selectedFolderId],
   );
 
+  const selectedSite = useMemo(
+    () => sites.find((site) => site.id === selectedSiteId) ?? null,
+    [sites, selectedSiteId],
+  );
+
+  const currentUserAssignedSiteIds = useMemo(() => {
+    if (!currentUser) return null;
+    return getUserAssignedSiteIds(currentUser.role, currentUser, invitedUsers, userSiteAssignments);
+  }, [currentUser, invitedUsers, userSiteAssignments]);
+
+  const assignmentFilteredAudits = useMemo(
+    () => filterByAssignedSites(audits, currentUserAssignedSiteIds, sites),
+    [audits, currentUserAssignedSiteIds, sites],
+  );
+  const assignmentFilteredActions = useMemo(
+    () => filterByAssignedSites(actions, currentUserAssignedSiteIds, sites),
+    [actions, currentUserAssignedSiteIds, sites],
+  );
+  const assignmentFilteredSchedules = useMemo(
+    () => filterByAssignedSites(schedules, currentUserAssignedSiteIds, sites),
+    [schedules, currentUserAssignedSiteIds, sites],
+  );
+  const assignmentFilteredNonConformances = useMemo(
+    () => filterNonConformancesByAssignedSites(nonConformances, currentUserAssignedSiteIds, sites),
+    [nonConformances, currentUserAssignedSiteIds, sites],
+  );
+  const assignmentFilteredHistory = useMemo(() => {
+    if (!currentUserAssignedSiteIds) return history;
+    const allowedNames = new Set(
+      sites.filter((s) => currentUserAssignedSiteIds.has(s.id) && s.active).map((s) => normalizeIdentity(s.name)),
+    );
+    if (allowedNames.size === 0) return [];
+    return history.filter((entry) => {
+      const audit = audits.find((a) => a.id === entry.auditId);
+      if (!audit) return true;
+      return allowedNames.has(normalizeIdentity(audit.siteArea));
+    });
+  }, [history, audits, currentUserAssignedSiteIds, sites]);
+
+  const headerSelectableSites = useMemo(() => {
+    const active = sites.filter((site) => site.active);
+    if (!currentUserAssignedSiteIds) return active;
+    return active.filter((site) => currentUserAssignedSiteIds.has(site.id));
+  }, [sites, currentUserAssignedSiteIds]);
+
+  const siteScopedAudits = useMemo(() => {
+    if (!selectedSite) return assignmentFilteredAudits;
+    const selectedName = normalizeIdentity(selectedSite.name);
+    return assignmentFilteredAudits.filter((audit) => normalizeIdentity(audit.siteArea) === selectedName);
+  }, [assignmentFilteredAudits, selectedSite]);
+
+  const siteScopedActions = useMemo(() => {
+    if (!selectedSite) return assignmentFilteredActions;
+    const selectedName = normalizeIdentity(selectedSite.name);
+    return assignmentFilteredActions.filter((action) => !action.siteArea || normalizeIdentity(action.siteArea) === selectedName);
+  }, [assignmentFilteredActions, selectedSite]);
+
+  const siteScopedSchedules = useMemo(() => {
+    if (!selectedSite) return assignmentFilteredSchedules;
+    const selectedName = normalizeIdentity(selectedSite.name);
+    return assignmentFilteredSchedules.filter((schedule) => normalizeIdentity(schedule.siteArea) === selectedName);
+  }, [assignmentFilteredSchedules, selectedSite]);
+
   const getStoredProfilePhoto = (user: User | null) => {
     if (!user) return "";
     return userProfilePhotos[user.username] || userProfilePhotos[user.name.toLowerCase()] || "";
@@ -2604,26 +2888,26 @@ function App() {
   );
 
   const selectedFolderSchedules = useMemo(
-    () => schedules.filter((schedule) => schedule.companyFolderId === selectedFolderId),
-    [schedules, selectedFolderId],
+    () => siteScopedSchedules.filter((schedule) => schedule.companyFolderId === selectedFolderId),
+    [siteScopedSchedules, selectedFolderId],
   );
 
   const groupedAudits = useMemo(
     () => ({
-      green: audits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "green"),
-      amber: audits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "amber"),
-      red: audits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "red"),
+      green: siteScopedAudits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "green"),
+      amber: siteScopedAudits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "amber"),
+      red: siteScopedAudits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "red"),
     }),
-    [audits],
+    [siteScopedAudits],
   );
 
   const compliance = useMemo(() => {
-    if (audits.length === 0) {
+    if (siteScopedAudits.length === 0) {
       return 0;
     }
-    const safeCount = audits.filter((audit) => getAuditTrafficStatus(audit.dueHours) === "green").length;
-    return Math.round((safeCount / audits.length) * 100);
-  }, [audits]);
+    const safeCount = siteScopedAudits.filter((audit) => getAuditTrafficStatus(audit.dueHours) === "green").length;
+    return Math.round((safeCount / siteScopedAudits.length) * 100);
+  }, [siteScopedAudits]);
 
   const priorCompliance = useMemo(() => {
     const recent = history.slice(0, 6);
@@ -2638,8 +2922,8 @@ function App() {
   const criticalActions = useMemo(() => openActions.filter((action) => action.severity === "Critical" || action.severity === "High"), [openActions]);
   const awaitingVerificationActions = useMemo(() => openActions.filter((action) => action.status === "Awaiting Verification"), [openActions]);
   const overdueAudits = useMemo(
-    () => audits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "red"),
-    [audits],
+    () => siteScopedAudits.filter((audit) => !isAuditCompleted(audit) && getAuditTrafficStatus(audit.dueHours) === "red"),
+    [siteScopedAudits],
   );
   const evidenceCount = useMemo(
     () => Object.values(evidence).reduce((total, items) => total + items.length, 0),
@@ -2659,14 +2943,14 @@ function App() {
     [history],
   );
   const auditCompletionRate = useMemo(() => {
-    const total = audits.length + history.length;
+    const total = siteScopedAudits.length + history.length;
     if (total === 0) return 0;
     return Math.round((history.length / total) * 100);
-  }, [audits.length, history.length]);
+  }, [siteScopedAudits.length, history.length]);
   const actionClosureRate = useMemo(() => {
-    if (actions.length === 0) return 0;
-    return Math.round((actions.filter((item) => item.status === "Closed").length / actions.length) * 100);
-  }, [actions]);
+    if (siteScopedActions.length === 0) return 0;
+    return Math.round((siteScopedActions.filter((item) => item.status === "Closed").length / siteScopedActions.length) * 100);
+  }, [siteScopedActions]);
   const pendingSyncCount = useMemo(
     () => syncQueue.filter((item) => item.status === "Pending Sync" || item.status === "Syncing").length,
     [syncQueue],
@@ -2692,21 +2976,21 @@ function App() {
     [syncQueue],
   );
   const averageActionClosureDays = useMemo(() => {
-    const closed = actions.filter((item) => item.closedAt && item.createdAt);
+    const closed = siteScopedActions.filter((item) => item.closedAt && item.createdAt);
     if (closed.length === 0) return 0;
     const totalDays = closed.reduce((sum, item) => {
       const diff = new Date(item.closedAt).getTime() - new Date(item.createdAt).getTime();
       return sum + Math.max(1, Math.round(diff / 86400000));
     }, 0);
     return Math.round(totalDays / closed.length);
-  }, [actions]);
+  }, [siteScopedActions]);
   const recurringFailedQuestions = useMemo(() => {
     const map = new Map<string, number>();
-    actions.forEach((action) => {
+    siteScopedActions.forEach((action) => {
       map.set(action.questionText, (map.get(action.questionText) || 0) + 1);
     });
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  }, [actions]);
+  }, [siteScopedActions]);
   const topOverdueSchedules = useMemo(() => {
     return managedSchedules
       .filter((item) => computeScheduleHealthState(item) === "Overdue" || computeScheduleHealthState(item) === "Failing")
@@ -2718,7 +3002,7 @@ function App() {
     let total = 0;
     let critical = 0;
     let high = 0;
-    audits.forEach((audit) => {
+    siteScopedAudits.forEach((audit) => {
       levels.push(audit.highestRiskLevel || "Low");
       total += audit.totalRiskScore || 0;
       critical += audit.numberOfCriticalFindings || 0;
@@ -2730,7 +3014,7 @@ function App() {
       criticalFindings: critical,
       highFindings: high,
     };
-  }, [audits]);
+  }, [siteScopedAudits]);
   const visibleActions = useMemo(() => {
     const withEscalation = (items: ActionItem[]) =>
       items.map((action) => ({
@@ -2738,11 +3022,11 @@ function App() {
         escalated: isEscalated(action),
         isStuck: isStuck(action),
       }));
-    if (!currentUser) return withEscalation(actions);
+    if (!currentUser) return withEscalation(siteScopedActions);
     const permissions = getRolePermissions(currentUser.role);
-    if (permissions.canAssignActions) return withEscalation(actions);
-    return withEscalation(actions.filter((action) => action.assignedToName === currentUser.name || action.assignedToUserId === currentUser.username));
-  }, [actions, currentUser]);
+    if (permissions.canAssignActions) return withEscalation(siteScopedActions);
+    return withEscalation(siteScopedActions.filter((action) => action.assignedToName === currentUser.name || action.assignedToUserId === currentUser.username));
+  }, [siteScopedActions, currentUser]);
   const filteredActions = useMemo(() => {
     let next = [...visibleActions];
     if (actionFilter === "Open") {
@@ -2770,79 +3054,64 @@ function App() {
     [visibleActions],
   );
 
-  const assignedAudits = useMemo(() => {
-    if (!currentUser) {
-      return audits.filter((audit) => !isAuditCompleted(audit));
-    }
-    if (canAccessAdmin(currentUser.role) || currentUser.role === "Manager") {
-      return audits.filter((audit) => !isAuditCompleted(audit));
-    }
-    return audits.filter((audit) => audit.owner === currentUser.name && !isAuditCompleted(audit));
-  }, [audits, currentUser]);
   const demoModeActive = useMemo(
     () =>
-      audits.some((audit) => audit.id.startsWith("audit-demo-")) ||
-      actions.some((action) => action.id.startsWith("action-demo-")) ||
+      siteScopedAudits.some((audit) => audit.id.startsWith("audit-demo-")) ||
+      siteScopedActions.some((action) => action.id.startsWith("action-demo-")) ||
       syncQueue.some((item) => item.id.startsWith("sync-demo-")),
-    [audits, actions, syncQueue],
+    [siteScopedAudits, siteScopedActions, syncQueue],
   );
+
+  const godCompanySetupOnlyShell = Boolean(currentUser?.role === "Master" && godCompanySetupSession);
 
   const roleLabel = useMemo(() => {
     if (!currentUser) {
       return "";
     }
+    if (currentUser.role === "Master" && godCompanySetupSession) {
+      return "Workspace setup only — sign out when finished";
+    }
     if (currentUser.role === "Master") {
-      return "God Mode access for platform setup, company provisioning, and full control";
+      return "Setup — connect Google, link the company workspace, and go live";
     }
     if (currentUser.role === "Admin") {
-      return "Platform configuration and template control";
+      return "Admin, templates, invites, and workspace checks";
     }
     if (currentUser.role === "Manager") {
       return "Review actions, overdue items, and compliance risk";
     }
     return "Complete assigned audits and capture site outcomes";
-  }, [currentUser]);
+  }, [currentUser, godCompanySetupSession]);
   const currentUserAppName = useMemo(() => {
     if (!currentUser) {
       return "";
     }
     return userNicknames[currentUser.username]?.trim() || currentUser.name;
-  }, [currentUser, userNicknames]);
+  }, [currentUser, userNicknames, godCompanySetupSession]);
 
   const visibleNavItems = useMemo(() => {
     if (!currentUser) {
       return [];
     }
+    if (currentUser.role === "Master" && godCompanySetupSession) {
+      const onboardingOnly = navItems.find((item) => item.id === "onboarding");
+      return onboardingOnly ? [onboardingOnly] : [];
+    }
     const filtered = navItems.filter((item) => {
-      if (item.id === "admin") {
-        return canAccessAdmin(currentUser.role);
+      const baselineVisible = canRoleAccessNavItem(currentUser.role, item.id);
+      if (item.id === "incidents") {
+        return baselineVisible;
       }
-      if (item.id === "onboarding") {
-        return canAccessOnboarding(currentUser.role);
-      }
-      if (item.id === "schedules") {
-        return canAccessSchedules(currentUser.role);
-      }
-      if (item.id === "reports") {
-        return canAccessReports(currentUser.role);
-      }
-      if (item.id === "actions") {
-        return canAccessActions(currentUser.role);
-      }
-      if (item.id === "nonConformance") {
-        return canAccessActions(currentUser.role);
-      }
-      if (item.id === "audits") {
-        return canAccessAuditsCentre(currentUser.role);
-      }
-      if (item.id === "sync") {
-        return true;
-      }
-      return true;
+      const matrixVisible = roleNavVisibility[currentUser.role]?.[item.id] ?? baselineVisible;
+      return baselineVisible && matrixVisible;
     });
 
     // Safety net: always surface onboarding when role has onboarding access.
-    if (canAccessOnboarding(currentUser.role) && !filtered.some((item) => item.id === "onboarding")) {
+    if (
+      canAccessOnboardingNav(currentUser.role) &&
+      (roleNavVisibility[currentUser.role]?.["onboarding"] ?? true) &&
+      !filtered.some((item) => item.id === "onboarding")
+    ) {
       const onboardingItem = navItems.find((item) => item.id === "onboarding");
       if (onboardingItem) {
         const accountIndex = filtered.findIndex((item) => item.id === "account");
@@ -2855,7 +3124,73 @@ function App() {
     }
 
     return filtered;
-  }, [currentUser]);
+  }, [currentUser, roleNavVisibility, godCompanySetupSession]);
+
+  const visibleNavIdSet = useMemo(() => new Set(visibleNavItems.map((item) => item.id)), [visibleNavItems]);
+
+  /** Tablet sidebar primary row — fixed order from `navStructure`, intersected with role visibility. */
+  const primaryNavItems = useMemo(() => {
+    return PRIMARY_NAV_IDS.flatMap((id) => {
+      if (!visibleNavIdSet.has(id)) {
+        return [];
+      }
+      const item = navItems.find((entry) => entry.id === id);
+      return item ? [item] : [];
+    });
+  }, [visibleNavIdSet]);
+
+  /** Tablet sidebar “More” — fixed order from `navStructure`, intersected with role visibility. */
+  const moreNavItems = useMemo(() => {
+    return MORE_MENU_NAV_IDS.flatMap((id) => {
+      if (!visibleNavIdSet.has(id)) {
+        return [];
+      }
+      const item = navItems.find((entry) => entry.id === id);
+      return item ? [item] : [];
+    });
+  }, [visibleNavIdSet]);
+
+  const mobileTabBarIds = useMemo(() => new Set<string>(["dashboard", "audits", "actions", "reports"]), []);
+
+  /** Mobile “More” sheet — same ordering as tablet (primary extras not on tab bar, then More menu ids). */
+  const mobileMoreDestinations = useMemo(() => {
+    const orderedIds = [...PRIMARY_NAV_IDS, ...MORE_MENU_NAV_IDS];
+    const seen = new Set<string>();
+    const out: Array<(typeof navItems)[number]> = [];
+    for (const id of orderedIds) {
+      if (seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      if (!visibleNavIdSet.has(id) || mobileTabBarIds.has(id)) {
+        continue;
+      }
+      const item = navItems.find((entry) => entry.id === id);
+      if (item) {
+        out.push(item);
+      }
+    }
+    return out;
+  }, [visibleNavIdSet, mobileTabBarIds]);
+
+  const mobileBottomNavEntries = useMemo(() => {
+    const entries: Array<{ id: Screen | "__more__"; label: string; icon: string }> = [
+      { id: "dashboard", label: "Dashboard", icon: "dashboard" },
+    ];
+    if (visibleNavItems.some((i) => i.id === "audits")) {
+      entries.push({ id: "audits", label: "Audits", icon: "clipboard" });
+    }
+    if (visibleNavItems.some((i) => i.id === "actions")) {
+      entries.push({ id: "actions", label: "Actions", icon: "warningTriangle" });
+    }
+    if (visibleNavItems.some((i) => i.id === "reports")) {
+      entries.push({ id: "reports", label: "Reports", icon: "chart" });
+    }
+    entries.push({ id: "__more__", label: "More", icon: "grid" });
+    return entries;
+  }, [visibleNavItems]);
+
+  const showSiteSelectorForRole = currentUser ? (roleSiteSelectorVisibility[currentUser.role] ?? true) : true;
 
   const creatableRoles = useMemo(
     () => (currentUser ? getCreatableRoles(currentUser.role) : []),
@@ -2869,17 +3204,17 @@ function App() {
         username: user.username,
         email:
           user.username === "admin"
-            ? "andy@qmsprecast.co.uk"
+            ? "andy@usebert.co.uk"
             : user.username === "manager"
-              ? "james@qmsprecast.co.uk"
+              ? "james@usebert.co.uk"
               : user.username === "tom"
-                ? "tom@qmsprecast.co.uk"
-                : "sarah@qmsprecast.co.uk",
+                ? "tom@usebert.co.uk"
+                : "sarah@usebert.co.uk",
         name: user.name,
         role: user.role,
       }));
     const invited = invitedUsers.map((invite) => ({
-      username: invite.email.split("@")[0],
+      username: invite.email.toLowerCase(),
       email: invite.email,
       name: invite.email,
       role: invite.role,
@@ -2887,6 +3222,36 @@ function App() {
     const merged = [...seededUsers, ...invited];
     return merged.filter((user, index, list) => list.findIndex((item) => item.email === user.email) === index);
   }, [invitedUsers]);
+
+  const onboardingPasswordByEmail = useMemo(() => {
+    const lookup = new Map<string, string>();
+    onboardingRecords.forEach((record) => {
+      const email = normalizeIdentity(record.contactEmail);
+      const password = extractByKeys(record.raw, ["password", "passcode", "pin", "login"]);
+      if (email && password) {
+        lookup.set(email, password);
+      }
+    });
+    return lookup;
+  }, [onboardingRecords]);
+
+  const loginUsers = useMemo(() => {
+    const demoOrDev = import.meta.env.DEV === true || import.meta.env.VITE_ENABLE_DEMO_LOGIN === "true";
+    const invitedLoginUsers = invitedUsers.map((invite) => ({
+      username: invite.email.toLowerCase(),
+      password: demoOrDev
+        ? onboardingPasswordByEmail.get(normalizeIdentity(invite.email)) ||
+          String(import.meta.env.VITE_DEMO_USER_PASSWORD ?? "").trim()
+        : "",
+      role: invite.role,
+      name: invite.email,
+    }));
+    const merged = [...users, ...invitedLoginUsers];
+    return merged.filter(
+      (user, index, list) =>
+        list.findIndex((item) => item.username === user.username && item.role === user.role) === index,
+    );
+  }, [invitedUsers, onboardingPasswordByEmail, users]);
 
   const availableScheduleAudits = useMemo(() => {
     const templateOptions = templates
@@ -2897,6 +3262,122 @@ function App() {
     return merged.filter((item, index, list) => list.findIndex((entry) => entry.name === item.name) === index);
   }, [templates, audits]);
 
+  const currentUserAuditAccess = useMemo(() => {
+    if (!currentUser) {
+      return { allowedAuditIds: new Set<string>(), allowedAuditNames: new Set<string>() };
+    }
+    const normalizedName = normalizeIdentity(currentUser.name);
+    const normalizedUsername = normalizeIdentity(currentUser.username);
+    const normalizedDefaultEmail = normalizeIdentity(`${currentUser.username}@usebert.co.uk`);
+    const legacyDefaultEmail = normalizeIdentity(`${currentUser.username}@qmsprecast.co.uk`);
+    const matchingEmails = new Set(
+      companyReportUsers
+        .filter((user) => {
+          const userName = normalizeIdentity(user.name);
+          const userEmail = normalizeIdentity(user.email);
+          const userEmailLocalPart = normalizeIdentity(user.email.split("@")[0]);
+          const userUsername = normalizeIdentity(user.username || "");
+          return (
+            userName === normalizedName ||
+            userEmail === normalizedDefaultEmail ||
+            userEmail === legacyDefaultEmail ||
+            userEmailLocalPart === normalizedUsername ||
+            userUsername === normalizedUsername
+          );
+        })
+        .map((user) => normalizeIdentity(user.email)),
+    );
+    matchingEmails.add(normalizedDefaultEmail);
+    matchingEmails.add(legacyDefaultEmail);
+
+    const allowedAuditIds = new Set<string>();
+    Object.entries(auditAccessOverrides).forEach(([key, access]) => {
+      const [email, auditId] = key.split("::");
+      if (!email || !auditId) return;
+      if (access === "No access") return;
+      if (!matchingEmails.has(normalizeIdentity(email))) return;
+      allowedAuditIds.add(auditId);
+    });
+
+    const allowedAuditNames = new Set<string>();
+    availableScheduleAudits.forEach((option) => {
+      if (allowedAuditIds.has(option.id)) {
+        allowedAuditNames.add(option.name);
+      }
+    });
+    return { allowedAuditIds, allowedAuditNames };
+  }, [currentUser, companyReportUsers, auditAccessOverrides, availableScheduleAudits]);
+
+  const assignedAudits = useMemo(() => {
+    if (!currentUser) {
+      return siteScopedAudits.filter((audit) => !isAuditCompleted(audit));
+    }
+    if (canAccessAdmin(currentUser.role) || currentUser.role === "Manager") {
+      return siteScopedAudits.filter((audit) => !isAuditCompleted(audit));
+    }
+    return siteScopedAudits.filter((audit) => {
+      if (isAuditCompleted(audit)) return false;
+      if (audit.owner === currentUser.name) return true;
+      if (currentUserAuditAccess.allowedAuditIds.has(audit.id)) return true;
+      if (currentUserAuditAccess.allowedAuditNames.has(audit.name)) return true;
+      return false;
+    });
+  }, [siteScopedAudits, currentUser, currentUserAuditAccess]);
+
+  const dashboardNextActionInput = useMemo((): DashboardSummaryForNextAction | null => {
+    if (!currentUser) return null;
+    const actions = visibleActions;
+    return {
+      overdueAuditCount: assignedAudits.filter((a) => getAuditTrafficStatus(a.dueHours) === "red").length,
+      overdueActionCount: actions.filter(isOverdue).length,
+      escalatedActionCount: actions.filter(isEscalated).length,
+      stuckActionCount: actions.filter(isStuck).length,
+      dueTodayAuditCount: assignedAudits.filter((a) => a.dueHours >= 0 && a.dueHours <= 24).length,
+      dueTodayActionCount: actions.filter((a) => a.dueHours >= 0 && a.dueHours <= 24 && a.status !== "Closed").length,
+      awaitingVerificationCount: actions.filter((a) => a.status === "Awaiting Verification").length,
+      openOrInProgressActionCount: actions.filter((a) => a.status === "Open" || a.status === "In Progress").length,
+      assignedEvidenceMissingCount: actions.filter(
+        (a) =>
+          (a.assignedToUserId === currentUser.username || a.assignedToName === currentUser.name) &&
+          a.status !== "Closed" &&
+          Boolean(a.evidenceRequired) &&
+          a.evidenceCount === 0,
+      ).length,
+      recentCompletionCount: assignmentFilteredHistory.length,
+    };
+  }, [currentUser, visibleActions, assignedAudits, assignmentFilteredHistory]);
+
+  const dashboardNextBest = useMemo(() => {
+    if (!currentUser || !dashboardNextActionInput) return null;
+    return getNextBestAction(currentUser.role, dashboardNextActionInput);
+  }, [currentUser, dashboardNextActionInput]);
+
+  const workspaceOnboardingIncomplete = useMemo(() => {
+    if (!selectedFolder || !workspaceValidation) return false;
+    return (
+      !workspaceValidation.ok ||
+      workspaceValidation.missingTabs.length > 0 ||
+      (workspaceValidation.warnings?.length ?? 0) > 0
+    );
+  }, [selectedFolder, workspaceValidation]);
+
+  const showDashboardStartHere = useMemo(
+    () => !selectedFolder || demoModeActive || godCompanySetupOnlyShell || workspaceOnboardingIncomplete,
+    [selectedFolder, demoModeActive, godCompanySetupOnlyShell, workspaceOnboardingIncomplete],
+  );
+
+  const openIncidentFollowUpsCount = useMemo(
+    () => incidentActions.filter((item) => item.status !== "Complete").length,
+    [incidentActions],
+  );
+
+  const syncPlainSummary = useMemo(() => {
+    if (offlineMode) return "Offline";
+    if (failedSyncCount > 0) return `${failedSyncCount} sync issue${failedSyncCount === 1 ? "" : "s"}`;
+    if (pendingSyncCount > 0 || offlineQueue.length > 0) return "Saving…";
+    return "All work saved";
+  }, [offlineMode, failedSyncCount, pendingSyncCount, offlineQueue.length]);
+
   const availableScheduleAuditors = useMemo(() => {
     const seeded = users.filter((user) => user.role === "Auditor").map((user) => user.name);
     const invited = invitedUsers.filter((invite) => invite.role === "Auditor").map((invite) => invite.email);
@@ -2906,12 +3387,15 @@ function App() {
     if (!currentUser || currentUser.role !== "Manager") {
       return [];
     }
-    const usernameEmail = `${currentUser.username}@qmsprecast.co.uk`.toLowerCase();
+    const usernameEmailPrimary = `${currentUser.username}@usebert.co.uk`.toLowerCase();
+    const usernameEmailLegacy = `${currentUser.username}@qmsprecast.co.uk`.toLowerCase();
     const normalizedName = currentUser.name.toLowerCase();
     return managerAlerts.filter(
       (alert) =>
         (alert.managerNames.some((name) => name.toLowerCase() === normalizedName) ||
-          alert.managerEmails.some((email) => email.toLowerCase() === usernameEmail)) &&
+          alert.managerEmails.some(
+            (email) => email.toLowerCase() === usernameEmailPrimary || email.toLowerCase() === usernameEmailLegacy,
+          )) &&
         !alert.readBy.includes(currentUser.username),
     );
   }, [currentUser, managerAlerts]);
@@ -3086,8 +3570,9 @@ function App() {
     );
 
     if (managerEmails.length > 0) {
-      void fetch("/api/manager/non-compliance-alert", {
+      void fetch(apiUrl("/api/manager/non-compliance-alert"), {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -3132,33 +3617,133 @@ function App() {
       }).format(new Date()),
     [screen, offlineMode, currentUser?.role],
   );
-  const shellPreviewClass = previewOrientation === "landscape" ? "qms-force-landscape" : "";
+  const shellPreviewClass =
+    isDebugUiAllowed() && previewOrientation === "landscape" ? "qms-force-landscape" : "";
 
   useEffect(() => {
-    const storedUser = window.localStorage.getItem(userStorageKey);
-    if (!storedUser) {
-      return;
-    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const mr = await fetch(apiUrl("/api/auth/master/session"), { credentials: "include" });
+        const mp = (await parseJsonApiResponse(mr)) as {
+          ok?: boolean;
+          operator?: { email: string; name: string };
+        };
+        if (cancelled) {
+          return;
+        }
+        if (mr.ok && mp.ok && mp.operator) {
+          const masterUser: User = {
+            username: String(mp.operator.email).toLowerCase(),
+            password: "",
+            role: "Master",
+            name: mp.operator.name || mp.operator.email,
+          };
+          setCurrentUser(masterUser);
+          setAccountNameInput(masterUser.name);
+          setAccountPhotoUrl(getStoredProfilePhoto(masterUser));
+          try {
+            if (window.localStorage.getItem(masterCompanySetupSessionKey) === "1") {
+              setGodCompanySetupSession(true);
+            } else {
+              setGodCompanySetupSession(false);
+            }
+          } catch {
+            setGodCompanySetupSession(false);
+          }
+          window.localStorage.setItem(userStorageKey, JSON.stringify(masterUser));
+          return;
+        }
+      } catch {
+        /* fall through to company session */
+      }
 
-    try {
-      const parsed = JSON.parse(storedUser) as User;
-      const matchedUser = users.find(
-        (user) =>
-          user.username === parsed.username &&
-          user.role === parsed.role &&
-          user.name === parsed.name,
-      );
+      try {
+        const cr = await fetch(apiUrl("/api/auth/company/session"), { credentials: "include" });
+        const cp = (await parseJsonApiResponse(cr)) as {
+          ok?: boolean;
+          user?: { email: string; role: Role; name: string };
+        };
+        if (cancelled) {
+          return;
+        }
+        if (cr.ok && cp.ok && cp.user?.email && cp.user?.role) {
+          const companyUser: User = {
+            username: String(cp.user.email).toLowerCase(),
+            password: "",
+            role: cp.user.role,
+            name: cp.user.name || cp.user.email,
+          };
+          setCurrentUser(companyUser);
+          setAccountNameInput(companyUser.name);
+          setAccountPhotoUrl(getStoredProfilePhoto(companyUser));
+          try {
+            window.localStorage.removeItem(masterCompanySetupSessionKey);
+            setGodCompanySetupSession(false);
+          } catch {
+            setGodCompanySetupSession(false);
+          }
+          window.localStorage.setItem(userStorageKey, JSON.stringify(companyUser));
+          return;
+        }
+      } catch {
+        /* fall through to localStorage */
+      }
 
-      if (matchedUser) {
-        setCurrentUser(matchedUser);
-        setAccountNameInput(matchedUser.name);
-        setAccountPhotoUrl(getStoredProfilePhoto(matchedUser));
-      } else {
+      const storedUser = window.localStorage.getItem(userStorageKey);
+      if (!storedUser) {
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(storedUser) as User;
+        const matchedUser = loginUsers.find(
+          (user) =>
+            user.username === parsed.username &&
+            user.role === parsed.role &&
+            user.name === parsed.name,
+        );
+
+        if (matchedUser) {
+          setCurrentUser(matchedUser);
+          setAccountNameInput(matchedUser.name);
+          setAccountPhotoUrl(getStoredProfilePhoto(matchedUser));
+          try {
+            if (matchedUser.role === "Master" && window.localStorage.getItem(masterCompanySetupSessionKey) === "1") {
+              setGodCompanySetupSession(true);
+            } else {
+              if (matchedUser.role !== "Master") {
+                window.localStorage.removeItem(masterCompanySetupSessionKey);
+              }
+              setGodCompanySetupSession(false);
+            }
+          } catch {
+            setGodCompanySetupSession(false);
+          }
+        } else if (parsed.role === "Master" && parsed.password === "") {
+          window.localStorage.removeItem(userStorageKey);
+        } else {
+          window.localStorage.removeItem(userStorageKey);
+        }
+      } catch {
         window.localStorage.removeItem(userStorageKey);
       }
-    } catch {
-      window.localStorage.removeItem(userStorageKey);
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loginUsers]);
+
+  useEffect(() => {
+    const syncSetupPortalFromUrl = () => {
+      try {
+        setCompanySetupLoginPortal(new URLSearchParams(window.location.search).get("setup") === "master");
+      } catch {
+        setCompanySetupLoginPortal(false);
+      }
+    };
+    window.addEventListener("popstate", syncSetupPortalFromUrl);
+    return () => window.removeEventListener("popstate", syncSetupPortalFromUrl);
   }, []);
 
   useEffect(() => {
@@ -3191,6 +3776,7 @@ function App() {
         auditFormsFolderInput,
         masterSheetInput,
         evidenceFolderInput,
+        healthSafetyFolderInput,
         exportsFolderInput,
         adminNotesFolderInput,
       }),
@@ -3201,6 +3787,7 @@ function App() {
     auditFormsFolderInput,
     masterSheetInput,
     evidenceFolderInput,
+    healthSafetyFolderInput,
     exportsFolderInput,
     adminNotesFolderInput,
   ]);
@@ -3213,11 +3800,15 @@ function App() {
         history,
         actions,
         nonConformances,
+        incidents,
+        incidentActions,
         schedules,
         templates,
         drafts,
         managedSchedules,
         folders,
+        sites,
+        selectedSiteId,
         selectedFolderId,
         syncState,
         invitedUsers,
@@ -3226,6 +3817,9 @@ function App() {
         syncQueue,
         auditAccessOverrides,
         managerAlerts,
+        roleNavVisibility,
+        roleSiteSelectorVisibility,
+        userSiteAssignments,
       }),
     );
   }, [
@@ -3233,11 +3827,15 @@ function App() {
     history,
     actions,
     nonConformances,
+    incidents,
+    incidentActions,
     schedules,
     templates,
     drafts,
     managedSchedules,
     folders,
+    sites,
+    selectedSiteId,
     selectedFolderId,
     syncState,
     invitedUsers,
@@ -3246,6 +3844,9 @@ function App() {
     syncQueue,
     auditAccessOverrides,
     managerAlerts,
+    roleNavVisibility,
+    roleSiteSelectorVisibility,
+    userSiteAssignments,
   ]);
 
   useEffect(() => {
@@ -3266,8 +3867,206 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const derivedSites = deriveSitesFromWorkspace(audits, schedules, managedSchedules);
+    setSites((current) => {
+      const merged = [...current];
+      derivedSites.forEach((site) => {
+        if (!merged.some((item) => normalizeIdentity(item.name) === normalizeIdentity(site.name))) {
+          merged.push(site);
+        }
+      });
+      return merged;
+    });
+  }, [audits, schedules, managedSchedules]);
+
+  useEffect(() => {
+    if (!selectedSiteId) return;
+    const allowedIds = new Set(headerSelectableSites.map((site) => site.id));
+    if (!allowedIds.has(selectedSiteId)) {
+      setSelectedSiteId(headerSelectableSites[0]?.id ?? "");
+    }
+  }, [selectedSiteId, headerSelectableSites]);
+
+  useEffect(() => {
     window.localStorage.setItem(themeStorageKey, themeMode);
   }, [themeMode]);
+
+  const incidentEscalationSeverities: IncidentSeverity[] = ["Lost Time Injury", "Major Incident", "Fatality"];
+
+  const generateIncidentNumber = (incidentDate: string) => {
+    const year = (incidentDate || new Date().toISOString().slice(0, 10)).slice(0, 4) || String(new Date().getFullYear());
+    const existingNumbers = incidents
+      .map((item) => item.incidentId)
+      .filter((value) => value.startsWith(`INC-${year}-`))
+      .map((value) => Number(value.split("-")[2] || 0))
+      .filter((value) => Number.isFinite(value));
+    const next = (existingNumbers.length ? Math.max(...existingNumbers) : 0) + 1;
+    return `INC-${year}-${String(next).padStart(3, "0")}`;
+  };
+
+  const sendIncidentNotification = async (incident: IncidentRecord) => {
+    const response = await fetch(apiUrl("/api/incidents/notify"), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        incidentId: incident.incidentId,
+        incidentType: incident.incidentType,
+        severity: incident.severity,
+        reporter: incident.reporterName,
+        department: incident.department,
+        location: incident.location,
+        status: incident.status,
+        incidentDate: incident.incidentDate,
+        incidentTime: incident.incidentTime,
+        priority: incident.priority,
+        escalated: incident.priority === "High",
+        viewLink: `${window.location.origin}/?screen=incidents&id=${encodeURIComponent(incident.id)}`,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok === false) {
+      throw new Error(result.error || "Incident notification could not be sent.");
+    }
+  };
+
+  const submitIncidentReport = async (payload: {
+    incidentType: IncidentType;
+    severity: IncidentSeverity;
+    incidentDate: string;
+    incidentTime: string;
+    reporterName: string;
+    reporterEmail: string;
+    department: string;
+    location: string;
+    description: string;
+    immediateAction: string;
+    injured: boolean;
+    injuryDetails: string;
+    contributingFactors: string;
+    witnesses: string;
+    evidenceUrls: IncidentEvidenceItem[];
+  }) => {
+    if (!currentUser) {
+      throw new Error("You must be signed in to submit incidents.");
+    }
+    if (!payload.incidentType || !payload.severity || !payload.incidentDate || !payload.reporterName || !payload.department || !payload.location || !payload.description) {
+      throw new Error("Complete all required incident fields before submitting.");
+    }
+    if (payload.injured && !payload.injuryDetails.trim()) {
+      throw new Error("Injury details are required when an injury is reported.");
+    }
+
+    const now = new Date().toISOString();
+    const incidentId = generateIncidentNumber(payload.incidentDate);
+    const highPriority = incidentEscalationSeverities.includes(payload.severity);
+    const assignedTo = highPriority
+      ? users.find((user) => user.role === "Master")?.name || "System Setup"
+      : users.find((user) => user.role === "Manager")?.name || "Unassigned";
+
+    const incident: IncidentRecord = {
+      id: `incident-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      incidentId,
+      status: "Open",
+      priority: highPriority ? "High" : "Normal",
+      incidentType: payload.incidentType,
+      severity: payload.severity,
+      incidentDate: payload.incidentDate,
+      incidentTime: payload.incidentTime,
+      reporterName: payload.reporterName,
+      reporterEmail: payload.reporterEmail,
+      department: payload.department,
+      location: payload.location,
+      description: payload.description,
+      immediateAction: payload.immediateAction,
+      injured: payload.injured,
+      injuryDetails: payload.injuryDetails,
+      contributingFactors: payload.contributingFactors,
+      witnesses: payload.witnesses,
+      evidenceUrls: payload.evidenceUrls,
+      assignedTo,
+      investigationNotes: "",
+      rootCause: "",
+      correctiveActions: "",
+      preventiveActions: "",
+      actionOwner: "",
+      dueDate: "",
+      completionDate: "",
+      riddorRequired: false,
+      closedBy: "",
+      closedAt: "",
+      notificationStatus: "Pending",
+      statusHistory: [{ at: now, from: "", to: "Open", by: currentUser.name, note: "Incident submitted" }],
+      createdAt: now,
+      createdBy: currentUser.name,
+      updatedAt: now,
+      updatedBy: currentUser.name,
+    };
+
+    setIncidents((current) => [incident, ...current]);
+
+    try {
+      await sendIncidentNotification(incident);
+      setIncidents((current) => current.map((item) => (item.id === incident.id ? { ...item, notificationStatus: highPriority ? "Escalated notification sent" : "Notification sent" } : item)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Notification failed.";
+      setIncidents((current) => current.map((item) => (item.id === incident.id ? { ...item, notificationStatus: `Failed: ${message}` } : item)));
+      pushToast("Notification failed", message, "warning");
+    }
+
+    return incident;
+  };
+
+  const updateIncidentRecord = (incidentId: string, patch: Partial<IncidentRecord>, options?: { statusNote?: string }) => {
+    if (!currentUser) return;
+    const at = new Date().toISOString();
+    setIncidents((current) =>
+      current.map((item) => {
+        if (item.id !== incidentId) return item;
+        const nextStatus = (patch.status || item.status) as IncidentStatus;
+        const statusChanged = nextStatus !== item.status;
+        const nextHistory = statusChanged
+          ? [...item.statusHistory, { at, from: item.status, to: nextStatus, by: currentUser.name, note: options?.statusNote || `Status changed to ${nextStatus}` }]
+          : item.statusHistory;
+        return { ...item, ...patch, statusHistory: nextHistory, updatedAt: at, updatedBy: currentUser.name };
+      }),
+    );
+  };
+
+  const addIncidentCorrectiveAction = (incidentId: string, payload: { description: string; owner: string; dueDate: string }) => {
+    if (!currentUser) return;
+    if (!payload.description.trim() || !payload.owner.trim()) {
+      throw new Error("Corrective action description and owner are required.");
+    }
+    setIncidentActions((current) => [
+      {
+        id: `incident-action-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        incidentId,
+        description: payload.description.trim(),
+        owner: payload.owner.trim(),
+        dueDate: payload.dueDate,
+        status: "Open",
+        completedAt: "",
+        completedBy: "",
+      },
+      ...current,
+    ]);
+  };
+
+  const updateIncidentCorrectiveAction = (actionId: string, patch: Partial<IncidentCorrectiveAction>) => {
+    if (!currentUser) return;
+    setIncidentActions((current) =>
+      current.map((item) => {
+        if (item.id !== actionId) return item;
+        const next = { ...item, ...patch };
+        if (next.status === "Complete" && !next.completedAt) {
+          next.completedAt = new Date().toISOString();
+          next.completedBy = currentUser.name;
+        }
+        return next;
+      }),
+    );
+  };
 
   useEffect(() => {
     window.localStorage.setItem(previewOrientationStorageKey, previewOrientation);
@@ -3303,6 +4102,12 @@ function App() {
     }
 
     const queued = [...offlineQueue];
+    const offlineSubmittedByFallback: User = {
+      username: "offline-sync",
+      password: "",
+      role: "Auditor",
+      name: "Offline submission",
+    };
     queued
       .slice()
       .reverse()
@@ -3313,7 +4118,15 @@ function App() {
           noteMap: submission.notes,
           evidenceMap: submission.evidence,
           submittedBy: submission.submittedBy,
-          submittedByUser: users.find((item) => item.name === submission.submittedBy) || users[1],
+          submittedByUser:
+            users.find((item) => item.name === submission.submittedBy) ||
+            ({
+              ...offlineSubmittedByFallback,
+              name: submission.submittedBy?.trim() || offlineSubmittedByFallback.name,
+              username: submission.submittedBy?.trim()
+                ? submission.submittedBy.trim().toLowerCase().replace(/\s+/g, "-")
+                : offlineSubmittedByFallback.username,
+            } as User),
           completedAt: submission.queuedAt,
         });
         updateSyncItemStatus(submission.audit.id, "Synced");
@@ -3385,6 +4198,7 @@ function App() {
       auditFormsFolderInput.trim() ||
       masterSheetInput.trim() ||
       evidenceFolderInput.trim() ||
+      healthSafetyFolderInput.trim() ||
       exportsFolderInput.trim() ||
       adminNotesFolderInput.trim()
     ) {
@@ -3401,6 +4215,7 @@ function App() {
     auditFormsFolderInput,
     masterSheetInput,
     evidenceFolderInput,
+    healthSafetyFolderInput,
     exportsFolderInput,
     adminNotesFolderInput,
   ]);
@@ -3424,6 +4239,7 @@ function App() {
   };
 
   const updateSyncItemStatus = (localId: string, status: SyncStatus, lastError = "") => {
+    const stamp = formatStamp();
     setSyncQueue((current) =>
       current.map((item) =>
         item.localId === localId
@@ -3431,8 +4247,10 @@ function App() {
               ...item,
               status,
               lastError,
+              attemptedAt:
+                status === "Syncing" || status === "Failed" || status === "Conflict" ? stamp : item.attemptedAt,
               retryCount: status === "Failed" ? item.retryCount + 1 : item.retryCount,
-              updatedAt: formatStamp(),
+              updatedAt: stamp,
             }
           : item,
       ),
@@ -3445,7 +4263,7 @@ function App() {
     }
 
     try {
-      const response = await fetch("/api/google/status");
+      const response = await fetch(apiUrl("/api/google/status"), { credentials: "include" });
       const payload = (await response.json()) as GoogleBackendStatus;
 
       setBackendConfigured(Boolean(payload.configured));
@@ -3454,7 +4272,7 @@ function App() {
       setOnboardingSource(payload.onboardingSource ?? null);
 
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Unable to load Google status.");
+        throw new Error(payload.error || "Unable to check the Google connection.");
       }
 
       if (payload.connected && payload.companies) {
@@ -3466,8 +4284,8 @@ function App() {
     } catch (error) {
       if (!options?.silent) {
         pushToast(
-          "Backend unavailable",
-          error instanceof Error ? error.message : "Unable to reach the Google integration server.",
+          "Setup server unavailable",
+          error instanceof Error ? error.message : "Unable to reach the setup server. Check your network and try again.",
           "warning",
         );
       }
@@ -3484,7 +4302,7 @@ function App() {
     }
 
     try {
-      const response = await fetch("/api/onboarding/submissions");
+      const response = await fetch(apiUrl("/api/onboarding/submissions"), { credentials: "include" });
       const payload = (await response.json()) as OnboardingSubmissionsResponse;
 
       if (!response.ok || !payload.ok) {
@@ -3499,8 +4317,8 @@ function App() {
     } catch (error) {
       if (!options?.silent) {
         pushToast(
-          "Onboarding source unavailable",
-          error instanceof Error ? error.message : "Unable to load onboarding submissions.",
+          "Company sign-up list unavailable",
+          error instanceof Error ? error.message : "Unable to load company sign-up responses.",
           "warning",
         );
       }
@@ -3513,7 +4331,7 @@ function App() {
 
   const loadCompanySheet = async (folderId: string, options?: { silent?: boolean }) => {
     try {
-      const response = await fetch(`/api/company-sheet/${encodeURIComponent(folderId)}`);
+      const response = await fetch(apiUrl(`/api/company-sheet/${encodeURIComponent(folderId)}`), { credentials: "include" });
       const payload = (await response.json()) as CompanySheetPayload;
 
       if (!response.ok || !payload.ok) {
@@ -3583,7 +4401,7 @@ function App() {
     options?: { silent?: boolean },
   ) => {
     try {
-      const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}`);
+      const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}`), { credentials: "include" });
       const payload = (await response.json()) as CompanySheetPayload;
 
       if (!response.ok || !payload.ok) {
@@ -3665,7 +4483,7 @@ function App() {
     setNotificationsEnabled(granted);
     pushToast(
       granted ? "Notifications enabled" : "Notifications blocked",
-      granted ? "QMS Precast can now send live browser alerts." : "Enable browser notifications to receive live alerts.",
+      granted ? `${companyName} can now send live browser alerts.` : "Enable browser notifications to receive live alerts.",
       granted ? "success" : "warning",
     );
   };
@@ -3676,7 +4494,7 @@ function App() {
     }
 
     try {
-      const response = await fetch(`/api/company-folder/${encodeURIComponent(folderId)}`);
+      const response = await fetch(apiUrl(`/api/company-folder/${encodeURIComponent(folderId)}`), { credentials: "include" });
       const payload = (await response.json()) as FolderInspection;
 
       if (!response.ok || !payload.ok) {
@@ -3712,26 +4530,28 @@ function App() {
       setWorkspaceValidationLoading(true);
     }
     try {
-      const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/validate`, {
+      const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/validate`), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           companyFolderId,
           auditFormsFolderId: extractGoogleResourceId(auditFormsFolderInput),
           evidenceFolderId: extractGoogleResourceId(evidenceFolderInput),
+          healthSafetyFolderId: extractGoogleResourceId(healthSafetyFolderInput),
           exportsFolderId: extractGoogleResourceId(exportsFolderInput),
           adminNotesFolderId: extractGoogleResourceId(adminNotesFolderInput),
         }),
       });
       const payload = (await response.json()) as WorkspaceValidation & { error?: string };
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Unable to validate the workspace.");
+        throw new Error(payload.error || "Unable to check the workspace.");
       }
       setWorkspaceValidation(payload);
       return payload;
     } catch (error) {
       if (!options?.silent) {
-        pushToast("Workspace validation failed", error instanceof Error ? error.message : "Unable to validate the workspace.", "warning");
+        pushToast("Check workspace failed", error instanceof Error ? error.message : "Unable to check the workspace.", "warning");
       }
       return null;
     } finally {
@@ -3745,37 +4565,39 @@ function App() {
     const sheetId = extractGoogleResourceId(masterSheetInput) || companySheetSync?.sheetId || selectedFolder?.responseSheetId || "";
     const companyFolderId = extractGoogleResourceId(folderIdInput) || selectedFolder?.id || "";
     if (!sheetId || !companyFolderId) {
-      pushToast("Workspace link required", "A company folder and Company Master Sheet must be linked before repair.", "warning");
+      pushToast("Workspace link required", "Link a company folder and Company Master Sheet before running Fix workspace.", "warning");
       return;
     }
     setWorkspaceValidationLoading(true);
     try {
-      const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/repair`, {
+      const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/repair`), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           companyFolderId,
           auditFormsFolderId: extractGoogleResourceId(auditFormsFolderInput),
           evidenceFolderId: extractGoogleResourceId(evidenceFolderInput),
+          healthSafetyFolderId: extractGoogleResourceId(healthSafetyFolderInput),
           exportsFolderId: extractGoogleResourceId(exportsFolderInput),
           adminNotesFolderId: extractGoogleResourceId(adminNotesFolderInput),
         }),
       });
       const payload = (await response.json()) as { ok: boolean; validation: WorkspaceValidation; error?: string };
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Unable to repair the workspace.");
+        throw new Error(payload.error || "Unable to fix the workspace.");
       }
       setWorkspaceValidation(payload.validation);
-      pushToast("Workspace repaired", "Missing tabs and columns were added safely with a backup copy created first.", "success");
+      pushToast("Workspace updated", "Missing tabs and columns were added safely with a backup copy created first.", "success");
     } catch (error) {
-      pushToast("Workspace repair failed", error instanceof Error ? error.message : "Unable to repair the workspace.", "warning");
+      pushToast("Fix workspace failed", error instanceof Error ? error.message : "Unable to fix the workspace.", "warning");
     } finally {
       setWorkspaceValidationLoading(false);
     }
   };
 
   const loadGoogleFile = async (fileId: string) => {
-    const response = await fetch(`/api/google-file/${encodeURIComponent(fileId)}`);
+    const response = await fetch(apiUrl(`/api/google-file/${encodeURIComponent(fileId)}`), { credentials: "include" });
     const payload = (await response.json()) as GoogleDriveFilePayload;
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || "Unable to load the Google Drive item.");
@@ -3784,7 +4606,7 @@ function App() {
   };
 
   const loadFormsFolder = async (folderId: string) => {
-    const response = await fetch(`/api/google-forms-folder/${encodeURIComponent(folderId)}`);
+    const response = await fetch(apiUrl(`/api/google-forms-folder/${encodeURIComponent(folderId)}`), { credentials: "include" });
     const payload = (await response.json()) as GoogleFormsFolderPayload;
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || "Unable to load the audit forms folder.");
@@ -3803,22 +4625,330 @@ function App() {
       timeZone: scheduleTimeZone,
     }).format(new Date());
 
-  const handleLogin = () => {
-    const match = users.find(
-      (user) => user.username === username.trim().toLowerCase() && user.password === password,
-    );
-    if (!match) {
-      pushToast("Sign in failed", "Please check your username and password.", "warning");
+  const handleLogin = async () => {
+    const loginIdentity = username.trim().toLowerCase();
+    const pwd = password;
+
+    const applySignedInUser = (match: User, options?: { workspaceSetupOnly?: boolean }) => {
+      if (companySetupLoginPortal && match.role !== "Master") {
+        pushToast("Master only", "Company setup sign-in is only for the workspace setup (Master) account.", "warning");
+        return;
+      }
+      const workspaceSetupShell =
+        match.role === "Master" && (companySetupLoginPortal || options?.workspaceSetupOnly === true);
+      try {
+        if (match.role === "Master") {
+          if (workspaceSetupShell) {
+            window.localStorage.setItem(masterCompanySetupSessionKey, "1");
+            setGodCompanySetupSession(true);
+          } else {
+            window.localStorage.removeItem(masterCompanySetupSessionKey);
+            setGodCompanySetupSession(false);
+          }
+        } else {
+          window.localStorage.removeItem(masterCompanySetupSessionKey);
+          setGodCompanySetupSession(false);
+        }
+      } catch {
+        setGodCompanySetupSession(false);
+      }
+      setCurrentUser(match);
+      setAccountNameInput(match.name);
+      setAccountPhotoUrl(getStoredProfilePhoto(match));
+      window.localStorage.setItem(userStorageKey, JSON.stringify(match));
+      setScreen(getHomeScreenForRole(match.role));
+      setUsername("");
+      setPassword("");
+      setCompanySetupLoginPortal(false);
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("setup");
+        window.history.replaceState({}, "", url.pathname + (url.search ? url.search : "") + url.hash);
+      } catch {
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+      pushToast("Welcome back", `Signed in as ${getRoleDisplayName(match.role)}.`, "success");
+    };
+
+    const persistedMasterSheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput) || "";
+    const masterFailureGuidesUx = companySetupLoginPortal || !persistedMasterSheetId;
+    let masterGuidedFailure: null | "auth" | "network" = null;
+
+    const tryServerMasterLogin = async (): Promise<boolean> => {
+      if (!pwd || !loginIdentity) {
+        return false;
+      }
+      if (!loginIdentity.includes("@")) {
+        return false;
+      }
+      let response: Response;
+      try {
+        response = await fetch(apiUrl("/api/auth/master/login"), {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: loginIdentity, password: pwd }),
+        });
+      } catch {
+        if (masterFailureGuidesUx) {
+          masterGuidedFailure = "network";
+        }
+        return false;
+      }
+      let data: { ok?: boolean; operator?: { email: string; name: string }; error?: string };
+      try {
+        const text = (await response.text()).trim();
+        data = text ? (JSON.parse(text) as typeof data) : {};
+      } catch {
+        if (masterFailureGuidesUx) {
+          masterGuidedFailure = "network";
+        }
+        return false;
+      }
+      if (!response.ok || !data.ok || !data.operator) {
+        if (masterFailureGuidesUx) {
+          if (response.status === 401 || response.status === 403) {
+            masterGuidedFailure = "auth";
+          } else if (response.status >= 400 && response.status < 500) {
+            masterGuidedFailure = "auth";
+          } else {
+            masterGuidedFailure = "network";
+          }
+        }
+        return false;
+      }
+      const match: User = {
+        username: String(data.operator.email).toLowerCase(),
+        password: "",
+        role: "Master",
+        name: data.operator.name || data.operator.email,
+      };
+      applySignedInUser(match, { workspaceSetupOnly: true });
+      return true;
+    };
+
+    const tryServerCompanyLogin = async (): Promise<boolean> => {
+      if (!pwd || !loginIdentity.includes("@")) {
+        return false;
+      }
+      const masterSheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput) || "";
+      if (!masterSheetId) {
+        return false;
+      }
+      try {
+        const response = await fetch(apiUrl("/api/auth/company/login"), {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: loginIdentity, password: pwd, masterSheetId }),
+        });
+        const data = (await parseJsonApiResponse(response)) as {
+          ok?: boolean;
+          user?: { email: string; role: Role; name: string };
+          error?: string;
+        };
+        if (!response.ok || !data.ok || !data.user?.email || !data.user?.role) {
+          return false;
+        }
+        const match: User = {
+          username: String(data.user.email).toLowerCase(),
+          password: "",
+          role: data.user.role,
+          name: data.user.name || data.user.email,
+        };
+        applySignedInUser(match);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const findClientMatch = (): User | undefined =>
+      loginUsers.find((user) => {
+        if (user.password !== pwd) {
+          return false;
+        }
+        if (user.username === loginIdentity) {
+          return true;
+        }
+        if (normalizeIdentity(user.username) === normalizeIdentity(loginIdentity)) {
+          return true;
+        }
+        if (
+          `${user.username}@usebert.co.uk` === loginIdentity ||
+          `${user.username}@qmsprecast.co.uk` === loginIdentity
+        ) {
+          return true;
+        }
+        return false;
+      });
+
+    if (isDemoLoginEnabled) {
+      const clientMatch = findClientMatch();
+      if (clientMatch) {
+        applySignedInUser(clientMatch);
+        return;
+      }
+      if (await tryServerMasterLogin()) {
+        return;
+      }
+      if (await tryServerCompanyLogin()) {
+        return;
+      }
+    } else {
+      if (await tryServerMasterLogin()) {
+        return;
+      }
+      if (await tryServerCompanyLogin()) {
+        return;
+      }
+      const clientMatch = findClientMatch();
+      if (clientMatch) {
+        applySignedInUser(clientMatch);
+        return;
+      }
+    }
+
+    if (masterGuidedFailure === "auth") {
+      pushToast("Sign in failed", "Email or password is incorrect.", "warning");
       return;
     }
-    setCurrentUser(match);
-    setAccountNameInput(match.name);
-    setAccountPhotoUrl(getStoredProfilePhoto(match));
-    window.localStorage.setItem(userStorageKey, JSON.stringify(match));
-    setScreen("dashboard");
-    setUsername("");
-    setPassword("");
-    pushToast("Welcome back", `Signed in as ${getRoleDisplayName(match.role)}.`, "success");
+    if (masterGuidedFailure === "network") {
+      pushToast(
+        "Sign in failed",
+        "BERT cannot reach the setup server. Check your internet connection or contact BERT support.",
+        "warning",
+      );
+      return;
+    }
+
+    pushToast("Sign in failed", "Please check your username and password.", "warning");
+  };
+
+  const switchUserSession = (user: User) => {
+    if (user.role !== "Master") {
+      try {
+        window.localStorage.removeItem(masterCompanySetupSessionKey);
+      } catch {
+        /* ignore */
+      }
+      setGodCompanySetupSession(false);
+    }
+    setCurrentUser(user);
+    setAccountNameInput(user.name);
+    setAccountPhotoUrl(getStoredProfilePhoto(user));
+    window.localStorage.setItem(userStorageKey, JSON.stringify(user));
+    setScreen(getHomeScreenForRole(user.role));
+    pushToast("Profile switched", `Now viewing as ${getRoleDisplayName(user.role)}.`, "success");
+  };
+
+  const createRoleFallbackUser = (role: Role): User => {
+    const suffix = role.toLowerCase();
+    const uuid =
+      typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID
+        ? globalThis.crypto.randomUUID()
+        : String(Date.now());
+    const demoPw = String(import.meta.env.VITE_DEMO_USER_PASSWORD ?? "").trim();
+    const previewPassword =
+      import.meta.env.DEV === true || import.meta.env.VITE_ENABLE_DEMO_LOGIN === "true"
+        ? demoPw || `preview-${uuid}`
+        : `preview-${uuid}`;
+    return {
+      username: `quick-${suffix}`,
+      password: previewPassword,
+      role,
+      name:
+        role === "Master"
+          ? "System Setup"
+          : role === "Admin"
+            ? "Audit Control"
+            : role === "Manager"
+              ? "Manager View"
+              : "Auditor View",
+    };
+  };
+
+  const handleQuickRoleSwitch = (role: Role, fallbackLabel: string) => {
+    const existingUser = loginUsers.find((user) => user.role === role);
+    if (existingUser) {
+      switchUserSession(existingUser);
+      return;
+    }
+    if (!canCreatePreviewProfile()) {
+      pushToast("Profile missing", `No ${fallbackLabel} profile is available yet.`, "warning");
+      return;
+    }
+    const fallbackUser = createRoleFallbackUser(role);
+    if (demoRoleSwitchEnabled) {
+      pushToast("Using preview profile", `${fallbackLabel} view opened with a temporary profile.`, "success");
+    }
+    switchUserSession(fallbackUser);
+  };
+
+  const handleToggleRoleNavVisibility = (role: Role, navItemId: NavItemId) => {
+    if (navItemId === "dashboard" || navItemId === "account" || navItemId === "incidents") {
+      return;
+    }
+    if (!canRoleAccessNavItem(role, navItemId)) {
+      return;
+    }
+    setRoleNavVisibility((current) => ({
+      ...current,
+      [role]: {
+        ...current[role],
+        [navItemId]: !(current[role]?.[navItemId] ?? true),
+      },
+    }));
+  };
+
+  const handleToggleRoleSiteSelectorVisibility = (role: Role) => {
+    setRoleSiteSelectorVisibility((current) => ({
+      ...current,
+      [role]: !(current[role] ?? true),
+    }));
+  };
+
+  const handleSendGodModeAppCompanyInvite = async () => {
+    if (!currentUser || currentUser.role !== "Master") {
+      return;
+    }
+    const trimmed = godModeAppInviteEmail.trim().toLowerCase();
+    if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      pushToast("Email required", "Enter a valid email address for the new company administrator.", "warning");
+      return;
+    }
+    try {
+      const response = await fetch(apiUrl("/api/onboarding/app-invites/new-company"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: trimmed, invitedBy: currentUser.name }),
+      });
+      const payload = (await parseJsonApiResponse(response)) as {
+        ok?: boolean;
+        error?: string;
+        delivery?: "smtp" | "manual";
+        onboardingUrl?: string;
+        mailtoUrl?: string;
+      };
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "Unable to send invite.");
+      }
+      setGodModeAppInviteEmail("");
+      pushToast(
+        payload.delivery === "manual" ? "Invite draft ready" : "Invite sent",
+        payload.delivery === "manual"
+          ? "Email is not configured. Use the generated mail draft or share the invite link manually."
+          : `Invite link sent to ${trimmed}.`,
+        "success",
+      );
+    } catch (error) {
+      pushToast(
+        "Invite failed",
+        error instanceof Error ? error.message : "Unable to send new company invite.",
+        "warning",
+      );
+    }
   };
 
   const handleInviteUser = async () => {
@@ -3845,23 +4975,38 @@ function App() {
 
     const trimmedEmail = inviteEmailInput.trim().toLowerCase();
     if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      pushToast("Email required", "Enter a valid email address to send the onboarding link.", "warning");
+      pushToast("Email required", "Enter a valid email address to send the invite link.", "warning");
       return;
     }
 
     if (invitedUsers.some((invite) => invite.email === trimmedEmail && invite.role === inviteRole)) {
-      pushToast("Invite already sent", "That user and role already has an active onboarding invite.", "warning");
+      pushToast("Invite already sent", "That user and role already has an active invite.", "warning");
       return;
     }
 
-    if (!onboardingSource?.formId) {
-      pushToast("Onboarding form unavailable", "Configure or reconnect Google so the onboarding form can be sent.", "warning");
+    const sheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput);
+    const companyFolderId = selectedFolder?.id || extractGoogleResourceId(folderIdInput);
+    if (!googleConnected) {
+      pushToast("Google not connected", "Connect Google in Setup before sending invite links.", "warning");
+      return;
+    }
+    if (!sheetId || !companyFolderId) {
+      pushToast(
+        "Workspace required",
+        "Select a company folder and ensure the master sheet is loaded before sending invites.",
+        "warning",
+      );
       return;
     }
 
+    let inviteDelivery: "smtp" | "manual" = "smtp";
+    let inviteMailtoUrl = "";
+    let inviteSenderEmail = "";
+    let appOnboardingUrl = "";
     try {
-      const response = await fetch("/api/onboarding/invite", {
+      const response = await fetch(apiUrl("/api/onboarding/app-invites/company-user"), {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -3869,37 +5014,218 @@ function App() {
           email: trimmedEmail,
           role: inviteRole,
           invitedBy: currentUser.name,
-          onboardingFormId: onboardingSource.formId,
+          companyFolderId,
+          masterSheetId: sheetId,
+          companyName: selectedFolder?.name || "",
         }),
       });
-      const payload = (await response.json()) as { ok?: boolean; error?: string };
+      const payload = (await parseJsonApiResponse(response)) as {
+        ok?: boolean;
+        error?: string;
+        delivery?: "smtp" | "manual";
+        mailtoUrl?: string;
+        senderEmail?: string;
+        onboardingUrl?: string;
+      };
 
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Unable to send onboarding invite email.");
+        throw new Error(payload.error || "Unable to send invite email.");
       }
+      inviteDelivery = payload.delivery || "smtp";
+      inviteMailtoUrl = payload.mailtoUrl || "";
+      inviteSenderEmail = payload.senderEmail || "";
+      appOnboardingUrl = payload.onboardingUrl || "";
     } catch (error) {
       pushToast(
         "Invite send failed",
-        error instanceof Error ? error.message : "Unable to send onboarding invite email.",
+        error instanceof Error ? error.message : "Unable to send invite email.",
         "warning",
       );
       return;
     }
 
-    setInvitedUsers((current) => [
-      {
-        id: `invite-${Date.now()}`,
-        email: trimmedEmail,
-        role: inviteRole,
-        invitedBy: currentUser.name,
-        sentAt: formatStamp(),
-        status: "Invite sent",
-      },
-      ...current,
-    ]);
+    const createdInvite: UserInvite = {
+      id: `invite-${Date.now()}`,
+      email: trimmedEmail,
+      role: inviteRole,
+      invitedBy: currentUser.name,
+      senderEmail: inviteSenderEmail || undefined,
+      sentAt: formatStamp(),
+      status: "Invite sent",
+      mailtoUrl: inviteMailtoUrl || undefined,
+      appOnboardingUrl: appOnboardingUrl || undefined,
+    };
+    const nextInvitedUsers = [createdInvite, ...invitedUsers];
+    setInvitedUsers(nextInvitedUsers);
+    if (selectedFolder?.id) {
+      try {
+        await persistUsers(selectedFolder.id, nextInvitedUsers);
+      } catch (error) {
+        pushToast(
+          "Users tab not updated",
+          error instanceof Error ? error.message : "Invite sent, but the Users tab could not be updated yet.",
+          "warning",
+        );
+      }
+    }
     setInviteEmailInput("");
-    pushToast("Onboarding link sent", `${inviteRole} invite sent to ${trimmedEmail}.`, "success");
-    triggerNotification("User onboarding invite", `${trimmedEmail} has been invited as ${inviteRole}.`);
+    pushToast(
+      inviteDelivery === "manual" ? "Invite draft ready" : "Invite link sent",
+      inviteDelivery === "manual"
+        ? `SMTP is not configured. Open email draft for ${trimmedEmail}.`
+        : `${inviteRole} invite sent to ${trimmedEmail}.`,
+      "success",
+    );
+    triggerNotification("User invite", `${trimmedEmail} has been invited as ${inviteRole}.`);
+  };
+
+  const handleResendInvite = async (invite: UserInvite) => {
+    if (!currentUser) return;
+    const sheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput);
+    const companyFolderId = selectedFolder?.id || extractGoogleResourceId(folderIdInput);
+    if (!googleConnected || !sheetId || !companyFolderId) {
+      pushToast("Workspace required", "Connect Google and pick a company folder before resending invites.", "warning");
+      return;
+    }
+
+    let inviteDelivery: "smtp" | "manual" = "smtp";
+    let inviteMailtoUrl = invite.mailtoUrl || "";
+    let inviteSenderEmail = invite.senderEmail || "";
+    let appOnboardingUrl = invite.appOnboardingUrl || "";
+    try {
+      const response = await fetch(apiUrl("/api/onboarding/app-invites/company-user"), {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: invite.email,
+          role: invite.role,
+          invitedBy: currentUser.name,
+          companyFolderId,
+          masterSheetId: sheetId,
+          companyName: selectedFolder?.name || "",
+        }),
+      });
+      const payload = (await parseJsonApiResponse(response)) as {
+        ok?: boolean;
+        error?: string;
+        delivery?: "smtp" | "manual";
+        mailtoUrl?: string;
+        senderEmail?: string;
+        onboardingUrl?: string;
+      };
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "Unable to resend invite email.");
+      }
+      inviteDelivery = payload.delivery || "smtp";
+      inviteMailtoUrl = payload.mailtoUrl || inviteMailtoUrl;
+      inviteSenderEmail = payload.senderEmail || inviteSenderEmail;
+      appOnboardingUrl = payload.onboardingUrl || appOnboardingUrl;
+    } catch (error) {
+      pushToast(
+        "Resend failed",
+        error instanceof Error ? error.message : "Unable to resend invite email.",
+        "warning",
+      );
+      return;
+    }
+
+    const resentAt = formatStamp();
+    const nextInvitedUsers = invitedUsers.map((item) =>
+      item.id === invite.id
+        ? {
+            ...item,
+            sentAt: resentAt,
+            invitedBy: currentUser.name,
+            senderEmail: inviteSenderEmail || undefined,
+            mailtoUrl: inviteMailtoUrl || undefined,
+            appOnboardingUrl: appOnboardingUrl || undefined,
+          }
+        : item,
+    );
+    setInvitedUsers(nextInvitedUsers);
+    if (selectedFolder?.id) {
+      try {
+        await persistUsers(selectedFolder.id, nextInvitedUsers);
+      } catch (error) {
+        pushToast(
+          "Users tab not updated",
+          error instanceof Error ? error.message : "Invite resent, but the Users tab could not be updated yet.",
+          "warning",
+        );
+      }
+    }
+    pushToast(
+      inviteDelivery === "manual" ? "Invite draft ready" : "Invite resent",
+      inviteDelivery === "manual"
+        ? `SMTP is not configured. Open email draft for ${invite.email}.`
+        : `Onboarding link resent to ${invite.email}.`,
+      "success",
+    );
+  };
+
+  const handleDeleteInvite = (invite: UserInvite) => {
+    setInvitedUsers((current) => current.filter((item) => item.id !== invite.id));
+    pushToast("Invite removed", `${invite.email} has been removed from sent invites.`, "success");
+  };
+
+  const handleResyncUsers = async () => {
+    if (!googleConnected) {
+      pushToast("Google not connected", "Connect Google before re-syncing users.", "warning");
+      return;
+    }
+
+    const companyFolderId = selectedFolder?.id || extractGoogleResourceId(folderIdInput);
+    if (!companyFolderId) {
+      pushToast("Company folder required", "Select a company folder before re-syncing users.", "warning");
+      return;
+    }
+
+    try {
+      const manualMasterSheetId = extractGoogleResourceId(masterSheetInput) || companySheetSync?.sheetId || "";
+      const payload = manualMasterSheetId
+        ? await loadCompanySheetById(manualMasterSheetId, companyFolderId, { silent: true })
+        : await loadCompanySheet(companyFolderId, { silent: true });
+
+      if (!payload) {
+        throw new Error("Unable to load the company sheet.");
+      }
+
+      const syncedUsers = payload.data.Users?.length ?? 0;
+      pushToast("Users re-synced", `${syncedUsers} user row${syncedUsers === 1 ? "" : "s"} pulled from the company sheet.`, "success");
+    } catch (error) {
+      pushToast(
+        "Resync failed",
+        error instanceof Error ? error.message : "Unable to re-sync users from the company sheet.",
+        "warning",
+      );
+    }
+  };
+
+  const persistUsers = async (companyFolderId: string, nextUsers: UserInvite[]) => {
+    const sheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput);
+    if (!sheetId) {
+      throw new Error("Company master sheet link is required before saving users.");
+    }
+
+    const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/users`), {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        companyFolderId,
+        users: nextUsers,
+      }),
+    });
+
+    const payload = (await response.json()) as SaveSchedulesResponse;
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || "Unable to save users.");
+    }
   };
 
   const persistActions = async (companyFolderId: string, nextActions: ActionItem[]) => {
@@ -3908,8 +5234,9 @@ function App() {
       throw new Error("Company master sheet link is required before saving actions.");
     }
 
-    const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/actions`, {
+    const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/actions`), {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -3925,8 +5252,43 @@ function App() {
     }
   };
 
+  const applyNextBestDashboardIntent = useCallback((intent: NextBestActionIntent) => {
+    if (intent.type !== "screen") return;
+    if (intent.actionFilter) {
+      setActionFilter(intent.actionFilter);
+    }
+    setScreen(intent.screen);
+  }, []);
+
+  const handleLeaveMasterWorkspaceSetupOnly = () => {
+    try {
+      window.localStorage.removeItem(masterCompanySetupSessionKey);
+    } catch {
+      /* ignore */
+    }
+    setGodCompanySetupSession(false);
+    setScreen(getHomeScreenForRole("Master"));
+    pushToast("Full navigation", "All BERT areas are available on this device until you sign out.", "success");
+  };
+
   const handleLogout = () => {
-    fetch("/auth/google/logout", { method: "POST" }).catch(() => undefined);
+    fetch(apiUrl("/auth/google/logout"), { method: "POST", credentials: "include" }).catch(() => undefined);
+    fetch(apiUrl("/api/auth/master/logout"), { method: "POST", credentials: "include" }).catch(() => undefined);
+    fetch(apiUrl("/api/auth/company/logout"), { method: "POST", credentials: "include" }).catch(() => undefined);
+    try {
+      window.localStorage.removeItem(masterCompanySetupSessionKey);
+    } catch {
+      /* ignore */
+    }
+    setGodCompanySetupSession(false);
+    setCompanySetupLoginPortal(false);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("setup");
+      window.history.replaceState({}, "", url.pathname + (url.search ? url.search : "") + url.hash);
+    } catch {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
     window.localStorage.removeItem(userStorageKey);
     setCurrentUser(null);
     setAccountNameInput("");
@@ -4131,6 +5493,7 @@ function App() {
     const actionItem: ActionItem = {
       id: `${audit.id}-issue-${question.id}-${Date.now()}`,
       companyId: selectedFolderId || selectedFolder?.id || "local-company",
+      siteArea: audit.siteArea,
       auditId: audit.id,
       auditName: audit.name,
       questionId: question.id,
@@ -4220,8 +5583,9 @@ function App() {
 
     if (createdRecord?.assignedLineManagerEmail) {
       const investigationLink = `${window.location.origin}?ncr=${encodeURIComponent(createdRecord.reference)}`;
-      void fetch("/api/ncr/escalation-alert", {
+      void fetch(apiUrl("/api/ncr/escalation-alert"), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: createdRecord.assignedLineManagerEmail,
@@ -4362,7 +5726,7 @@ function App() {
       setSignatureSignedAt("");
       setScreen("dashboard");
       pushToast("Queued offline", `${activeAudit.name} has been saved and will sync when the tablet reconnects.`, "warning");
-      triggerNotification("QMS Precast", `${activeAudit.name} has been queued offline for sync.`);
+      triggerNotification(companyName, `${activeAudit.name} has been queued offline for sync.`);
       notifySelectedManagersForNonCompliance(activeAudit, currentUser.name, nonComplianceCount, true);
       return;
     }
@@ -4516,12 +5880,10 @@ function App() {
     setIssuePrompt({
       question,
       answer,
-      actionPrompts: question.answerPrompts?.[answer] || [],
-      solved: null,
     });
   };
 
-  const handleAuditModeSaveIssue = ({ noteValue, escalate }: { noteValue: string; escalate?: boolean }) => {
+  const handleAuditModeSaveIssue = ({ noteValue }: { noteValue: string; escalate?: boolean }) => {
     if (!activeAudit || !issuePrompt) return;
     if (!noteValue.trim()) {
       pushToast("Note required", "Describe what was found before continuing.", "warning");
@@ -4536,7 +5898,6 @@ function App() {
       [issuePrompt.question.id]: noteValue,
     }));
     const mustCreateAction =
-      Boolean(escalate) ||
       issuePrompt.question.autoActionRequired ||
       issuePrompt.question.riskLevel === "Critical" ||
       issuePrompt.question.riskLevel === "High" ||
@@ -4641,19 +6002,19 @@ function App() {
   const handleGoogleConnect = () => {
     if (!backendConfigured) {
       pushToast(
-        "Backend setup required",
-        "Add your Google OAuth credentials to the backend before connecting the Google Drive root folder.",
+        "Setup required",
+        "Add your Google client ID and secret on the setup server (see `.env`) before connecting Drive.",
         "warning",
       );
       return;
     }
 
-    window.location.href = "/auth/google/login";
+    window.location.href = apiUrl("/auth/google/login");
   };
 
   const handleGoogleDisconnect = async () => {
     try {
-      await fetch("/auth/google/logout", { method: "POST", credentials: "same-origin" });
+      await fetch(apiUrl("/auth/google/logout"), { method: "POST", credentials: "include" });
     } catch {
       pushToast("Disconnect issue", "Google sign-out could not be confirmed, but the local link has been cleared.", "warning");
     }
@@ -4665,6 +6026,7 @@ function App() {
     setAuditFormsFolderInput("");
     setMasterSheetInput("");
     setEvidenceFolderInput("");
+    setHealthSafetyFolderInput("");
     setExportsFolderInput("");
     setAdminNotesFolderInput("");
     setOnboardingSource(null);
@@ -4684,6 +6046,7 @@ function App() {
     const auditFormsFolderId = extractGoogleResourceId(auditFormsFolderInput);
     const masterSheetId = extractGoogleResourceId(masterSheetInput);
     const evidenceFolderId = extractGoogleResourceId(evidenceFolderInput);
+    const healthSafetyFolderId = extractGoogleResourceId(healthSafetyFolderInput);
     const exportsFolderId = extractGoogleResourceId(exportsFolderInput);
     const adminNotesFolderId = extractGoogleResourceId(adminNotesFolderInput);
     const existingFolder = folders.find((folder) => folder.id === companyFolderId);
@@ -4775,6 +6138,7 @@ function App() {
       setAuditFormsFolderInput(auditFormsFolderId);
       setMasterSheetInput(masterSheetId);
       setEvidenceFolderInput(evidenceFolderId);
+      setHealthSafetyFolderInput(healthSafetyFolderId);
       setExportsFolderInput(exportsFolderId);
       setAdminNotesFolderInput(adminNotesFolderId);
       setSyncState("Linked");
@@ -4814,6 +6178,62 @@ function App() {
     setSyncState("Linked");
     void inspectFolderById(folderId, { silent: true });
     pushToast("Folder selected", `${folder.name} is now the active company source.`, "success");
+  };
+
+  const handleAddSite = () => {
+    if (!canAccessAdmin(currentUser?.role || "Auditor")) {
+      pushToast("Access restricted", "Only company administrators with full workspace rights can add sites.", "warning");
+      return;
+    }
+    const input = window.prompt("New site name");
+    const nextName = String(input || "").trim();
+    if (!nextName) return;
+    const exists = sites.some((site) => normalizeIdentity(site.name) === normalizeIdentity(nextName));
+    if (exists) {
+      pushToast("Site exists", `${nextName} already exists.`, "warning");
+      return;
+    }
+    const newSite: Site = {
+      id: createSiteId(nextName),
+      name: nextName,
+      code: nextName.slice(0, 3).toUpperCase(),
+      active: true,
+    };
+    setSites((current) => [newSite, ...current]);
+    setSelectedSiteId(newSite.id);
+    pushToast("Site added", `${nextName} is now available for schedules and audits.`, "success");
+  };
+
+  const handleArchiveSite = (siteId: string) => {
+    const site = sites.find((item) => item.id === siteId);
+    if (!site) return;
+    if (!window.confirm(`Archive ${site.name}?`)) return;
+    setSites((current) => current.map((item) => (item.id === siteId ? { ...item, active: false } : item)));
+    if (selectedSiteId === siteId) {
+      setSelectedSiteId("");
+    }
+    pushToast("Site archived", `${site.name} has been archived.`, "success");
+  };
+
+  const handleToggleUserSiteAssignment = (email: string, siteId: string) => {
+    if (!canAccessAdmin(currentUser?.role || "Auditor")) {
+      pushToast("Access restricted", "Only company administrators with full workspace rights can change site assignments.", "warning");
+      return;
+    }
+    const key = normalizeIdentity(email);
+    setUserSiteAssignments((current) => {
+      const prev = current[key] ?? [];
+      const has = prev.includes(siteId);
+      const nextIds = has ? prev.filter((id) => id !== siteId) : [...prev, siteId];
+      const next = { ...current };
+      if (nextIds.length === 0) {
+        delete next[key];
+      } else {
+        next[key] = nextIds;
+      }
+      return next;
+    });
+    pushToast("Site assignment updated", "Workspace site access for that user was saved on this device.", "neutral");
   };
 
   const handleVerifyOnboarding = () => {
@@ -4907,7 +6327,7 @@ function App() {
         dueLabel: getDueLabel(index === 0 ? 1 : 24),
         dueHours: index === 0 ? 1 : 24,
         priority: index === 0 ? "High" : "Medium",
-        owner: scheduleOwnerInput || users[1].name,
+        owner: scheduleOwnerInput || DEFAULT_MANAGER_NAME,
         templateVersion: template.source,
         status: getAuditTrafficStatus(index === 0 ? 1 : 24),
         lastCompletedAt: "Not yet completed",
@@ -4931,6 +6351,7 @@ function App() {
     setAuditFormsFolderInput("");
     setMasterSheetInput("");
     setEvidenceFolderInput("");
+    setHealthSafetyFolderInput("");
     setExportsFolderInput("");
     setAdminNotesFolderInput("");
     setSelectedOnboardingRecordId("");
@@ -4948,13 +6369,13 @@ function App() {
         "Onboarding form unavailable",
         googleConnected
           ? "The onboarding form has not been discovered yet. Refresh the onboarding source or reconnect Google."
-          : "Reconnect Google first so QMS Precast can find the onboarding form link.",
+          : `Reconnect Google first so ${companyName} can find the onboarding form link.`,
         "warning",
       );
       return;
     }
 
-    window.location.href = `https://docs.google.com/forms/d/${onboardingSource.formId}/viewform`;
+    window.location.href = buildOnboardingFormViewUrl(onboardingSource.formId);
   };
 
   const handleApplyOnboardingRecord = () => {
@@ -4966,13 +6387,13 @@ function App() {
     setFolderNameInput(
       normalizeFolderName(activeOnboardingRecord.companyName || activeOnboardingRecord.companyFolderReference),
     );
-    setScheduleRecipientsInput(activeOnboardingRecord.auditRecipients || users[2].name);
+    setScheduleRecipientsInput(activeOnboardingRecord.auditRecipients || DEFAULT_AUDITOR_NAME);
     setScheduleOverdueAlertRecipientsInput(
-      activeOnboardingRecord.overdueAlertRecipients || activeOnboardingRecord.reportingContact || users[1].name,
+      activeOnboardingRecord.overdueAlertRecipients || activeOnboardingRecord.reportingContact || DEFAULT_MANAGER_NAME,
     );
-    setScheduleEscalationContactInput(activeOnboardingRecord.reportingContact || users[0].name);
-    setScheduleOwnerInput(activeOnboardingRecord.mainContact || users[1].name);
-    setSchedulePersonalAssigneeInput(activeOnboardingRecord.mainContact || users[2].name);
+    setScheduleEscalationContactInput(activeOnboardingRecord.reportingContact || DEFAULT_ESCALATION_NAME);
+    setScheduleOwnerInput(activeOnboardingRecord.mainContact || DEFAULT_MANAGER_NAME);
+    setSchedulePersonalAssigneeInput(activeOnboardingRecord.mainContact || DEFAULT_AUDITOR_NAME);
     setSyncState("Onboarding submission applied");
     pushToast(
       "Submission applied",
@@ -4990,7 +6411,7 @@ function App() {
     setTemplates(demo.templates);
     setCompanySheetSync(demo.companySheetSync);
     setSyncState("Synced");
-    setScreen("dashboard");
+    setScreen(getHomeScreenForRole(currentUser?.role || "Admin"));
     pushToast("Demo data loaded", "Realistic precast demo data is now active for review.", "success");
   };
 
@@ -5009,7 +6430,7 @@ function App() {
     setSyncQueue((current) => current.filter((item) => !item.id.startsWith("sync-demo-") && !item.localId.includes("demo")));
     setTemplates((current) => current.filter((template) => !template.id.startsWith("template-demo-")));
     setCompanySheetSync((current) => (current?.sheetId === "demo-master-sheet" ? null : current));
-    setScreen("dashboard");
+    setScreen(getHomeScreenForRole(currentUser?.role || "Admin"));
     pushToast("Demo data cleared", "Demo-only records were removed from this tablet.", "neutral");
   };
 
@@ -5044,7 +6465,7 @@ function App() {
         openActions: true,
         complianceSnapshot: false,
       });
-      setDashboardSectionOrder(["trafficBoard", "liveSummary", "openActions", "upcomingAudits", "complianceSnapshot"]);
+      setDashboardSectionOrder(["trafficBoard", "upcomingAudits", "openActions", "liveSummary", "complianceSnapshot"]);
       return;
     }
     if (preset === "operations") {
@@ -5122,7 +6543,7 @@ function App() {
           dueLabel: getDueLabel(24),
           dueHours: 24,
           priority: "Medium",
-          owner: scheduleOwnerInput || users[1].name,
+          owner: scheduleOwnerInput || DEFAULT_MANAGER_NAME,
           templateVersion: "Built in app",
           status: getAuditTrafficStatus(24),
           lastCompletedAt: "Not yet completed",
@@ -5158,7 +6579,7 @@ function App() {
 
   const handleAddAnswerPromptToDraftQuestion = (questionId: string, answer: Answer) => {
     if (!currentUser || !canAccessAdmin(currentUser.role)) {
-      pushToast("Access restricted", "Only Admin and God Mode can configure answer prompts.", "warning");
+      pushToast("Access restricted", "Only company administrators with full workspace rights can configure answer prompts.", "warning");
       return;
     }
     const promptText = window.prompt("Add action prompt for this answer");
@@ -5228,7 +6649,7 @@ function App() {
         dueLabel: getDueLabel(24),
         dueHours: 24,
         priority: "Medium",
-        owner: scheduleOwnerInput || users[1].name,
+        owner: scheduleOwnerInput || DEFAULT_MANAGER_NAME,
         templateVersion: toggledTemplate.source,
         status: getAuditTrafficStatus(24),
         lastCompletedAt: "Not yet completed",
@@ -5416,7 +6837,7 @@ function App() {
         title: reportDefinition.title,
         type: "Text audit pack",
         createdAt: timestamp,
-        createdBy: currentUser?.name || "QMS Precast",
+        createdBy: currentUser?.name || companyName,
         visibleTo: reportRecipients,
         template: selectedReportTemplate,
       },
@@ -5462,7 +6883,7 @@ function App() {
         title: reportDefinition.title,
         type: "PDF report",
         createdAt: timestamp,
-        createdBy: currentUser?.name || "QMS Precast",
+        createdBy: currentUser?.name || companyName,
         visibleTo: reportRecipients,
         template: selectedReportTemplate,
       },
@@ -5555,14 +6976,14 @@ function App() {
     setSchedules((current) => [newSchedule, ...current]);
     setScheduleNameInput("");
     setScheduleAreaInput("");
-    setScheduleOwnerInput(users[1].name);
+    setScheduleOwnerInput(DEFAULT_MANAGER_NAME);
     setScheduleScopeInput("Company schedule");
-    setSchedulePersonalAssigneeInput(users[2].name);
+    setSchedulePersonalAssigneeInput(DEFAULT_AUDITOR_NAME);
     setScheduleFrequencyInput("Weekly");
     setScheduleSendTimeInput("08:00");
-    setScheduleRecipientsInput(users[2].name);
-    setScheduleOverdueAlertRecipientsInput(users[1].name);
-    setScheduleEscalationContactInput(users[0].name);
+    setScheduleRecipientsInput(DEFAULT_AUDITOR_NAME);
+    setScheduleOverdueAlertRecipientsInput(DEFAULT_MANAGER_NAME);
+    setScheduleEscalationContactInput(DEFAULT_ESCALATION_NAME);
     setScheduleOverdueAlertTimingInput("At due time");
     setScheduleCompletionCheckTimingInput("At due time");
     setScheduleNextDueHoursInput("24");
@@ -5785,14 +7206,104 @@ function App() {
     setScheduleEditorOpen(true);
   };
 
+  const handleDeleteSchedule = async (scheduleId: string) => {
+    const schedule = managedSchedules.find((item) => item.id === scheduleId);
+    if (!schedule) return;
+    const confirmed = window.confirm(`Delete "${schedule.scheduleName}" (${schedule.versionLabel})? This cannot be undone.`);
+    if (!confirmed) return;
+
+    const nextManagedSchedules = managedSchedules.filter((item) => item.id !== scheduleId);
+    try {
+      if (selectedFolder?.id) {
+        await persistManagedSchedules(selectedFolder.id, nextManagedSchedules);
+      }
+      setManagedSchedules(nextManagedSchedules);
+      if (editingScheduleId === scheduleId) {
+        resetManagedScheduleDraft();
+      }
+      pushToast("Schedule deleted", `${schedule.scheduleName} has been removed.`, "success");
+    } catch (error) {
+      pushToast(
+        "Delete failed",
+        error instanceof Error ? error.message : "Unable to delete the schedule from the company master sheet.",
+        "warning",
+      );
+    }
+  };
+
+  const handlePauseSchedule = async (scheduleId: string) => {
+    const schedule = managedSchedules.find((item) => item.id === scheduleId);
+    if (!schedule) return;
+    const input = window.prompt(`Pause "${schedule.scheduleName}" for how many days?`, "7");
+    if (input === null) return;
+    const days = Number(input.trim());
+    if (!Number.isFinite(days) || days <= 0) {
+      pushToast("Invalid duration", "Enter a number of days greater than 0.", "warning");
+      return;
+    }
+    const pausedUntil = addDaysIso(Math.round(days));
+    const nextManagedSchedules = managedSchedules.map((item) =>
+      item.id === scheduleId
+        ? {
+            ...item,
+            healthState: "Paused" as ScheduleHealthState,
+            nextDueAt: pausedUntil,
+            updatedAt: formatStamp(),
+          }
+        : item,
+    );
+    try {
+      if (selectedFolder?.id) {
+        await persistManagedSchedules(selectedFolder.id, nextManagedSchedules);
+      }
+      setManagedSchedules(nextManagedSchedules);
+      pushToast("Schedule paused", `${schedule.scheduleName} paused until ${pausedUntil}.`, "success");
+    } catch (error) {
+      pushToast(
+        "Pause failed",
+        error instanceof Error ? error.message : "Unable to pause the schedule in the company master sheet.",
+        "warning",
+      );
+    }
+  };
+
+  const handleResumeSchedule = async (scheduleId: string) => {
+    const schedule = managedSchedules.find((item) => item.id === scheduleId);
+    if (!schedule) return;
+    const nextManagedSchedules = managedSchedules.map((item) =>
+      item.id === scheduleId
+        ? {
+            ...item,
+            healthState: undefined,
+            nextDueAt: "",
+            updatedAt: formatStamp(),
+          }
+        : item,
+    );
+    try {
+      if (selectedFolder?.id) {
+        await persistManagedSchedules(selectedFolder.id, nextManagedSchedules);
+      }
+      setManagedSchedules(nextManagedSchedules);
+      pushToast("Schedule resumed", `${schedule.scheduleName} is active again.`, "success");
+    } catch (error) {
+      pushToast(
+        "Resume failed",
+        error instanceof Error ? error.message : "Unable to resume the schedule in the company master sheet.",
+        "warning",
+      );
+    }
+  };
+
   const persistManagedSchedules = async (companyFolderId: string, nextSchedules: ManagedSchedule[]) => {
     const sheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput);
     if (!sheetId) {
       throw new Error("Company master sheet link is required before saving schedules.");
     }
 
-    const response = await fetch(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/schedules`, {
+    const response = await fetch(apiUrl(`/api/google-sheet-by-id/${encodeURIComponent(sheetId)}/schedules`), {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -5813,6 +7324,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    document.title = companyName;
+  }, [companyName]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("google") === "connected") {
       loadGoogleStatus();
@@ -5821,6 +7336,15 @@ function App() {
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const params = new URLSearchParams(window.location.search);
+    const requestedScreen = params.get("screen");
+    if (requestedScreen === "incidents" && canSubmitIncidents(currentUser.role)) {
+      setScreen("incidents");
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     if (googleConnected) {
@@ -5832,275 +7356,560 @@ function App() {
   }, [googleConnected]);
 
   useEffect(() => {
-    if (currentUser && !canAccessAdmin(currentUser.role) && screen === "admin") {
-      setScreen("dashboard");
+    if (currentUser && !canAccessControlScreen(currentUser.role) && screen === "admin") {
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
-    if (currentUser && !canAccessOnboarding(currentUser.role) && screen === "onboarding") {
-      setScreen("dashboard");
+    if (currentUser && !canAccessOnboardingNav(currentUser.role) && screen === "onboarding") {
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessSchedules(currentUser.role) && screen === "schedules") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessReports(currentUser.role) && screen === "reports") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessActions(currentUser.role) && screen === "actions") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessActions(currentUser.role) && screen === "nonConformance") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
+    }
+    if (currentUser && !canSubmitIncidents(currentUser.role) && screen === "incidents") {
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
     if (currentUser && !canAccessAuditsCentre(currentUser.role) && screen === "audits") {
-      setScreen("dashboard");
+      setScreen(getHomeScreenForRole(currentUser.role));
     }
-  }, [currentUser, screen]);
+    if (
+      currentUser &&
+      screen === "complete" &&
+      !activeAudit &&
+      !(canCompleteAuditAsAuditor(currentUser.role) && auditCompletionSummary)
+    ) {
+      setScreen(getHomeScreenForRole(currentUser.role));
+    }
+    if (currentUser && screen !== "complete" && !visibleNavItems.some((item) => item.id === screen)) {
+      setScreen(getHomeScreenForRole(currentUser.role));
+    }
+  }, [currentUser, screen, visibleNavItems, activeAudit, auditCompletionSummary]);
+
+  let inviteTokenFromUrl = "";
+  try {
+    inviteTokenFromUrl = new URLSearchParams(window.location.search).get("invite")?.trim() || "";
+  } catch {
+    inviteTokenFromUrl = "";
+  }
+  if (inviteTokenFromUrl) {
+    return <AppHostedOnboardingCompletion inviteToken={inviteTokenFromUrl} parseJsonApiResponse={parseJsonApiResponse} />;
+  }
 
   if (!currentUser) {
-    return (
-      <div
-        className={[
-          shellPreviewClass,
-          "min-h-[100dvh] px-4 py-6",
-          themeMode === "dark"
-            ? "bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_35%),linear-gradient(180deg,_#020617_0%,_#0f172a_45%,_#111827_100%)] text-slate-100"
-            : "bg-[radial-gradient(circle_at_top,_rgba(17,24,39,0.08),_transparent_35%),linear-gradient(180deg,_#eef4f7_0%,_#f9fbfc_45%,_#e8eff3_100%)] text-slate-900",
-        ].join(" ")}
-      >
-        <style>{appMotionStyles}</style>
+    const signInOuterClass = [
+      shellPreviewClass,
+      "flex min-h-[100dvh] w-full max-w-[100vw] flex-col items-center justify-center overflow-hidden px-3 py-4 sm:px-4 sm:py-5",
+      themeMode === "dark" ? `${qmsDarkShellGradient} text-slate-100` : `${qmsLightShellGradient} text-slate-900`,
+    ].join(" ");
+
+    const signInShellClass = [
+      "qms-login-shell qms-login-card relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[2.2rem] border p-3 backdrop-blur sm:p-4",
+      themeMode === "dark"
+        ? "border-slate-800/80 bg-slate-950/80 shadow-[0_32px_90px_rgba(2,6,23,0.58)] text-white"
+        : "border-slate-200/85 bg-white/90 shadow-[0_28px_80px_rgba(15,23,42,0.14)] text-slate-900",
+    ].join(" ");
+
+    const wrapSignInTabletChrome = (node: React.ReactNode) =>
+      isDebugUiAllowed() ? (
         <div className="qms-tablet-stage">
-          <div className="qms-tablet-device">
-            <div
-              data-qms-theme={themeMode}
-              className={[
-                "qms-login-shell qms-login-card flex flex-col justify-center rounded-[2.2rem] border p-6 backdrop-blur",
-                themeMode === "dark"
-                  ? "border-slate-800/80 bg-slate-950/80 shadow-[0_32px_90px_rgba(2,6,23,0.58)]"
-                  : "border-white/70 bg-white/90 shadow-[0_32px_90px_rgba(15,23,42,0.14)]",
-              ].join(" ")}
-            >
-            <div className="mb-5 flex items-center justify-between">
-              <div className={["rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em]", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "bg-slate-100 text-slate-500"].join(" ")}>
-                Tablet sign in
-              </div>
-              <button
-                onClick={() => setThemeMode(themeMode === "dark" ? "light" : "dark")}
-                className={["rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em]", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition hover:bg-slate-200"].join(" ")}
-              >
-                {themeMode === "dark" ? "Light mode" : "Dark mode"}
-              </button>
-              <button
-                onClick={() => setPreviewOrientation(previewOrientation === "landscape" ? "portrait" : "landscape")}
-                className={["rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em]", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition hover:bg-slate-200"].join(" ")}
-              >
-                {previewOrientation === "landscape" ? "Portrait preview" : "Landscape preview"}
-              </button>
-            </div>
-            <div className="qms-login-grid">
-              <div>
-                <div className="mb-6 flex items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-900 text-lg font-semibold tracking-[0.28em] text-white">
-                    QMS
-                  </div>
-                  <div>
-                    <p className={["text-xs font-semibold uppercase tracking-[0.3em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
-                      Health &amp; Safety Audit System
+          <div className="qms-tablet-device qms-tablet-device--signin">{node}</div>
+        </div>
+      ) : (
+        node
+      );
+
+    if (companySetupLoginPortal) {
+      return (
+        <div className={signInOuterClass}>
+          <style>{appMotionStyles}</style>
+          {wrapSignInTabletChrome(
+            <div data-qms-theme={themeMode} className={signInShellClass}>
+                <DataFlowBackground />
+                <div className="relative z-10 grid h-full min-h-0 w-full grid-cols-1 items-center gap-3 sm:grid-cols-2 sm:gap-4">
+                  <div className="flex flex-col justify-center gap-3 px-1 py-0 sm:px-2">
+                    <BertLogo variant="full" tone={themeMode === "dark" ? "onDark" : "onLight"} size="lg" className="w-full" />
+                    <p className="text-xs font-medium text-slate-500 sm:text-sm sm:text-slate-400">
+                      Workspace setup — new company sign-in only
                     </p>
-                    <h1 className={["text-2xl font-semibold tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{companyName}</h1>
                   </div>
-                </div>
-
-                <div className="overflow-hidden rounded-[1.7rem] bg-slate-950 px-5 py-5 text-white shadow-[0_24px_50px_rgba(15,23,42,0.28)]">
-                  <div className="mb-4 flex items-center justify-between">
-                    <p className="text-sm text-slate-300">Commercial field platform</p>
-                    <div className="rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200">
-                      Live demo
-                    </div>
-                  </div>
-                  <p className="mt-2 text-2xl font-semibold leading-tight">
-                    Control onboarding, live audits, and corrective actions in one tablet app.
-                  </p>
-                  <p className="mt-3 text-sm leading-6 text-slate-300">
-                    Sign in to manage company setup, review compliance, complete inspections, and close risk actions.
-                  </p>
-                  <div className="mt-4 grid grid-cols-3 gap-2">
-                    <div className="rounded-2xl bg-white/8 px-3 py-3">
-                      <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Audit</p>
-                      <p className="mt-2 text-lg font-semibold">Live</p>
-                    </div>
-                    <div className="rounded-2xl bg-white/8 px-3 py-3">
-                      <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Actions</p>
-                      <p className="mt-2 text-lg font-semibold">Tracked</p>
-                    </div>
-                    <div className="rounded-2xl bg-white/8 px-3 py-3">
-                      <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Reports</p>
-                      <p className="mt-2 text-lg font-semibold">Ready</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="qms-login-access mt-6">
-                <div className="space-y-4">
-                  <div>
-                    <label className={["mb-2 block text-sm font-medium", themeMode === "dark" ? "text-slate-300" : "text-slate-700"].join(" ")}>Username</label>
-                    <input
-                      value={username}
-                      onChange={(event) => setUsername(event.target.value)}
-                      className={[
-                        "h-14 w-full rounded-2xl border px-4 text-base outline-none transition",
-                        themeMode === "dark"
-                          ? "border-slate-700 bg-slate-900 text-slate-100 focus:border-sky-400 focus:bg-slate-950"
-                          : "border-slate-200 bg-slate-50 text-slate-900 focus:border-slate-400 focus:bg-white",
-                      ].join(" ")}
-                      placeholder="Enter username"
-                    />
-                  </div>
-                  <div>
-                    <label className={["mb-2 block text-sm font-medium", themeMode === "dark" ? "text-slate-300" : "text-slate-700"].join(" ")}>Password</label>
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          handleLogin();
-                        }
-                      }}
-                      className={[
-                        "h-14 w-full rounded-2xl border px-4 text-base outline-none transition",
-                        themeMode === "dark"
-                          ? "border-slate-700 bg-slate-900 text-slate-100 focus:border-sky-400 focus:bg-slate-950"
-                          : "border-slate-200 bg-slate-50 text-slate-900 focus:border-slate-400 focus:bg-white",
-                      ].join(" ")}
-                      placeholder="Enter password"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  onClick={handleLogin}
-                  className={`mt-6 h-14 w-full rounded-2xl bg-slate-900 text-base font-semibold text-white shadow-[0_16px_30px_rgba(15,23,42,0.24)] active:scale-[0.99] ${slatePrimaryCtaInteract}`}
-                >
-                  Sign in
-                </button>
-
-                <div className={["mt-6 rounded-[1.5rem] border p-4", themeMode === "dark" ? "border-slate-800 bg-slate-900/80" : "border-slate-200 bg-slate-50"].join(" ")}>
-                  <p className={["text-sm font-semibold", themeMode === "dark" ? "text-slate-100" : "text-slate-800"].join(" ")}>Approved demo access</p>
-                  <div className="mt-3 grid gap-3">
-                    {users.map((user) => (
-                      <div
-                        key={user.username}
-                        className={[
-                          "flex items-center justify-between rounded-2xl border px-4 py-3",
-                          themeMode === "dark" ? "border-slate-800 bg-slate-950" : "border-white bg-white",
-                        ].join(" ")}
+                  <div className="flex min-h-0 items-center">
+                    <div className="w-full rounded-2xl border border-white/10 bg-white/[0.06] p-3 shadow-[0_16px_40px_rgba(2,6,23,0.4)] backdrop-blur-xl sm:rounded-[1.5rem] sm:p-4">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            const url = new URL(window.location.href);
+                            url.searchParams.delete("setup");
+                            window.history.replaceState({}, "", url.pathname + (url.search ? url.search : "") + url.hash);
+                          } catch {
+                            window.history.replaceState({}, "", window.location.pathname);
+                          }
+                          setCompanySetupLoginPortal(false);
+                        }}
+                        className="mb-3 text-left text-xs font-semibold text-blue-400 transition hover:text-orange-200 sm:text-sm"
                       >
+                        ← Staff sign-in
+                      </button>
+                      <h2 className="text-center text-base font-semibold text-white sm:text-lg">Workspace setup (Master)</h2>
+                      <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs leading-snug text-slate-300 sm:text-sm">
+                        Use a <span className="font-semibold text-white">Master</span> account to onboard customer workspaces. Sign in with the
+                        workspace setup (Master) account only. You will stay in <span className="font-semibold text-white">Setup</span> until you
+                        sign out — no other areas of the app are available from here.
+                      </p>
+                      <p className="mt-2 text-center text-[11px] text-slate-400 sm:text-xs">
+                        {!isDemoLoginEnabled ? (
+                          <>
+                            Use your <span className="font-semibold text-white">BERT Master email</span> registered via{" "}
+                            <span className="font-semibold text-white">npm run seed:master</span> on the API host (see docs in repo). Password
+                            is checked on the server — it is never stored in the app bundle.
+                          </>
+                        ) : (
+                          <>
+                            Demo: you may use username <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span> with{" "}
+                            <span className="font-semibold text-white">VITE_GODMODE_PASSWORD</span>, or a seeded Master email with server
+                            login.
+                          </>
+                        )}
+                      </p>
+                      {!isDemoLoginEnabled && !loginUsers.some((user) => user.role === "Master") ? (
+                        <p className="mt-2 rounded-xl border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-[11px] leading-snug text-amber-50 sm:text-xs">
+                          No client-side Master demo user is bundled. Create a Master operator on the API server with{" "}
+                          <span className="font-semibold">npm run seed:master</span>, then sign in here using that email and password (server
+                          session).
+                        </p>
+                      ) : null}
+                      <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); void handleLogin(); }}>
                         <div>
-                          <p className={["text-sm font-semibold", themeMode === "dark" ? "text-slate-100" : "text-slate-900"].join(" ")}>{getRoleDisplayName(user.role)}</p>
-                          <p className={["text-xs", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
-                            {user.username} / {user.password}
-                          </p>
+                          <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Username or email</label>
+                          <div className="relative">
+                            <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 fill-none stroke-slate-400 sm:left-3.5 sm:h-5 sm:w-5" strokeWidth="2">
+                              <path d="M20 21a8 8 0 0 0-16 0" />
+                              <circle cx="12" cy="7" r="4" />
+                            </svg>
+                            <input
+                              value={username}
+                              onChange={(event) => setUsername(event.target.value)}
+                              placeholder="Master email address"
+                              className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/45 pl-10 pr-3 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 sm:h-12 sm:rounded-2xl sm:pl-11 sm:pr-4 sm:text-base"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Password</label>
+                          <div className="relative">
+                            <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 fill-none stroke-slate-400 sm:left-3.5 sm:h-5 sm:w-5" strokeWidth="2">
+                              <rect x="4" y="11" width="16" height="10" rx="2" />
+                              <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+                            </svg>
+                            <input
+                              type={showPassword ? "text" : "password"}
+                              value={password}
+                              onChange={(event) => setPassword(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  void handleLogin();
+                                }
+                              }}
+                              placeholder="Master password"
+                              className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/45 pl-10 pr-11 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 sm:h-12 sm:rounded-2xl sm:pl-11 sm:pr-12 sm:text-base"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword((current) => !current)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition hover:text-blue-400 sm:right-3.5"
+                              aria-label={showPassword ? "Hide password" : "Show password"}
+                            >
+                              {showPassword ? (
+                                <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                                  <path d="M3 3l18 18" />
+                                  <path d="M10.6 10.6a2 2 0 1 0 2.8 2.8" />
+                                  <path d="M9.9 4.2A10.2 10.2 0 0 1 21 12a10.9 10.9 0 0 1-4.1 5.2" />
+                                  <path d="M6.5 6.5A11.3 11.3 0 0 0 3 12a10.9 10.9 0 0 0 9 6 9.8 9.8 0 0 0 3.2-.5" />
+                                </svg>
+                              ) : (
+                                <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                                  <path d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z" />
+                                  <circle cx="12" cy="12" r="3" />
+                                </svg>
+                              )}
+                            </button>
+                          </div>
                         </div>
                         <button
-                          onClick={() => {
-                            setUsername(user.username);
-                            setPassword(user.password);
-                          }}
-                          className={["rounded-xl px-3 py-2 text-xs font-semibold", themeMode === "dark" ? `bg-slate-900 text-slate-200 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-700 transition hover:bg-slate-200"].join(" ")}
+                          type="submit"
+                          className={`h-11 w-full rounded-xl bg-gradient-to-r from-orange-400 to-orange-600 text-sm font-semibold text-slate-950 shadow-[0_10px_22px_rgba(249,115,22,0.22)] active:scale-[0.99] sm:h-12 sm:rounded-2xl sm:text-base ${slatePrimaryCtaInteract}`}
                         >
-                          Use
+                          Sign in for company setup
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                </div>
+              </div>
+          )}
+          <ToastStack toasts={toasts} />
+        </div>
+      );
+    }
+
+    return (
+      <div className={signInOuterClass}>
+        <style>{appMotionStyles}</style>
+        {wrapSignInTabletChrome(
+            <div
+              data-qms-theme={themeMode}
+              className={signInShellClass}
+            >
+              <DataFlowBackground />
+              <div className="absolute right-4 top-4 z-20 flex items-center gap-1.5 sm:right-6 sm:top-6">
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-700 bg-slate-900/75 p-2 text-slate-300 transition hover:border-orange-400/60 hover:text-blue-400"
+                  aria-label="Help"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M9.5 9a2.5 2.5 0 1 1 4.2 1.8c-.8.7-1.7 1.2-1.7 2.2" />
+                    <circle cx="12" cy="16.8" r="0.8" fill="currentColor" stroke="none" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  title="Workspace setup (Master only)"
+                  aria-label="Company setup sign-in for workspace setup (Master)"
+                  onClick={() => {
+                    try {
+                      const url = new URL(window.location.href);
+                      url.searchParams.set("setup", "master");
+                      window.history.pushState({}, "", url.toString());
+                    } catch {
+                      window.history.pushState({}, "", "?setup=master");
+                    }
+                    setCompanySetupLoginPortal(true);
+                  }}
+                  className="rounded-full border border-slate-700/90 bg-slate-900/60 p-1.5 text-slate-400 transition hover:border-orange-400/55 hover:text-orange-300"
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="2">
+                    <path d="M12 3l7 4v5c0 4-2.5 7.5-7 8.5-4.5-1-7-4.5-7-8.5V7z" />
+                    <path d="M12 11v3M12 8h.01" strokeLinecap="round" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-700 bg-slate-900/75 p-2 text-slate-300 transition hover:border-orange-400/60 hover:text-blue-400"
+                  aria-label="Settings"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                    <path d="M12 3.5l1 2.1 2.4.4-.9 2.2 1.7 1.8-1.7 1.8.9 2.2-2.4.4-1 2.1-1-2.1-2.4-.4.9-2.2-1.7-1.8 1.7-1.8-.9-2.2 2.4-.4z" />
+                    <circle cx="12" cy="12" r="2.4" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="relative z-10 grid h-full min-h-0 w-full grid-cols-1 items-center gap-3 sm:grid-cols-2 sm:gap-4">
+                <div className="flex flex-col justify-center gap-3 px-1 py-0 sm:px-2">
+                  <BertLogo
+                    variant="full"
+                    tone={themeMode === "dark" ? "onDark" : "onLight"}
+                    size="lg"
+                    className="w-full"
+                  />
+                  <p className="text-xs font-medium text-slate-500 sm:text-sm sm:text-slate-400">{PRODUCT_TAGLINE}</p>
+                </div>
+
+                <div className="flex min-h-0 items-center">
+                  <div className="w-full rounded-2xl border border-white/10 bg-white/[0.06] p-3 shadow-[0_16px_40px_rgba(2,6,23,0.4)] backdrop-blur-xl sm:rounded-[1.5rem] sm:p-4">
+                    <h2 className="text-center text-base font-semibold text-white sm:text-lg">Sign in to your account</h2>
+                    {isDemoLoginEnabled ? (
+                      <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs text-slate-300 sm:text-sm">
+                        Demo accounts: <span className="font-semibold text-white">admin</span>,{" "}
+                        <span className="font-semibold text-white">manager</span>,{" "}
+                        <span className="font-semibold text-white">tom</span>,{" "}
+                        <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span> — set passwords in{" "}
+                        <span className="font-semibold text-white">VITE_DEMO_USER_PASSWORD</span> and{" "}
+                        <span className="font-semibold text-white">VITE_GODMODE_PASSWORD</span> (see <span className="font-semibold text-white">.env.example</span>).
+                      </p>
+                    ) : (
+                      <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs text-slate-300 sm:text-sm">
+                        Demo login is disabled in this build. Use an invited account or ask a BERT administrator to create access. BERT
+                        Master operators sign in with their server-registered email (see <span className="font-semibold text-white">npm run seed:master</span>).
+                      </p>
+                    )}
+                    {!isDemoLoginEnabled && loginUsers.length === 0 ? (
+                      <p className="mt-2 rounded-xl border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-[11px] leading-snug text-amber-50 sm:text-xs">
+                        No sign-in accounts are available in this build (demo accounts are off, and no invites are loaded). For local
+                        testing use <span className="font-semibold">npm run dev</span>, or rebuild with{" "}
+                        <span className="font-semibold">VITE_ENABLE_DEMO_LOGIN=true</span>. Otherwise use an invited email and the
+                        password your administrator issued once onboarding is connected.
+                      </p>
+                    ) : null}
+                    <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); void handleLogin(); }}>
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Username or email</label>
+                        <div className="relative">
+                          <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 fill-none stroke-slate-400 sm:left-3.5 sm:h-5 sm:w-5" strokeWidth="2">
+                            <path d="M20 21a8 8 0 0 0-16 0" />
+                            <circle cx="12" cy="7" r="4" />
+                          </svg>
+                          <input
+                            value={username}
+                            onChange={(event) => setUsername(event.target.value)}
+                            placeholder="Enter username or email"
+                            className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/45 pl-10 pr-3 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 sm:h-12 sm:rounded-2xl sm:pl-11 sm:pr-4 sm:text-base"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Password</label>
+                        <div className="relative">
+                          <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 fill-none stroke-slate-400 sm:left-3.5 sm:h-5 sm:w-5" strokeWidth="2">
+                            <rect x="4" y="11" width="16" height="10" rx="2" />
+                            <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+                          </svg>
+                          <input
+                            type={showPassword ? "text" : "password"}
+                            value={password}
+                            onChange={(event) => setPassword(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                void handleLogin();
+                              }
+                            }}
+                            placeholder="Enter password"
+                            className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/45 pl-10 pr-11 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 sm:h-12 sm:rounded-2xl sm:pl-11 sm:pr-12 sm:text-base"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword((current) => !current)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition hover:text-blue-400 sm:right-3.5"
+                            aria-label={showPassword ? "Hide password" : "Show password"}
+                          >
+                            {showPassword ? (
+                              <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                                <path d="M3 3l18 18" />
+                                <path d="M10.6 10.6a2 2 0 1 0 2.8 2.8" />
+                                <path d="M9.9 4.2A10.2 10.2 0 0 1 21 12a10.9 10.9 0 0 1-4.1 5.2" />
+                                <path d="M6.5 6.5A11.3 11.3 0 0 0 3 12a10.9 10.9 0 0 0 9 6 9.8 9.8 0 0 0 3.2-.5" />
+                              </svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2">
+                                <path d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z" />
+                                <circle cx="12" cy="12" r="3" />
+                              </svg>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end pt-0.5">
+                        <button type="button" className="text-xs font-medium text-blue-400 transition hover:text-orange-200 sm:text-sm">
+                          Forgot password?
                         </button>
                       </div>
-                    ))}
+
+                      <button
+                        type="submit"
+                        className={`h-11 w-full rounded-xl bg-gradient-to-r from-orange-400 to-orange-600 text-sm font-semibold text-slate-950 shadow-[0_10px_22px_rgba(249,115,22,0.22)] active:scale-[0.99] sm:h-12 sm:rounded-2xl sm:text-base ${slatePrimaryCtaInteract}`}
+                      >
+                        Sign in
+                      </button>
+                    </form>
                   </div>
                 </div>
               </div>
             </div>
-            </div>
-          </div>
+          )}
           <ToastStack toasts={toasts} />
         </div>
-      </div>
     );
   }
 
-  return (
-    <div
-      className={[
-        shellPreviewClass,
-        "h-[100dvh] overflow-hidden px-2 py-2 sm:px-3 sm:py-3",
-        themeMode === "dark"
-          ? "bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.15),_transparent_32%),linear-gradient(180deg,_#020617_0%,_#0f172a_45%,_#111827_100%)] text-slate-100"
-          : "bg-[radial-gradient(circle_at_top,_rgba(2,132,199,0.12),_transparent_34%),linear-gradient(180deg,_#e4ebf1_0%,_#f1f5f8_45%,_#e3eaf0_100%)] text-slate-900",
-        ].join(" ")}
-    >
-      <style>{appMotionStyles}</style>
+  const tabletDebugUi = isDebugUiAllowed();
+  const wrapLoggedInTabletChrome = (node: React.ReactNode) =>
+    tabletDebugUi ? (
       <div className="qms-tablet-stage">
-        <div className="qms-tablet-device">
-          <div
-            data-qms-theme={themeMode}
-            className={[
-              "qms-app-shell mx-auto flex h-full w-full flex-col overflow-hidden rounded-[2.25rem] border backdrop-blur",
-              themeMode === "dark"
-                ? "border-slate-800/90 bg-slate-950/80 shadow-[0_28px_90px_rgba(2,6,23,0.5)]"
-                : "border-white/80 bg-white/90 shadow-[0_28px_90px_rgba(15,23,42,0.16)]",
-            ].join(" ")}
-          >
-        <header className={["qms-app-header border-b px-3 pb-1 pt-1", themeMode === "dark" ? "border-slate-800 bg-slate-950/80" : "border-slate-200/80 bg-white/90"].join(" ")}>
+        <div className="qms-tablet-device">{node}</div>
+      </div>
+    ) : (
+      node
+    );
+
+  const loggedInRootClass = [
+    shellPreviewClass,
+    tabletDebugUi
+      ? "h-[100dvh] overflow-hidden px-2 py-2 sm:px-3 sm:py-3"
+      : "flex min-h-[100dvh] h-[100dvh] w-full max-w-[100vw] flex-col overflow-hidden",
+    themeMode === "dark" ? `${qmsDarkShellGradient} text-slate-100` : `${qmsLightShellGradient} text-slate-900`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const appShellSurfaceClass = [
+    "qms-app-shell relative isolate flex w-full flex-col overflow-hidden border backdrop-blur",
+    tabletDebugUi ? "mx-auto h-full rounded-[2.25rem]" : "mx-0 min-h-0 flex-1 rounded-none",
+    themeMode === "dark"
+      ? tabletDebugUi
+        ? "border-white/10 bg-slate-950/72 shadow-[0_28px_90px_rgba(2,6,23,0.55)]"
+        : "border-white/10 bg-slate-950/80"
+      : tabletDebugUi
+        ? "border-slate-200/90 bg-white/86 shadow-[0_28px_90px_rgba(15,23,42,0.12)]"
+        : "border-slate-200/90 bg-white/95",
+  ].join(" ");
+
+  return (
+    <div className={loggedInRootClass}>
+      <style>{appMotionStyles}</style>
+      {wrapLoggedInTabletChrome(
+          <div data-qms-theme={themeMode} className={appShellSurfaceClass}>
+        <DataFlowBackground className="z-20 opacity-10" showBase={false} />
+        <header className={["qms-app-header relative z-10 border-b px-3 pb-1 pt-1 backdrop-blur", themeMode === "dark" ? "border-white/10 bg-slate-950/58" : "border-slate-200/80 bg-white/72"].join(" ")}>
           <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[9px] font-semibold uppercase tracking-[0.16em]">
-            <div className={["rounded-full px-2.5 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-400" : "bg-slate-100 text-slate-500"].join(" ")}>
-              Tablet workspace
-            </div>
+            {godCompanySetupOnlyShell ? (
+              <div
+                className={[
+                  "rounded-full px-2.5 py-0.5",
+                  themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--bert-signal-orange)] bg-white font-semibold text-[var(--qms-navy-900)]",
+                ].join(" ")}
+              >
+                Workspace setup (Master)
+              </div>
+            ) : isDebugUiAllowed() ? (
+              <div
+                className={[
+                  "rounded-full px-2.5 py-0.5",
+                  themeMode === "dark" ? "bg-slate-900 text-slate-400" : "border border-[var(--bert-signal-orange)] bg-white font-semibold text-[var(--qms-navy-900)]",
+                ].join(" ")}
+              >
+                Tablet workspace
+              </div>
+            ) : (
+              <span className="sr-only">Status</span>
+            )}
             <div className="flex items-center gap-1">
+              {isDebugUiAllowed() && demoRoleSwitchEnabled && !godCompanySetupOnlyShell && <div className="hidden items-center gap-1 lg:flex">
+                {currentUser.role !== "Admin" && (
+                <button
+                  type="button"
+                  title={roles[0]}
+                  onClick={() => handleQuickRoleSwitch("Master", "Workspace setup")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
+                >
+                  OWNER
+                </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleQuickRoleSwitch("Admin", "Admin")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
+                >
+                  ADMIN
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleQuickRoleSwitch("Manager", "Manager")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
+                >
+                  MANAGER
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleQuickRoleSwitch("Auditor", "Auditor")}
+                  className={["rounded-full border px-2 py-0.5 text-[8px] font-semibold", themeMode === "dark" ? "border-[var(--bert-signal-orange)]/50 bg-slate-900 text-[var(--bert-chrome-accent)]" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] hover:bg-orange-50"].join(" ")}
+                >
+                  AUDITOR
+                </button>
+              </div>}
+              {isDebugUiAllowed() && !godCompanySetupOnlyShell && (
               <button
                 type="button"
-                onClick={() => setScreen("dashboard")}
-                className={["rounded-full px-1.5 py-0 text-[8px]", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition-colors duration-200 hover:bg-slate-200"].join(" ")}
+                onClick={() => setScreen(getHomeScreenForRole(currentUser.role))}
+                className={["rounded-full border px-1.5 py-0 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-orange-50"].join(" ")}
               >
                 Layout options
               </button>
+              )}
+              {isDebugUiAllowed() && !godCompanySetupOnlyShell && (
               <button
                 onClick={() => setPreviewOrientation(previewOrientation === "landscape" ? "portrait" : "landscape")}
-                className={["rounded-full px-2 py-0.5", themeMode === "dark" ? `bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition-colors duration-200 hover:bg-slate-200"].join(" ")}
+                className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? `border-slate-700 bg-slate-900 text-slate-300 ${slatePrimaryCtaInteract}` : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)] transition-colors hover:bg-orange-50"].join(" ")}
               >
                 {previewOrientation === "landscape" ? "Portrait preview" : "Landscape preview"}
               </button>
-              <div className={["rounded-full px-2 py-0.5", offlineMode ? "bg-amber-500/15 text-amber-600" : "bg-emerald-500/12 text-emerald-700"].join(" ")}>
+              )}
+              <div className={["rounded-full px-2 py-0.5", offlineMode ? "bg-amber-500/15 text-amber-600" : "bg-blue-500/12 text-blue-800"].join(" ")}>
                 {offlineMode ? "Offline" : "Online"}
               </div>
-              <div className={["rounded-full px-2 py-0.5", themeMode === "dark" ? "bg-slate-900 text-slate-300" : "bg-slate-100 text-slate-600"].join(" ")}>
+              <div
+                className={[
+                  "rounded-full border px-2 py-0.5 text-[8px] font-semibold normal-case tracking-normal",
+                  themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-300" : "border-slate-200 bg-white text-slate-700",
+                ].join(" ")}
+              >
+                {syncPlainSummary}
+              </div>
+              <div className={["rounded-full border px-2 py-0.5 text-[8px]", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-300" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)]"].join(" ")}>
                 {deviceTimeLabel}
               </div>
             </div>
           </div>
           <div className="qms-app-header-main">
             <div className="flex items-center gap-2">
-              <button
-                onClick={handleLogout}
-                className={`h-6 shrink-0 rounded-md bg-slate-900 px-2 text-[9px] font-semibold text-white shadow-sm ${slatePrimaryCtaInteract}`}
-              >
-                Logout
-              </button>
-              <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-900 text-[9px] font-semibold tracking-[0.08em] text-white">
+              <div className="hidden shrink-0 pr-0.5 sm:block">
+                <BertLogo
+                  variant="wordmark"
+                  tone={themeMode === "dark" ? "onDark" : "onLight"}
+                  size="sm"
+                />
+              </div>
+              <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--bert-signal-orange)] text-[9px] font-semibold tracking-[0.08em] text-[var(--qms-navy-950)]">
                 {accountPhotoUrl ? (
                   <img src={accountPhotoUrl} alt={currentUser.name} className="h-full w-full object-cover" />
                 ) : (
-                  getWorkspaceInitials(currentUser.name)
+                  getUserInitials(currentUser.name, currentUser.username)
                 )}
-                {selectedFolder && (
-                    <span className="absolute -bottom-1 -right-1 rounded-full bg-emerald-500 px-1 py-0 text-[8px] font-bold uppercase tracking-[0.08em] text-white">
+                {selectedFolder && isDebugUiAllowed() ? (
+                    <span className="absolute -bottom-1 -right-1 rounded-full bg-blue-500 px-1 py-0 text-[8px] font-bold uppercase tracking-[0.08em] text-white">
                     Live
                   </span>
-                )}
+                ) : null}
               </div>
               <div className="min-w-0 flex-1">
-                <p className={["truncate text-[11px] font-semibold leading-4 tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{workspaceName}</p>
-                <p className={["truncate text-[8px] leading-3 tracking-[0.08em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>
-                  {selectedFolder ? "Live company workspace" : "Health &amp; Safety Audit System"}
-                </p>
+                <p className={["truncate text-[11px] font-semibold leading-4 tracking-tight", themeMode === "dark" ? "text-white" : "text-slate-900"].join(" ")}>{companyName}</p>
+                <p className={["truncate text-[8px] leading-3 tracking-[0.08em]", themeMode === "dark" ? "text-slate-400" : "text-slate-500"].join(" ")}>{PRODUCT_TAGLINE}</p>
+                {selectedFolder ? (
+                  <p className={["mt-0.5 truncate text-[8px] font-medium leading-3", themeMode === "dark" ? "text-slate-500" : "text-slate-600"].join(" ")}>
+                    Workspace: {selectedFolder.name}
+                  </p>
+                ) : null}
+                {showSiteSelectorForRole && !godCompanySetupOnlyShell && (
+                <div className="mt-1">
+                  <select
+                    value={selectedSiteId}
+                    onChange={(event) => setSelectedSiteId(event.target.value)}
+                    className={["h-6 max-w-[12rem] rounded-md border-2 px-2 text-[9px] font-semibold", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-200" : "border-[var(--bert-signal-orange)] bg-white text-[var(--qms-navy-900)]"].join(" ")}
+                  >
+                    <option value="">All sites</option>
+                    {headerSelectableSites.map((site) => (
+                      <option key={site.id} value={site.id}>
+                        {site.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                )}
               </div>
             </div>
 
-            <div className={["qms-app-session-bar mt-0.5 hidden items-center justify-between gap-2 rounded-lg px-2 py-0.5 lg:flex", themeMode === "dark" ? "bg-slate-900" : "bg-slate-50"].join(" ")}>
+            <div className={["qms-app-session-bar mt-0.5 hidden items-center justify-between gap-2 rounded-lg border px-2 py-0.5 sm:flex", themeMode === "dark" ? "border-slate-700 bg-slate-900" : "border-slate-300 bg-white"].join(" ")}>
               <div className="flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-[10px] leading-4">
                 <p className={["shrink-0 font-semibold", themeMode === "dark" ? "text-slate-100" : "text-slate-900"].join(" ")}>{currentUser.name}</p>
                 <span className={themeMode === "dark" ? "text-slate-500" : "text-slate-400"}>•</span>
@@ -6113,59 +7922,189 @@ function App() {
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
-                {demoModeActive && (
-                  <div className="rounded-full bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
-                    Demo
+                {isDebugUiAllowed() && demoModeActive ? (
+                  <div className="rounded-full bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold text-sky-700">Demo mode active</div>
+                ) : null}
+                {isDebugUiAllowed() ? (
+                  <div className="rounded-full bg-blue-500/12 px-2 py-0.5 text-[10px] font-semibold text-blue-800">
+                    {selectedFolder ? "Live workspace" : "Live session"}
                   </div>
-                )}
-                <div className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                  {selectedFolder ? "Live workspace" : "Live session"}
-                </div>
+                ) : null}
               </div>
             </div>
           </div>
         </header>
 
-        <main className="flex min-h-0 flex-1 overflow-hidden">
-          <aside className={["hidden shrink-0 flex-col border-r px-3 py-4 lg:flex", desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]", themeMode === "dark" ? "border-slate-700 bg-slate-900 text-slate-200 shadow-[inset_-1px_0_0_rgba(15,23,42,0.35)]" : "border-slate-300 bg-slate-100 text-slate-700 shadow-[inset_-1px_0_0_rgba(148,163,184,0.28)]"].join(" ")}>
-            <nav className="flex-1 space-y-2 overflow-y-auto pr-1">
-              {visibleNavItems.map((item) => {
+        <main className="relative z-10 flex min-h-0 flex-1 overflow-hidden">
+          <aside
+            className={[
+              "hidden min-h-0 flex-col border-r border-white/10 bg-gradient-to-b from-[#071525] via-[#0c1f36] to-[#050b14] text-slate-100 md:flex",
+              desktopSidebarCollapsed ? "w-[4.75rem]" : "w-[15.5rem]",
+            ].join(" ")}
+          >
+            <div className={`shrink-0 ${desktopSidebarCollapsed ? "px-2 py-3" : "px-3 py-4"}`}>
+              <BertLogo variant="wordmark" tone="onDark" size="sm" className={desktopSidebarCollapsed ? "scale-90" : ""} />
+            </div>
+            <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-2" aria-label="Primary">
+              {primaryNavItems.map((item) => {
                 const selected = screen === item.id || (screen === "complete" && item.id === "audits");
                 return (
                   <button
-                    key={`desktop-${item.id}`}
-                    onClick={() => setScreen(item.id)}
+                    key={`sidebar-${item.id}`}
+                    type="button"
+                    onClick={() => {
+                      setShellMoreExpanded(false);
+                      setMobileMoreOpen(false);
+                      setScreen(item.id);
+                    }}
                     className={[
-                      "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition-colors duration-200 ease-in-out",
+                      "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-semibold transition",
                       selected
-                        ? themeMode === "dark"
-                          ? "bg-slate-800 text-white hover:bg-slate-700"
-                          : `bg-slate-900 text-white ${slatePrimaryCtaInteract}`
-                        : themeMode === "dark"
-                          ? "text-slate-300 hover:bg-slate-900/25"
-                          : "text-slate-600 hover:bg-slate-900/25 hover:text-slate-900",
-                      desktopSidebarCollapsed ? "justify-center" : "",
+                        ? "bg-[var(--bert-signal-orange)] text-[var(--qms-navy-950)] shadow-[0_8px_20px_rgba(249,115,22,0.25)]"
+                        : "text-slate-200 hover:bg-white/8 hover:text-white",
+                      desktopSidebarCollapsed ? "justify-center px-2" : "",
                     ].join(" ")}
                     title={item.label}
                   >
-                    <AppIcon name={item.icon} className="h-4 w-4 shrink-0" />
+                    <AppIcon name={item.icon} className="h-4 w-4 shrink-0 opacity-95" />
                     {!desktopSidebarCollapsed && <span className="truncate">{item.label}</span>}
                   </button>
                 );
               })}
+              {moreNavItems.length > 0 ? (
+                <div className="mt-1 border-t border-white/10 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShellMoreExpanded((current) => !current)}
+                    className={[
+                      "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-semibold transition",
+                      shellMoreExpanded || moreNavItems.some((item) => item.id === screen)
+                        ? "border border-orange-400/40 bg-orange-500/15 text-orange-100"
+                        : "text-slate-300 hover:bg-white/8 hover:text-white",
+                      desktopSidebarCollapsed ? "justify-center px-2" : "",
+                    ].join(" ")}
+                    aria-expanded={shellMoreExpanded}
+                  >
+                    <AppIcon name="grid" className="h-4 w-4 shrink-0" />
+                    {!desktopSidebarCollapsed && <span>More</span>}
+                  </button>
+                  {shellMoreExpanded && (
+                    <div className="mt-1 space-y-1 pl-1">
+                      {moreNavItems.map((item) => {
+                        const selected = screen === item.id;
+                        return (
+                          <button
+                            key={`sidebar-more-${item.id}`}
+                            type="button"
+                            onClick={() => {
+                              setScreen(item.id);
+                              setShellMoreExpanded(false);
+                              setMobileMoreOpen(false);
+                            }}
+                            className={[
+                              "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold transition",
+                              selected ? "bg-sky-500/20 text-sky-100" : "text-slate-400 hover:bg-white/6 hover:text-slate-100",
+                            ].join(" ")}
+                          >
+                            <AppIcon name={item.icon} className="h-3.5 w-3.5 shrink-0 opacity-90" />
+                            <span className="truncate">{item.label}</span>
+                          </button>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleLogout();
+                          setShellMoreExpanded(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold text-rose-200 transition hover:bg-rose-500/15 hover:text-white"
+                      >
+                        <span className="truncate">Log out</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </nav>
-            <div className="mt-auto pt-2">
+            <div className="mt-auto shrink-0 space-y-2 border-t border-white/10 px-2 py-3">
+              <div
+                className={[
+                  "flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left",
+                  desktopSidebarCollapsed ? "justify-center" : "",
+                ].join(" ")}
+                role="group"
+                aria-label="Signed-in user"
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold text-white ring-1 ring-white/20">
+                  {getUserInitials(currentUser.name, currentUser.username)}
+                </span>
+                {!desktopSidebarCollapsed && (
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-white">{currentUser.name}</span>
+                    <span className="block truncate text-xs text-slate-400">{getRoleDisplayName(currentUser.role)}</span>
+                  </span>
+                )}
+              </div>
               <button
+                type="button"
                 onClick={() => setDesktopSidebarCollapsed((current) => !current)}
-                className={["flex w-full items-center justify-center rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition", desktopSidebarCollapsed ? "border-sky-500/40 bg-sky-500/20 text-sky-100 hover:bg-sky-500/30" : "border-slate-500/40 bg-slate-700/70 text-white hover:bg-slate-600/80"].join(" ")}
+                className="flex w-full items-center justify-center rounded-xl border border-white/12 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
                 aria-label={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
                 title={desktopSidebarCollapsed ? "Expand menu" : "Collapse menu"}
               >
-                <span>{desktopSidebarCollapsed ? ">>" : "<<"}</span>
+                <span>{desktopSidebarCollapsed ? "»" : "«"}</span>
               </button>
             </div>
           </aside>
-          <div className={["qms-screen-stage h-full flex-1 overflow-y-auto px-4 pb-32 pt-4", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800" : "bg-slate-200/55"].join(" ")}>
+          <div
+            className={[
+              "qms-screen-stage h-full min-w-0 flex-1 overflow-y-auto px-4 pb-24 pt-4 md:pb-10", themeMode === "dark" ? "[&_section.border]:border-slate-800 [&_section.bg-white]:bg-slate-900 [&_section.bg-slate-50]:bg-slate-900 [&_section_.text-slate-900]:text-slate-100 [&_section_.text-slate-800]:text-slate-200 [&_section_.text-slate-700]:text-slate-300 [&_section_.text-slate-600]:text-slate-400 [&_section_.text-slate-500]:text-slate-400 [&_section_.text-slate-400]:text-slate-500 [&_section_input]:border-slate-700 [&_section_input]:bg-slate-950 [&_section_input]:text-slate-100 [&_section_input:focus]:border-[var(--bert-signal-orange)] [&_section_input:focus]:bg-slate-950 [&_section_textarea]:border-slate-700 [&_section_textarea]:bg-slate-950 [&_section_textarea]:text-slate-100 [&_section_textarea:focus]:border-[var(--bert-signal-orange)] [&_section_select]:border-slate-700 [&_section_select]:bg-slate-950 [&_section_select]:text-slate-100 [&_section_select:focus]:border-[var(--bert-signal-orange)] [&_section_select:focus]:bg-slate-950 [&_.bg-gradient-to-b]:from-slate-900 [&_.bg-gradient-to-b]:to-slate-950 [&_.bg-slate-100]:bg-slate-800 [&_.bg-slate-200]:bg-slate-800 [&_.bg-white]:bg-slate-900 [&_.text-slate-900]:text-slate-100 [&_.text-slate-800]:text-slate-200 [&_.text-slate-700]:text-slate-300 [&_.text-slate-600]:text-slate-400 [&_.text-slate-500]:text-slate-400 [&_input[type=file]]:border-[rgba(249,115,22,0.45)] [&_input[type=file]]:bg-slate-950 [&_input[type=file]]:text-slate-300 [&_input[type=file]]:file:text-slate-200" : "bg-slate-100/72"            ].join(" ")}>
+            {screen === "dashboard" && !godCompanySetupOnlyShell && (
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-xl font-semibold tracking-tight text-slate-900 md:text-2xl dark:text-slate-100">
+                    {(() => {
+                      const first = getGreetingFirstName(currentUserAppName);
+                      return first ? `${getTimeBasedGreeting()}, ${first}` : getTimeBasedGreeting();
+                    })()}
+                  </h1>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                    Here is what needs attention, what is due today, and what is waiting on someone else.
+                  </p>
+                  {dashboardNextBest?.intent.type === "screen" ? (
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Suggested next step</p>
+                      {dashboardNextBest.description ? (
+                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{dashboardNextBest.description}</p>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (dashboardNextBest?.intent.type === "screen") {
+                            applyNextBestDashboardIntent(dashboardNextBest.intent);
+                          }
+                        }}
+                        className="mt-3 inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-[var(--bert-signal-orange)] px-4 text-sm font-semibold text-[var(--qms-navy-950)] shadow-sm transition hover:brightness-95 focus-visible:outline focus-visible:ring-2 focus-visible:ring-orange-300 focus-visible:ring-offset-2 sm:w-auto"
+                      >
+                        {dashboardNextBest.label}
+                      </button>
+                    </div>
+                  ) : dashboardNextBest && dashboardNextBest.intent.type === "none" ? (
+                    <p className="mt-2 text-sm font-medium text-emerald-800 dark:text-emerald-300">{dashboardNextBest.description ?? dashboardNextBest.label}</p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="shrink-0 self-end rounded-full border border-slate-200 bg-white p-2 text-slate-600 shadow-sm hover:bg-slate-50 sm:self-start dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                  aria-label="Notifications"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                    <path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 14h18c0-7-3-7-3-14" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
+            )}
             {currentUser.role === "Manager" && currentManagerAlerts.length > 0 && (
               <section className="mb-4 rounded-[1.5rem] border border-rose-200 bg-rose-50 px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
@@ -6229,7 +8168,7 @@ function App() {
                 pendingSyncCount={pendingSyncCount}
                 failedSyncCount={failedSyncCount}
                 assignedAudits={assignedAudits}
-                history={history}
+                history={assignmentFilteredHistory}
                 drafts={drafts}
                 companySheetSync={companySheetSync}
                 auditCompletionRate={auditCompletionRate}
@@ -6255,17 +8194,97 @@ function App() {
                 onRepairWorkspace={repairWorkspace}
                 onLoadDemoData={handleLoadDemoData}
                 onClearDemoData={handleClearDemoData}
+                showStartHereCard={showDashboardStartHere}
+                demoModeActive={demoModeActive}
+                renderAuditorDashboard={() => (
+                  <AuditorTaskDashboard
+                    currentUser={currentUser}
+                    groupedAudits={groupedAudits}
+                    assignedAudits={assignedAudits}
+                    drafts={drafts}
+                    actions={visibleActions}
+                    pendingSyncCount={pendingSyncCount}
+                    failedSyncCount={failedSyncCount}
+                    showStartHereCard={showDashboardStartHere}
+                    workspaceLinked={Boolean(selectedFolder)}
+                    recentCompletionsCount={assignmentFilteredHistory.length}
+                    onOpenAudit={startAudit}
+                    slatePrimaryCtaInteract={slatePrimaryCtaInteract}
+                  />
+                )}
+                renderManagerDashboard={() => (
+                  <ManagerDashboard
+                    currentUser={currentUser}
+                    groupedAudits={groupedAudits}
+                    assignedAudits={assignedAudits}
+                    actions={visibleActions}
+                    history={assignmentFilteredHistory}
+                    pendingSyncCount={pendingSyncCount}
+                    failedSyncCount={failedSyncCount}
+                    offlineQueueCount={offlineQueue.length}
+                    workspaceLinked={Boolean(selectedFolder)}
+                    showStartHereCard={showDashboardStartHere}
+                    demoModeActive={demoModeActive}
+                    openIncidentFollowUpsCount={openIncidentFollowUpsCount}
+                    onOpenIncidents={() => {
+                      setScreen("incidents");
+                    }}
+                    onOpenAudit={startAudit}
+                    onAdvanceAction={updateActionStatus}
+                    recurringFailedQuestions={recurringFailedQuestions}
+                    onViewAllNeedsAttention={() => {
+                      setActionFilter("Overdue");
+                      setScreen("actions");
+                    }}
+                    onViewAllDueToday={() => {
+                      setScreen("audits");
+                    }}
+                    onViewAllAwaitingVerification={() => {
+                      setActionFilter("Awaiting Verification");
+                      setScreen("actions");
+                    }}
+                    onViewAllInProgress={() => {
+                      setActionFilter("Open");
+                      setScreen("actions");
+                    }}
+                    onViewAllRecentCompletions={() => {
+                      setScreen("reports");
+                    }}
+                    onOpenSyncCentre={() => {
+                      setScreen("sync");
+                    }}
+                    lastSyncedAt={companySheetSync?.lastSyncedAt ?? null}
+                  />
+                )}
+                renderAdminDashboard={() => (
+                  <AdminDashboard
+                    groupedAudits={groupedAudits}
+                    assignedAudits={assignedAudits}
+                    actions={visibleActions}
+                    history={assignmentFilteredHistory}
+                    workspaceLinked={Boolean(selectedFolder)}
+                    pendingSyncCount={pendingSyncCount}
+                    failedSyncCount={failedSyncCount}
+                    reportUsersCount={companyReportUsers.length}
+                    activeSchedulesCount={managedSchedules.filter((item) => item.lifecycle !== "Archived").length}
+                    templatesCount={templates.filter((template) => template.active).length}
+                    showStartHereCard={showDashboardStartHere}
+                    onOpenAudit={startAudit}
+                    onAdvanceAction={updateActionStatus}
+                  />
+                )}
               />
             )}
 
             {screen === "audits" && canAccessAuditsCentre(currentUser.role) && (
               <AuditsScreen
                 currentUser={currentUser}
-                audits={audits}
+                audits={siteScopedAudits}
                 groupedAudits={groupedAudits}
                 drafts={drafts}
                 unsyncedAuditIds={unsyncedSubmittedAuditIds}
                 userProfilePhotos={userProfilePhotos}
+                users={users}
                 onOpenAudit={startAudit}
                 auditAccessMatrix={auditAccessMatrix}
                 auditScheduleMatrix={auditScheduleMatrix}
@@ -6294,7 +8313,7 @@ function App() {
             {screen === "nonConformance" && canAccessActions(currentUser.role) && (
               <NonConformanceScreen
                 currentUser={currentUser}
-                nonConformances={nonConformances}
+                nonConformances={assignmentFilteredNonConformances}
                 canViewCompletedReports={canAccessCompletedNcrReports(currentUser.role)}
                 onSaveProgress={(ncrId, payload) => {
                   setNonConformances((current) =>
@@ -6382,6 +8401,18 @@ function App() {
               />
             )}
 
+            {screen === "incidents" && canSubmitIncidents(currentUser.role) && (
+              <IncidentReportingScreen
+                currentUser={currentUser}
+                incidents={incidents}
+                incidentActions={incidentActions}
+                onSubmitIncident={submitIncidentReport}
+                onUpdateIncident={updateIncidentRecord}
+                onAddIncidentAction={addIncidentCorrectiveAction}
+                onUpdateIncidentAction={updateIncidentCorrectiveAction}
+              />
+            )}
+
             {screen === "reports" && (
               <ReportsScreen
                 compliance={compliance}
@@ -6456,12 +8487,14 @@ function App() {
                 onSave={handleSaveManagedSchedule}
                 onCancel={resetManagedScheduleDraft}
                 onReactivate={handleReactivateSchedule}
+                onDelete={handleDeleteSchedule}
+                onPause={handlePauseSchedule}
+                onResume={handleResumeSchedule}
               />
             )}
 
-            {(screen === "admin" || screen === "onboarding") &&
-              canAccessAdmin(currentUser.role) &&
-              (screen !== "onboarding" || canAccessOnboarding(currentUser.role)) && (
+            {((screen === "admin" && canAccessControlScreen(currentUser.role)) ||
+              (screen === "onboarding" && canAccessAdminOnboardingWorkspace(currentUser.role))) && (
               <AdminScreen
                 currentUser={currentUser}
                 googleConnected={googleConnected}
@@ -6472,6 +8505,7 @@ function App() {
                 auditFormsFolderInput={auditFormsFolderInput}
                 masterSheetInput={masterSheetInput}
                 evidenceFolderInput={evidenceFolderInput}
+                healthSafetyFolderInput={healthSafetyFolderInput}
                 exportsFolderInput={exportsFolderInput}
                 adminNotesFolderInput={adminNotesFolderInput}
                 syncState={syncState}
@@ -6488,6 +8522,11 @@ function App() {
                 inviteEmailInput={inviteEmailInput}
                 inviteRoleInput={inviteRoleInput}
                 invitedUsers={invitedUsers}
+                sites={sites}
+                selectedSiteId={selectedSiteId}
+                reportUsers={companyReportUsers}
+                userSiteAssignments={userSiteAssignments}
+                onToggleUserSiteAssignment={handleToggleUserSiteAssignment}
                 creatableRoles={creatableRoles}
                 onGoogleConnect={handleGoogleConnect}
                 onGoogleDisconnect={handleGoogleDisconnect}
@@ -6509,6 +8548,7 @@ function App() {
                 onAuditFormsFolderChange={setAuditFormsFolderInput}
                 onMasterSheetChange={setMasterSheetInput}
                 onEvidenceFolderChange={setEvidenceFolderInput}
+                onHealthSafetyFolderChange={setHealthSafetyFolderInput}
                 onExportsFolderChange={setExportsFolderInput}
                 onAdminNotesFolderChange={setAdminNotesFolderInput}
                 onScheduleNameChange={setScheduleNameInput}
@@ -6552,7 +8592,17 @@ function App() {
                 onInviteEmailChange={setInviteEmailInput}
                 onInviteRoleChange={setInviteRoleInput}
                 onInviteUser={handleInviteUser}
+                onResendInvite={handleResendInvite}
+                onDeleteInvite={handleDeleteInvite}
+                onResyncUsers={handleResyncUsers}
+                onSelectSite={setSelectedSiteId}
+                onAddSite={handleAddSite}
+                onArchiveSite={handleArchiveSite}
                 standaloneOnboarding={screen === "onboarding"}
+                hideMasterLocalDemoTools={godCompanySetupOnlyShell}
+                godModeAppInviteEmail={godModeAppInviteEmail}
+                onGodModeAppInviteEmailChange={setGodModeAppInviteEmail}
+                onSendGodModeAppCompanyInvite={handleSendGodModeAppCompanyInvite}
                 scheduleNameInput={scheduleNameInput}
                 scheduleAreaInput={scheduleAreaInput}
                 scheduleOwnerInput={scheduleOwnerInput}
@@ -6567,6 +8617,8 @@ function App() {
                 scheduleCompletionCheckTimingInput={scheduleCompletionCheckTimingInput}
                 scheduleNextDueHoursInput={scheduleNextDueHoursInput}
                 schedulePriorityInput={schedulePriorityInput}
+                AppIcon={AppIcon}
+                slatePrimaryCtaInteract={slatePrimaryCtaInteract}
               />
             )}
 
@@ -6576,14 +8628,18 @@ function App() {
                 accountNameInput={accountNameInput}
                 accountPhotoUrl={accountPhotoUrl}
                 themeMode={themeMode}
+                companyName={companyName}
+                slatePrimaryCtaInteract={slatePrimaryCtaInteract}
                 onAccountNameChange={setAccountNameInput}
                 onAccountPhotoChange={handleAccountPhotoChange}
                 onThemeModeChange={setThemeMode}
                 onSave={handleSaveAccountSettings}
+                workspaceSetupLimitedShell={godCompanySetupOnlyShell}
+                onOpenFullAppNavigation={godCompanySetupOnlyShell ? handleLeaveMasterWorkspaceSetupOnly : undefined}
               />
             )}
 
-            {screen === "complete" && currentUser.role === "Auditor" && auditCompletionSummary && (
+            {screen === "complete" && canCompleteAuditAsAuditor(currentUser.role) && auditCompletionSummary && (
               <AuditCompletionSummary
                 summary={auditCompletionSummary}
                 hasMoreAudits={Boolean(pickNextAuditorAudit(assignedAudits, drafts))}
@@ -6613,7 +8669,7 @@ function App() {
               />
             )}
 
-            {screen === "complete" && activeAudit && currentUser.role === "Auditor" && !auditCompletionSummary && (
+            {screen === "complete" && activeAudit && canCompleteAuditAsAuditor(currentUser.role) && !auditCompletionSummary && (
               <>
                 <AuditModeScreen
                   audit={activeAudit}
@@ -6625,6 +8681,7 @@ function App() {
                   offlineMode={offlineMode}
                   pendingSyncCount={pendingSyncCount}
                   failedSyncCount={failedSyncCount}
+                  slatePrimaryCtaInteract={slatePrimaryCtaInteract}
                   onAnswerSelect={handleAuditModeAnswer}
                   onJumpToQuestion={setAuditModeQuestionIndex}
                   onNoteChange={(questionId, value) =>
@@ -6659,6 +8716,30 @@ function App() {
                   <IssueFoundPrompt
                     issue={issuePrompt}
                     existingNote={notes[issuePrompt.question.id] || ""}
+                    evidenceCount={evidence[issuePrompt.question.id]?.length ?? 0}
+                    assignedToName={activeAudit.owner}
+                    offlineMode={offlineMode}
+                    onAddPhoto={(files) => {
+                      const fileCount = files.length;
+                      if (!fileCount) return;
+                      const questionId = issuePrompt.question.id;
+                      setEvidenceDebugLabel(`Selected: ${Array.from(files).map((file) => file.name).join(", ")}`);
+                      const nextItems = Array.from(files).map((file) => ({
+                        id: `${questionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        name: file.name,
+                        previewUrl: URL.createObjectURL(file),
+                        addedAt: formatStamp(),
+                      }));
+                      setEvidence((current) => ({
+                        ...current,
+                        [questionId]: [...(current[questionId] ?? []), ...nextItems],
+                      }));
+                      pushToast(
+                        "Evidence attached",
+                        `${fileCount} file${fileCount === 1 ? "" : "s"} added to this finding.`,
+                        "success",
+                      );
+                    }}
                     onSave={handleAuditModeSaveIssue}
                     onCancel={() => setIssuePrompt(null)}
                   />
@@ -6666,7 +8747,7 @@ function App() {
               </>
             )}
 
-            {screen === "complete" && activeAudit && currentUser.role !== "Auditor" && (
+            {screen === "complete" && activeAudit && canSubmitAuditForReview(currentUser.role) && (
               <CompleteAuditScreen
                 audit={activeAudit}
                 responses={responses}
@@ -6720,6 +8801,8 @@ function App() {
                 }}
                 onSaveDraft={saveDraft}
                 onSubmit={submitAudit}
+                AppIcon={AppIcon}
+                slatePrimaryCtaInteract={slatePrimaryCtaInteract}
                 onCancel={() => {
                   setActiveAuditId(null);
                   setResponses({});
@@ -6734,2879 +8817,101 @@ function App() {
           </div>
         </main>
 
-        <nav className="qms-bottom-nav absolute inset-x-0 bottom-0 mx-auto w-full max-w-[37rem] px-3 pb-3 lg:hidden">
-          <div
-            className={[
-              "qms-bottom-nav-grid grid gap-2 rounded-[1.75rem] border p-2 shadow-[0_20px_45px_rgba(15,23,42,0.16)] backdrop-blur-xl",
-              themeMode === "dark" ? "border-slate-800 bg-slate-950/92" : "border-white/80 bg-white/92",
-            ].join(" ")}
-            style={{ gridTemplateColumns: `repeat(${visibleNavItems.length}, minmax(0, 1fr))` }}
-          >
-            {visibleNavItems.map((item) => {
-              const selected = screen === item.id || (screen === "complete" && item.id === "audits");
-              const navLabel = compactNavLabels[item.id] ?? item.label;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setScreen(item.id)}
-                  className={[
-                    "qms-nav-button group flex h-12 flex-col items-center justify-center rounded-2xl border px-1 text-[10px] font-semibold leading-none transition-all duration-200 sm:text-[11px]",
-                    selected
-                        ? `border-slate-900 bg-slate-900 text-white shadow-[0_12px_30px_rgba(15,23,42,0.22)] ${slatePrimaryCtaInteract}`
-                        : themeMode === "dark"
-                        ? "border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-slate-700 hover:bg-slate-900/25 hover:text-slate-100"
-                        : "border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 text-slate-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] hover:border-slate-300 hover:bg-slate-900/25 hover:text-slate-900",
-                  ].join(" ")}
-                >
-                  <span
-                    className={[
-                      "mb-0.5 h-1.5 w-7 rounded-full transition-all duration-200",
-                      selected ? "bg-white/90" : themeMode === "dark" ? "bg-slate-700 group-hover:bg-slate-500" : "bg-slate-300 group-hover:bg-slate-400",
-                    ].join(" ")}
-                  />
-                  <span className={["mb-0.5", selected ? "text-white" : themeMode === "dark" ? "text-slate-400 group-hover:text-slate-100" : "text-slate-500 group-hover:text-slate-900"].join(" ")}>
-                    <AppIcon name={item.icon} className="h-3.5 w-3.5" />
-                  </span>
-                  <span className="qms-nav-label max-w-full truncate">{navLabel}</span>
-                </button>
-              );
-            })}
-          </div>
-          </nav>
-        </div>
-      </div>
-      </div>
-
-      <ToastStack toasts={toasts} />
-    </div>
-  );
-}
-
-function DashboardScreen({
-  currentUser,
-  workspaceName,
-  compliance,
-  complianceDelta,
-  groupedAudits,
-  actions,
-  openActions,
-  overdueActions,
-  criticalActions,
-  awaitingVerificationActions,
-  overdueAudits,
-  evidenceCount,
-  completedToday,
-  offlineQueueCount,
-  pendingSyncCount,
-  failedSyncCount,
-  assignedAudits,
-  history,
-  drafts,
-  companySheetSync,
-  auditCompletionRate,
-  actionClosureRate,
-  averageActionClosureDays,
-  recurringFailedQuestions,
-  topOverdueSchedules,
-  riskSummary,
-  themeMode,
-  dashboardPreferences,
-  dashboardSectionOrder,
-  onOpenAudit,
-  onAdvanceAction,
-  onApplyDashboardPreset,
-  onToggleDashboardSection,
-  onMoveDashboardSection,
-  reportUsersCount,
-  activeSchedulesCount,
-  templatesCount,
-  workspaceValidation,
-  selectedFolder,
-  onValidateWorkspace,
-  onRepairWorkspace,
-  onLoadDemoData,
-  onClearDemoData,
-}: {
-  currentUser: User;
-  workspaceName: string;
-  compliance: number;
-  complianceDelta: number;
-  groupedAudits: Record<AuditStatus, Audit[]>;
-  actions: ActionItem[];
-  openActions: ActionItem[];
-  overdueActions: ActionItem[];
-  criticalActions: ActionItem[];
-  awaitingVerificationActions: ActionItem[];
-  overdueAudits: Audit[];
-  evidenceCount: number;
-  completedToday: number;
-  offlineQueueCount: number;
-  pendingSyncCount: number;
-  failedSyncCount: number;
-  assignedAudits: Audit[];
-  history: HistoryEntry[];
-  drafts: Record<string, AuditDraft>;
-  companySheetSync: CompanySheetSyncStatus | null;
-  auditCompletionRate: number;
-  actionClosureRate: number;
-  averageActionClosureDays: number;
-  recurringFailedQuestions: [string, number][];
-  topOverdueSchedules: ManagedSchedule[];
-  riskSummary: {
-    totalRiskScore: number;
-    highestRiskLevel: RiskLevel;
-    criticalFindings: number;
-    highFindings: number;
-  };
-  themeMode: ThemeMode;
-  dashboardPreferences: DashboardPreferences;
-  dashboardSectionOrder: DashboardSectionKey[];
-  onOpenAudit: (auditId: string) => void;
-  onAdvanceAction: (actionId: string) => void;
-  onApplyDashboardPreset: (preset: "minimal" | "operations" | "executive") => void;
-  onToggleDashboardSection: (section: DashboardSectionKey) => void;
-  onMoveDashboardSection: (section: DashboardSectionKey, direction: "up" | "down") => void;
-  reportUsersCount: number;
-  activeSchedulesCount: number;
-  templatesCount: number;
-  workspaceValidation: WorkspaceValidation | null;
-  selectedFolder: CompanyFolder | null;
-  onValidateWorkspace: () => void;
-  onRepairWorkspace: () => void;
-  onLoadDemoData: () => void;
-  onClearDemoData: () => void;
-}) {
-  if (currentUser.role === "Auditor") {
-    return (
-      <AuditorTaskDashboard
-        currentUser={currentUser}
-        groupedAudits={groupedAudits}
-        assignedAudits={assignedAudits}
-        drafts={drafts}
-        actions={actions}
-        pendingSyncCount={pendingSyncCount}
-        failedSyncCount={failedSyncCount}
-        onOpenAudit={onOpenAudit}
-      />
-    );
-  }
-
-  if (currentUser.role === "Manager") {
-    return (
-      <ManagerDashboard
-        groupedAudits={groupedAudits}
-        assignedAudits={assignedAudits}
-        actions={actions}
-        onOpenAudit={onOpenAudit}
-        onAdvanceAction={onAdvanceAction}
-        recurringFailedQuestions={recurringFailedQuestions}
-      />
-    );
-  }
-
-  if (currentUser.role === "Admin") {
-    return (
-      <AdminDashboard
-        groupedAudits={groupedAudits}
-        assignedAudits={assignedAudits}
-        actions={actions}
-        pendingSyncCount={pendingSyncCount}
-        failedSyncCount={failedSyncCount}
-        reportUsersCount={reportUsersCount}
-        activeSchedulesCount={activeSchedulesCount}
-        templatesCount={templatesCount}
-        onOpenAudit={onOpenAudit}
-        onAdvanceAction={onAdvanceAction}
-      />
-    );
-  }
-
-  if (currentUser.role === "Master") {
-    return (
-      <GodModeDashboard
-        workspaceValidation={workspaceValidation}
-        selectedFolder={selectedFolder}
-        reportUsersCount={reportUsersCount}
-        activeSchedulesCount={activeSchedulesCount}
-        templatesCount={templatesCount}
-        onValidateWorkspace={onValidateWorkspace}
-        onRepairWorkspace={onRepairWorkspace}
-        onLoadDemoData={onLoadDemoData}
-        onClearDemoData={onClearDemoData}
-      />
-    );
-  }
-
-  return null;
-  
-  const [showDashboardOptions, setShowDashboardOptions] = useState(false);
-  const visibleSectionOrder = dashboardSectionOrder.filter((key) => dashboardPreferences[key]);
-
-  const renderSection = (section: DashboardSectionKey) => {
-    if (section === "trafficBoard") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="dashboard" eyebrow="Live status" title="Traffic light audit board" subtitle="First-look status across live audits." />
-          <div className="mt-2 grid gap-2">
-            <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red.slice(0, 1)} status="red" onOpenAudit={onOpenAudit} />
-            <TrafficLane title="Amber" subtitle={`<${amberThresholdHours}h remaining`} audits={groupedAudits.amber.slice(0, 1)} status="amber" onOpenAudit={onOpenAudit} />
-            <TrafficLane title="Green" subtitle={`>${amberThresholdHours}h remaining`} audits={groupedAudits.green.slice(0, 1)} status="green" onOpenAudit={onOpenAudit} />
-          </div>
-        </section>
-      );
-    }
-    if (section === "liveSummary") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="chart" eyebrow="Live summary" title="Operations snapshot" subtitle="Quick KPI pulse for field and admin teams." />
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <KpiCard title="Open actions" value={String(openActions.length)} tone={openActions.length ? "amber" : "green"} subtitle={`${overdueActions.length} overdue`} dark={themeMode === "dark"} />
-            <KpiCard title="Compliance" value={`${compliance}%`} tone="green" subtitle={complianceDelta >= 0 ? `Up ${complianceDelta}%` : `Down ${Math.abs(complianceDelta)}%`} dark={themeMode === "dark"} />
-            <KpiCard title="Completion" value={`${auditCompletionRate}%`} tone={auditCompletionRate > 79 ? "green" : "amber"} subtitle={`${completedToday} today`} dark={themeMode === "dark"} />
-            <KpiCard title="Queue" value={String(offlineQueueCount)} tone={offlineQueueCount ? "amber" : "green"} subtitle={`${evidenceCount} evidence`} dark={themeMode === "dark"} />
-          </div>
-        </section>
-      );
-    }
-    if (section === "upcomingAudits") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="clipboard" eyebrow="Upcoming" title="Upcoming audits" subtitle="Prioritized from your assigned workload." />
-          <div className="mt-2 space-y-2">
-            {assignedAudits.slice(0, 4).map((audit) => (
-              <button key={audit.id} onClick={() => onOpenAudit(audit.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left transition hover:bg-white">
-                <p className="text-sm font-semibold text-slate-900">{audit.name}</p>
-                <p className="mt-1 text-xs text-slate-500">{audit.siteArea} - {getDueWarning(audit.dueHours)}</p>
-              </button>
-            ))}
-            {assignedAudits.length === 0 && <EmptyPanel title="No upcoming audits" text="Linked and assigned audits will appear here." />}
-          </div>
-        </section>
-      );
-    }
-    if (section === "openActions") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="warningTriangle" eyebrow="Actions" title="Open actions" subtitle="Items needing progress or verification." />
-          <div className="mt-2 space-y-2">
-            {actions.slice(0, 4).map((action) => (
-              <button key={action.id} onClick={() => onAdvanceAction(action.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left transition hover:bg-white">
-                <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
-                <p className="mt-1 text-xs text-slate-500">{action.owner} - {action.status}</p>
-              </button>
-            ))}
-          </div>
-        </section>
-      );
-    }
-    return (
-      <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-        <SectionHeader icon="shield" eyebrow="Compliance" title="Compliance snapshot" subtitle="Risk, closure, and recurring findings." />
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <KpiCard title="Critical/high" value={String(criticalActions.length)} tone={criticalActions.length ? "red" : "green"} subtitle={`${riskSummary.criticalFindings} critical`} dark={themeMode === "dark"} />
-          <KpiCard title="Closure rate" value={`${actionClosureRate}%`} tone={actionClosureRate > 79 ? "green" : "amber"} subtitle={`${averageActionClosureDays || 0} days avg`} dark={themeMode === "dark"} />
-        </div>
-      </section>
-    );
-  };
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-[1.4rem] bg-slate-950 p-3.5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Live overview</p>
-            <h2 className="mt-1 text-xl font-semibold tracking-tight">{workspaceName}</h2>
-            <p className="mt-1 max-w-sm text-xs leading-5 text-slate-300">Dashboard controls and traffic status in one view.</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setShowDashboardOptions((current) => !current)} className="h-8 rounded-lg bg-white/12 px-3 text-xs font-semibold text-white">
-              Customize
-            </button>
-            <div className="rounded-xl bg-white/10 px-3 py-1.5 text-right">
-              <p className="text-[11px] text-slate-300">Overdue</p>
-              <p className="text-lg font-semibold">{overdueAudits.length}</p>
-            </div>
-          </div>
-        </div>
-      </section>
-      {showDashboardOptions && (
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Dashboard options</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button onClick={() => onApplyDashboardPreset("minimal")} className="h-8 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700">Minimal</button>
-            <button onClick={() => onApplyDashboardPreset("operations")} className="h-8 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700">Operations</button>
-            <button onClick={() => onApplyDashboardPreset("executive")} className="h-8 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700">Executive</button>
-          </div>
-          <div className="mt-3 space-y-2">
-            {dashboardSectionOrder.map((section, index) => (
-              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                <input type="checkbox" checked={dashboardPreferences[section]} onChange={() => onToggleDashboardSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
-                <button onClick={() => onMoveDashboardSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
-                <button onClick={() => onMoveDashboardSection(section, "down")} disabled={index === dashboardSectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <div className="grid gap-3 lg:grid-cols-2">
-        {visibleSectionOrder.map((section) => renderSection(section))}
-      </div>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="chart"
-          eyebrow="Performance"
-          title="Trend dashboard"
-          subtitle="Live audit health across traffic-light status, completion, and action pressure."
-        />
-        <div className="space-y-3">
-          <TrendBar label="Green audits" value={groupedAudits.green.length} total={Math.max(1, groupedAudits.green.length + groupedAudits.amber.length + groupedAudits.red.length)} tone="green" />
-          <TrendBar label="Amber audits" value={groupedAudits.amber.length} total={Math.max(1, groupedAudits.green.length + groupedAudits.amber.length + groupedAudits.red.length)} tone="amber" />
-          <TrendBar label="Red audits" value={groupedAudits.red.length} total={Math.max(1, groupedAudits.green.length + groupedAudits.amber.length + groupedAudits.red.length)} tone="red" />
-          <TrendBar label="Actions in progress" value={actions.filter((item) => item.status === "In Progress").length} total={Math.max(1, actions.length || 1)} tone="amber" />
-          <TrendBar label="Actions closed" value={actions.filter((item) => item.status === "Closed").length} total={Math.max(1, actions.length || 1)} tone="green" />
-          <TrendBar label="Critical/high actions" value={criticalActions.length} total={Math.max(1, actions.length || 1)} tone="red" />
-        </div>
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="warningTriangle"
-          eyebrow="Recurring issues"
-          title="Top recurring failures"
-          subtitle="Patterns in repeated failed questions and schedules needing intervention."
-        />
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-[1.4rem] border border-slate-200/70 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-            <p className="text-sm font-semibold text-slate-900">Top 5 failed questions</p>
-            <div className="mt-3 space-y-2">
-              {recurringFailedQuestions.length === 0 ? <p className="text-sm text-slate-500">No repeat failures yet.</p> : recurringFailedQuestions.map(([question, count]) => <div key={question} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"><span className="mr-3 text-sm text-slate-700">{question}</span><span className="text-xs font-semibold text-slate-500">{count}</span></div>)}
-            </div>
-          </div>
-          <div className="rounded-[1.4rem] border border-slate-200/70 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-            <p className="text-sm font-semibold text-slate-900">Top 5 overdue schedules</p>
-            <div className="mt-3 space-y-2">
-              {topOverdueSchedules.length === 0 ? <p className="text-sm text-slate-500">No overdue schedules.</p> : topOverdueSchedules.map((schedule) => <div key={schedule.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"><span className="mr-3 text-sm text-slate-700">{schedule.scheduleName}</span><span className="text-xs font-semibold text-rose-600">{schedule.healthState || computeScheduleHealthState(schedule)}</span></div>)}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="clipboard"
-          eyebrow="Work queue"
-          title="Active audit workload"
-          subtitle={
-            canAccessAdmin(currentUser.role)
-              ? "All open audits across the business"
-              : currentUser.role === "Manager"
-                ? "Assigned audits and actions needing review"
-                : "Your assigned audits and saved progress"
-          }
-        />
-
-        {assignedAudits.length === 0 ? (
-          <EmptyPanel
-            title="No audits live yet"
-            text="Connect your Google Drive root folder in Admin, refresh the company folders, and sync the verified audit forms to populate this workspace."
-          />
-        ) : (
-          <div className="space-y-3">
-            {assignedAudits.slice(0, 4).map((audit) => (
-              <button
-                key={audit.id}
-                onClick={() => onOpenAudit(audit.id)}
-                className="w-full rounded-[1.4rem] border border-slate-200/70 bg-white px-4 py-4 text-left shadow-[0_10px_24px_rgba(15,23,42,0.06)]"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[15px] font-semibold text-slate-900">{audit.name}</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <MetaPill icon="clipboard" label={audit.siteArea} />
-                      <MetaPill icon="user" label={audit.owner} />
-                      <MetaPill icon="spark" label={audit.priority} />
-                    </div>
-                    <p className="mt-3 text-xs font-medium text-slate-600">{getDueWarning(audit.dueHours)}</p>
-                    <p className="mt-1 text-xs text-slate-400">
-                      {drafts[audit.id] ? `In progress ${drafts[audit.id].updatedAt}` : `Last completed ${audit.lastCompletedAt}`}
-                    </p>
-                  </div>
-                  <div className="shrink-0 space-y-2 text-right">
-                    <StatusBadge status={getAuditTrafficStatus(audit.dueHours)} />
-                    {drafts[audit.id] && (
-                      <div className="rounded-full bg-sky-500/12 px-3 py-1 text-xs font-semibold text-sky-700">
-                        In progress
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="chart"
-          eyebrow="History"
-          title="Completed audit history"
-          subtitle="Most recent completions and outcomes"
-        />
-        {history.length === 0 ? (
-          <EmptyPanel
-            title="No completion history yet"
-            text="Completed audits will appear here once your first company folder is synced and inspections are submitted."
-          />
-        ) : (
-          <div className="space-y-3">
-            {history.slice(0, 6).map((entry) => (
-              <div key={entry.id} className="flex items-center justify-between rounded-[1.4rem] border border-slate-200/70 bg-white px-4 py-3 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-                <div className="min-w-0">
-                  <p className="truncate text-[15px] font-semibold text-slate-900">{entry.auditName}</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <MetaPill icon="user" label={entry.completedBy} />
-                    <MetaPill icon="clock" label={entry.completedAt} />
-                  </div>
-                </div>
-                <StatusBadge status={entry.status} />
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function AuditorTaskDashboard({
-  currentUser,
-  groupedAudits,
-  assignedAudits,
-  drafts,
-  actions,
-  pendingSyncCount,
-  failedSyncCount,
-  onOpenAudit,
-}: {
-  currentUser: User;
-  groupedAudits: Record<AuditStatus, Audit[]>;
-  assignedAudits: Audit[];
-  drafts: Record<string, AuditDraft>;
-  actions: ActionItem[];
-  pendingSyncCount: number;
-  failedSyncCount: number;
-  onOpenAudit: (auditId: string) => void;
-}) {
-  const sortedAudits = useMemo(
-    () =>
-      [...assignedAudits].sort((a, b) => {
-        const rankDiff = rankAuditorAudit(a, Boolean(drafts[a.id])) - rankAuditorAudit(b, Boolean(drafts[b.id]));
-        if (rankDiff !== 0) return rankDiff;
-        return a.dueHours - b.dueHours;
-      }),
-    [assignedAudits, drafts],
-  );
-  const draftAudits = useMemo(() => sortedAudits.filter((audit) => Boolean(drafts[audit.id])), [sortedAudits, drafts]);
-  const dueTodayAudits = useMemo(() => sortedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours <= 24), [sortedAudits]);
-  const orphanDraftCount = useMemo(() => {
-    const assignedAuditIds = new Set(assignedAudits.map((audit) => audit.id));
-    return Object.keys(drafts).filter((auditId) => !assignedAuditIds.has(auditId)).length;
-  }, [assignedAudits, drafts]);
-  const overdueCount = useMemo(() => sortedAudits.filter((audit) => audit.dueHours < 0).length, [sortedAudits]);
-  const dueTodayCount = useMemo(() => sortedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours <= 24).length, [sortedAudits]);
-  const dueSoonCount = useMemo(
-    () => sortedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours < amberThresholdHours).length,
-    [sortedAudits],
-  );
-  const onTrackCount = useMemo(
-    () => sortedAudits.filter((audit) => audit.dueHours >= amberThresholdHours).length,
-    [sortedAudits],
-  );
-  const draftCount = useMemo(() => sortedAudits.filter((audit) => Boolean(drafts[audit.id])).length, [sortedAudits, drafts]);
-  const evidenceNeededCount = useMemo(
-    () =>
-      actions.filter(
-        (action) =>
-          (action.assignedToUserId === currentUser.username || action.assignedToName === currentUser.name) &&
-          action.status !== "Closed" &&
-          action.evidenceRequired &&
-          action.evidenceCount === 0,
-      ).length,
-    [actions, currentUser.name, currentUser.username],
-  );
-  const nextAudit = useMemo(() => pickNextAuditorAudit(sortedAudits, drafts), [sortedAudits, drafts]);
-  const primaryLabel = useMemo(() => {
-    if (!nextAudit) return "No Audits Due";
-    if (drafts[nextAudit.id]) return "Resume Audit";
-    if (nextAudit.dueHours < 0) return "Start Overdue Audit";
-    if (getAuditTrafficStatus(nextAudit.dueHours) === "amber") return "Start Due Soon Audit";
-    if (nextAudit.dueHours <= 24) return "Start Today’s Audits";
-    return "Start Next Audit";
-  }, [nextAudit, drafts]);
-  const primarySubtitle = useMemo(() => {
-    if (!nextAudit) return "All clear - no audits due right now.";
-    if (drafts[nextAudit.id]) return `Resume ${nextAudit.name}`;
-    if (nextAudit.dueHours < 0) return `Overdue now: ${nextAudit.name}`;
-    if (getAuditTrafficStatus(nextAudit.dueHours) === "amber") return `Due soon: ${nextAudit.name}`;
-    if (nextAudit.dueHours <= 24) return `Due today: ${nextAudit.name}`;
-    return nextAudit.name;
-  }, [nextAudit, drafts]);
-  const evidenceActions = useMemo(
-    () =>
-      actions.filter(
-        (action) =>
-          (action.assignedToUserId === currentUser.username || action.assignedToName === currentUser.name) &&
-          action.status !== "Closed" &&
-          action.evidenceRequired &&
-          action.evidenceCount === 0,
-      ),
-    [actions, currentUser.name, currentUser.username],
-  );
-  const syncLabel =
-    failedSyncCount > 0 ? `${failedSyncCount} sync failed` : pendingSyncCount > 0 ? `${pendingSyncCount} pending sync` : "Synced";
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
-        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Today&apos;s tasks</p>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">Morning {currentUser.name.split(" ")[0]}</h2>
-        <p className="mt-1 text-sm text-slate-500">What do you need to do now?</p>
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-          <MiniMetric label="Outstanding (Red)" value={String(overdueCount)} tone="red" />
-          <MiniMetric label="Due now (Amber)" value={String(dueSoonCount)} tone="amber" />
-          <MiniMetric label="On track (Green)" value={String(onTrackCount)} tone="green" />
-          <MiniMetric label="Due today" value={String(dueTodayCount)} tone="slate" />
-          <MiniMetric label="Audits in progress" value={String(draftCount)} tone="sky" />
-          <MiniMetric label="Not closed: evidence missing" value={String(evidenceNeededCount)} tone="amber" />
-        </div>
-        <button
-          type="button"
-          onClick={() => nextAudit && onOpenAudit(nextAudit.id)}
-          disabled={!nextAudit}
-          className={`mt-4 h-16 w-full rounded-2xl text-lg font-semibold text-white ${nextAudit ? `bg-slate-900 ${slatePrimaryCtaInteract}` : "cursor-not-allowed bg-slate-300"}`}
-        >
-          {nextAudit ? `Audit Mode: ${primaryLabel}` : "Audit Mode: No Audits Due"}
-        </button>
-        <p className="mt-2 text-sm text-slate-500">{primarySubtitle}</p>
-        {orphanDraftCount > 0 && (
-          <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-            {orphanDraftCount} in-progress audit{orphanDraftCount === 1 ? "" : "s"} could not be matched to a live audit template.
-          </p>
-        )}
-      </section>
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-sm font-semibold text-slate-900">Task list</p>
-          <div
-            className={[
-              "rounded-full px-3 py-1 text-xs font-semibold",
-              failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700",
-            ].join(" ")}
-          >
-            {syncLabel}
-          </div>
-        </div>
-        <div className="space-y-3">
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Today&apos;s audits</p>
-            <div className="space-y-2">
-              {dueTodayAudits.slice(0, 3).map((audit) => (
-                <button key={audit.id} type="button" onClick={() => onOpenAudit(audit.id)} className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-left">
-                  <StatusBadge status={getAuditTrafficStatus(audit.dueHours)} />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{audit.name}</p>
-                    <p className="text-xs text-slate-500">{getDueWarning(audit.dueHours)}</p>
-                  </div>
-                </button>
-              ))}
-              {dueTodayAudits.length === 0 && <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No audits due today.</p>}
-            </div>
-          </div>
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Draft audits</p>
-            <div className="space-y-2">
-              {draftAudits.slice(0, 2).map((audit) => (
-                <button key={audit.id} type="button" onClick={() => onOpenAudit(audit.id)} className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-left">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{audit.name}</p>
-                    <p className="text-xs text-slate-500">{drafts[audit.id]?.updatedAt || "In progress"}</p>
-                  </div>
-                  <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700">Resume</span>
-                </button>
-              ))}
-              {draftAudits.length === 0 && <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No audits in progress.</p>}
-            </div>
-          </div>
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Actions needing evidence</p>
-            <div className="space-y-2">
-              {evidenceActions.slice(0, 2).map((action) => (
-                <div key={action.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                  <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
-                  <p className="text-xs text-slate-500">{action.auditName}</p>
-                </div>
-              ))}
-              {evidenceActions.length === 0 && <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No assigned actions waiting for evidence.</p>}
-            </div>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function ManagerDashboard({
-  groupedAudits,
-  assignedAudits,
-  actions,
-  onOpenAudit,
-  onAdvanceAction,
-  recurringFailedQuestions,
-}: {
-  groupedAudits: Record<AuditStatus, Audit[]>;
-  assignedAudits: Audit[];
-  actions: ActionItem[];
-  onOpenAudit: (auditId: string) => void;
-  onAdvanceAction: (actionId: string, nextStatus?: ActionStatus) => void;
-  recurringFailedQuestions: [string, number][];
-}) {
-  const overdueAudits = useMemo(
-    () => assignedAudits.filter((audit) => getAuditTrafficStatus(audit.dueHours) === "red"),
-    [assignedAudits],
-  );
-  const overdueActions = useMemo(
-    () => actions.filter((action) => isOverdue(action)),
-    [actions],
-  );
-  const escalatedActions = useMemo(
-    () => actions.filter((action) => isEscalated(action)),
-    [actions],
-  );
-  const stuckActions = useMemo(
-    () => actions.filter((action) => isStuck(action)),
-    [actions],
-  );
-  const auditsDueToday = useMemo(
-    () => assignedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours <= 24),
-    [assignedAudits],
-  );
-  const actionsDueToday = useMemo(
-    () => actions.filter((action) => action.dueHours >= 0 && action.dueHours <= 24 && action.status !== "Closed"),
-    [actions],
-  );
-  const repeatedTop3 = useMemo(() => recurringFailedQuestions.slice(0, 3), [recurringFailedQuestions]);
-  const allClear = overdueAudits.length === 0 && overdueActions.length === 0 && escalatedActions.length === 0 && stuckActions.length === 0;
-  const totalLiveAudits = Math.max(1, groupedAudits.red.length + groupedAudits.amber.length + groupedAudits.green.length);
-  const openActionsCount = actions.filter((item) => item.status === "Open").length;
-  const inProgressActionsCount = actions.filter((item) => item.status === "In Progress").length;
-  const awaitingVerificationCount = actions.filter((item) => item.status === "Awaiting Verification").length;
-  const closedActionsCount = actions.filter((item) => item.status === "Closed").length;
-  const totalActionsCount = Math.max(1, actions.length);
-  const [selectedLiveGraph, setSelectedLiveGraph] = useState<"auditTraffic" | "actionStatus" | "riskFocus">("auditTraffic");
-  const [selectedGraphType, setSelectedGraphType] = useState<"column" | "line" | "area" | "bar">("column");
-
-  const {
-    showLayoutOptions,
-    setShowLayoutOptions,
-    sectionOrder,
-    sectionVisibility,
-    visibleSectionOrder,
-    toggleSection,
-    moveSection,
-  } = useDashboardSectionLayout("qms-precast-layout-manager", ["immediateAttention", "todaysWork", "liveBoard", "liveGraphs", "repeatIssues"]);
-
-  const renderSection = (section: string) => {
-    if (section === "immediateAttention") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="shield" eyebrow="Immediate attention" title="Immediate attention" subtitle="Items that need action now." />
-          <div className="mt-2 flex flex-wrap gap-2">
-            <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue actions {overdueActions.length}</div>
-            <div className="rounded-full bg-rose-200 px-3 py-1 text-xs font-semibold text-rose-900">Escalated {escalatedActions.length}</div>
-            <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Stuck {stuckActions.length}</div>
-            <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue audits {overdueAudits.length}</div>
-          </div>
-          {allClear ? (
-            <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm font-semibold text-emerald-800">
-              All clear - No overdue audits, actions, or critical issues.
-            </div>
-          ) : (
-            <div className="mt-3 space-y-2">
-              {[...escalatedActions.slice(0, 2), ...stuckActions.slice(0, 2), ...overdueActions.slice(0, 2)].slice(0, 4).map((action) => (
-                <div key={`attention-${action.id}`} className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5">
-                  <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
-                  <p className="mt-1 text-xs text-slate-500">{action.auditName} - {action.assignedToName}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      );
-    }
-    if (section === "todaysWork") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="clock" eyebrow="Today's work" title="Today's work" subtitle="Audits and actions due today." />
-          <div className="mt-2 grid gap-3 lg:grid-cols-2">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Audits due today</p>
-              {auditsDueToday.length === 0 ? (
-                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No audits due today.</div>
-              ) : (
-                <div className="mt-2 space-y-2">
-                  {auditsDueToday.slice(0, 4).map((audit) => (
-                    <button key={audit.id} onClick={() => onOpenAudit(audit.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left">
-                      <p className="text-sm font-semibold text-slate-900">{audit.name}</p>
-                      <p className="mt-1 text-xs text-slate-500">{getDueWarning(audit.dueHours)}</p>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Actions due today</p>
-              {actionsDueToday.length === 0 ? (
-                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No actions due today.</div>
-              ) : (
-                <div className="mt-2 space-y-2">
-                  {actionsDueToday.slice(0, 4).map((action) => (
-                    <button key={action.id} onClick={() => onAdvanceAction(action.id)} className="w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left">
-                      <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
-                      <p className="mt-1 text-xs text-slate-500">{action.assignedToName} - {action.dueLabel}</p>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
-      );
-    }
-    if (section === "liveBoard") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="dashboard" eyebrow="Live audit board" title="Live audit board" subtitle="Red, amber, green grouped audits." />
-          <div className="mt-2 grid gap-2">
-            <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red.slice(0, 1)} status="red" onOpenAudit={onOpenAudit} />
-            <TrafficLane title="Amber" subtitle={`<${amberThresholdHours}h remaining`} audits={groupedAudits.amber.slice(0, 1)} status="amber" onOpenAudit={onOpenAudit} />
-            <TrafficLane title="Green" subtitle={`>${amberThresholdHours}h remaining`} audits={groupedAudits.green.slice(0, 1)} status="green" onOpenAudit={onOpenAudit} />
-          </div>
-        </section>
-      );
-    }
-    if (section === "liveGraphs") {
-      const graphSeries =
-        selectedLiveGraph === "auditTraffic"
-          ? [
-              { label: "Red", value: groupedAudits.red.length, tone: "red" as const },
-              { label: "Amber", value: groupedAudits.amber.length, tone: "amber" as const },
-              { label: "Green", value: groupedAudits.green.length, tone: "green" as const },
-            ]
-          : selectedLiveGraph === "actionStatus"
-            ? [
-                { label: "Open", value: openActionsCount, tone: "red" as const },
-                { label: "In progress", value: inProgressActionsCount, tone: "amber" as const },
-                { label: "Awaiting verification", value: awaitingVerificationCount, tone: "amber" as const },
-                { label: "Closed", value: closedActionsCount, tone: "green" as const },
-              ]
-            : [
-                { label: "Overdue audits", value: overdueAudits.length, tone: "red" as const },
-                { label: "Overdue actions", value: overdueActions.length, tone: "red" as const },
-                { label: "Escalated", value: escalatedActions.length, tone: "amber" as const },
-                { label: "Stuck", value: stuckActions.length, tone: "amber" as const },
-              ];
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="chart" eyebrow="Live graphs" title="Live performance graphs" subtitle="Real-time compliance and action movement." />
-          <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Graph view</p>
-              <div className="flex w-full flex-wrap gap-2 sm:w-auto">
-                <div className="relative w-full sm:w-[16rem]">
-                  <select
-                    value={selectedLiveGraph}
-                    onChange={(event) => setSelectedLiveGraph(event.target.value as "auditTraffic" | "actionStatus" | "riskFocus")}
-                    className="h-9 w-full appearance-none rounded-lg border border-slate-200 bg-slate-50 px-3 pr-8 text-sm font-medium text-slate-700 outline-none transition focus:border-slate-400 focus:bg-white"
-                  >
-                    <option value="auditTraffic">Audit traffic mix</option>
-                    <option value="actionStatus">Action status mix</option>
-                    <option value="riskFocus">Risk focus and pressure points</option>
-                  </select>
-                  <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-slate-400">▾</span>
-                </div>
-                <div className="relative w-full sm:w-[10rem]">
-                  <select
-                    value={selectedGraphType}
-                    onChange={(event) => setSelectedGraphType(event.target.value as "column" | "line" | "area" | "bar")}
-                    className="h-9 w-full appearance-none rounded-lg border border-slate-200 bg-slate-50 px-3 pr-8 text-sm font-medium text-slate-700 outline-none transition focus:border-slate-400 focus:bg-white"
-                  >
-                    <option value="column">Column</option>
-                    <option value="line">Line</option>
-                    <option value="area">Area</option>
-                    <option value="bar">Bar</option>
-                  </select>
-                  <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-slate-400">▾</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <LiveGraphChart data={graphSeries} chartType={selectedGraphType} />
-            {selectedLiveGraph === "auditTraffic" && (
-              <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Audit traffic mix</p>
-                <TrendBar label="Red" value={groupedAudits.red.length} total={totalLiveAudits} tone="red" />
-                <TrendBar label="Amber" value={groupedAudits.amber.length} total={totalLiveAudits} tone="amber" />
-                <TrendBar label="Green" value={groupedAudits.green.length} total={totalLiveAudits} tone="green" />
-              </div>
-            )}
-            {selectedLiveGraph === "actionStatus" && (
-              <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Action status mix</p>
-                <TrendBar label="Open" value={openActionsCount} total={totalActionsCount} tone="red" />
-                <TrendBar label="In progress" value={inProgressActionsCount} total={totalActionsCount} tone="amber" />
-                <TrendBar label="Awaiting verification" value={awaitingVerificationCount} total={totalActionsCount} tone="amber" />
-                <TrendBar label="Closed" value={closedActionsCount} total={totalActionsCount} tone="green" />
-              </div>
-            )}
-            {selectedLiveGraph === "riskFocus" && (
-              <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Risk focus</p>
-                <TrendBar label="Overdue audits" value={overdueAudits.length} total={Math.max(1, assignedAudits.length)} tone="red" />
-                <TrendBar label="Overdue actions" value={overdueActions.length} total={totalActionsCount} tone="red" />
-                <TrendBar label="Escalated actions" value={escalatedActions.length} total={totalActionsCount} tone="amber" />
-                <TrendBar label="Stuck actions" value={stuckActions.length} total={totalActionsCount} tone="amber" />
-              </div>
-            )}
-          </div>
-        </section>
-      );
-    }
-    return (
-      <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-        <SectionHeader icon="warningTriangle" eyebrow="Repeat issues" title="Top repeated failures" subtitle="Most frequent failed findings this week." />
-        {repeatedTop3.length === 0 ? (
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">All clear - no repeated failures.</div>
-        ) : (
-          <div className="space-y-2">
-            {repeatedTop3.map(([question, count]) => (
-              <div key={`repeat-${question}`} className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
-                {question} failed {count} time{count === 1 ? "" : "s"} this week
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-    );
-  };
-
-  const hasImmediateAttention = visibleSectionOrder.includes("immediateAttention");
-  const hasTodaysWork = visibleSectionOrder.includes("todaysWork");
-  const remainingSections = visibleSectionOrder.filter((section) => section !== "immediateAttention" && section !== "todaysWork");
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
-          <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
-            Layout options
-          </button>
-        </div>
-        {showLayoutOptions && (
-          <div className="mt-2 space-y-2">
-            {sectionOrder.map((section, index) => (
-              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
-                <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
-                <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-      {(hasImmediateAttention || hasTodaysWork) && (
-        <div className="grid gap-3 lg:grid-cols-2">
-          {hasTodaysWork && (
-            <div className="lg:h-[21rem] [&>section]:h-full [&>section]:overflow-y-auto">
-              {renderSection("todaysWork")}
-            </div>
-          )}
-          {hasImmediateAttention && (
-            <div className="lg:h-[21rem] [&>section]:h-full [&>section]:overflow-y-auto">
-              {renderSection("immediateAttention")}
-            </div>
-          )}
-        </div>
-      )}
-      {remainingSections.map((section) => renderSection(section))}
-    </div>
-  );
-}
-
-function AdminDashboard({
-  groupedAudits,
-  assignedAudits,
-  actions,
-  pendingSyncCount,
-  failedSyncCount,
-  reportUsersCount,
-  activeSchedulesCount,
-  templatesCount,
-  onOpenAudit,
-  onAdvanceAction,
-}: {
-  groupedAudits: Record<AuditStatus, Audit[]>;
-  assignedAudits: Audit[];
-  actions: ActionItem[];
-  pendingSyncCount: number;
-  failedSyncCount: number;
-  reportUsersCount: number;
-  activeSchedulesCount: number;
-  templatesCount: number;
-  onOpenAudit: (auditId: string) => void;
-  onAdvanceAction: (actionId: string, nextStatus?: ActionStatus) => void;
-}) {
-  const overdueAudits = useMemo(() => assignedAudits.filter((audit) => getAuditTrafficStatus(audit.dueHours) === "red"), [assignedAudits]);
-  const overdueActions = useMemo(() => actions.filter((action) => isOverdue(action)), [actions]);
-  const escalatedActions = useMemo(() => actions.filter((action) => isEscalated(action)), [actions]);
-  const stuckActions = useMemo(() => actions.filter((action) => isStuck(action)), [actions]);
-  const auditsDueToday = useMemo(() => assignedAudits.filter((audit) => audit.dueHours >= 0 && audit.dueHours <= 24), [assignedAudits]);
-  const actionsDueToday = useMemo(() => actions.filter((action) => action.dueHours >= 0 && action.dueHours <= 24 && action.status !== "Closed"), [actions]);
-  const allClear = overdueAudits.length === 0 && overdueActions.length === 0 && escalatedActions.length === 0 && stuckActions.length === 0;
-
-  const {
-    showLayoutOptions,
-    setShowLayoutOptions,
-    sectionOrder,
-    sectionVisibility,
-    visibleSectionOrder,
-    toggleSection,
-    moveSection,
-  } = useDashboardSectionLayout("qms-precast-layout-admin", ["immediateAttention", "todaysWork", "systemOverview"]);
-
-  const renderSection = (section: string) => {
-    if (section === "immediateAttention") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="shield" eyebrow="Immediate attention" title="Immediate attention" subtitle="Operational issues needing action." />
-          {allClear ? (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm font-semibold text-emerald-800">All clear - No overdue audits, actions, or critical issues.</div>
-          ) : (
-            <div className="mt-2 flex flex-wrap gap-2">
-              <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue actions {overdueActions.length}</div>
-              <div className="rounded-full bg-rose-200 px-3 py-1 text-xs font-semibold text-rose-900">Escalated {escalatedActions.length}</div>
-              <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Stuck {stuckActions.length}</div>
-              <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Overdue audits {overdueAudits.length}</div>
-            </div>
-          )}
-        </section>
-      );
-    }
-    if (section === "todaysWork") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="clock" eyebrow="Today's work" title="Today's work" subtitle="What must be completed today." />
-          <div className="mt-2 grid gap-3 lg:grid-cols-2">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Audits due today</p>
-              {auditsDueToday.length === 0 ? <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No audits due today.</div> : auditsDueToday.slice(0, 4).map((audit) => (
-                <button key={audit.id} onClick={() => onOpenAudit(audit.id)} className="mt-2 w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left">
-                  <p className="text-sm font-semibold text-slate-900">{audit.name}</p>
-                </button>
-              ))}
-            </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Actions due today</p>
-              {actionsDueToday.length === 0 ? <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No actions due today.</div> : actionsDueToday.slice(0, 4).map((action) => (
-                <button key={action.id} onClick={() => onAdvanceAction(action.id)} className="mt-2 w-full rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2.5 text-left">
-                  <p className="text-sm font-semibold text-slate-900">{action.questionText}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-        </section>
-      );
-    }
-    return (
-      <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-        <SectionHeader icon="chart" eyebrow="System overview" title="System overview" subtitle="Running state and sync health." />
-        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Total users</p><p className="text-lg font-semibold text-slate-900">{reportUsersCount}</p></div>
-          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Active schedules</p><p className="text-lg font-semibold text-slate-900">{activeSchedulesCount}</p></div>
-          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Audit templates</p><p className="text-lg font-semibold text-slate-900">{templatesCount}</p></div>
-        </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">Pending sync {pendingSyncCount}</div>
-          <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">Failed sync {failedSyncCount}</div>
-          <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Conflicts {failedSyncCount}</div>
-        </div>
-      </section>
-    );
-  };
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
-          <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
-            Layout options
-          </button>
-        </div>
-        {showLayoutOptions && (
-          <div className="mt-2 space-y-2">
-            {sectionOrder.map((section, index) => (
-              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
-                <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
-                <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-      {visibleSectionOrder.map((section) => renderSection(section))}
-    </div>
-  );
-}
-
-function GodModeDashboard({
-  workspaceValidation,
-  selectedFolder,
-  reportUsersCount,
-  activeSchedulesCount,
-  templatesCount,
-  onValidateWorkspace,
-  onRepairWorkspace,
-  onLoadDemoData,
-  onClearDemoData,
-}: {
-  workspaceValidation: WorkspaceValidation | null;
-  selectedFolder: CompanyFolder | null;
-  reportUsersCount: number;
-  activeSchedulesCount: number;
-  templatesCount: number;
-  onValidateWorkspace: () => void;
-  onRepairWorkspace: () => void;
-  onLoadDemoData: () => void;
-  onClearDemoData: () => void;
-}) {
-  const {
-    showLayoutOptions,
-    setShowLayoutOptions,
-    sectionOrder,
-    sectionVisibility,
-    visibleSectionOrder,
-    toggleSection,
-    moveSection,
-  } = useDashboardSectionLayout("qms-precast-layout-godmode", ["workspaceHealth", "repairActions", "companySetup"]);
-
-  const renderSection = (section: string) => {
-    if (section === "workspaceHealth") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="shield" eyebrow="Workspace health" title="Workspace health" subtitle="Validation and configuration status." />
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <FolderCheckRow label="Google folder connected" ok={Boolean(selectedFolder)} />
-            <FolderCheckRow label="Master sheet valid" ok={Boolean(workspaceValidation?.folders.companyFolder)} />
-            <FolderCheckRow label="Required tabs present" ok={(workspaceValidation?.missingTabs.length || 0) === 0} />
-            <FolderCheckRow label="Schema version valid" ok={Boolean(workspaceValidation?.ok)} />
-          </div>
-        </section>
-      );
-    }
-    if (section === "repairActions") {
-      return (
-        <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-          <SectionHeader icon="sync" eyebrow="Repair actions" title="Repair actions" subtitle="Validate and repair the current workspace." />
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button onClick={onValidateWorkspace} className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>Validate workspace</button>
-            <button onClick={onRepairWorkspace} className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700">Repair workspace</button>
-            <button
-              type="button"
-              onClick={onLoadDemoData}
-              className="h-11 rounded-xl border border-sky-200 bg-sky-50 px-4 text-sm font-semibold text-sky-800"
-            >
-              Load Demo Data
-            </button>
-            <button
-              type="button"
-              onClick={onClearDemoData}
-              className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700"
-            >
-              Clear Demo Data
-            </button>
-          </div>
-          <p className="mt-2 text-xs text-slate-500">
-            Demo data is local-only and for review; it does not overwrite a linked Google company sheet.
-          </p>
-        </section>
-      );
-    }
-    return (
-      <section key={section} className="rounded-2xl border border-sky-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-        <SectionHeader icon="chart" eyebrow="Company setup" title="Company setup status" subtitle="Provisioning completeness snapshot." />
-        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Users created</p><p className="text-lg font-semibold text-slate-900">{reportUsersCount}</p></div>
-          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Schedules active</p><p className="text-lg font-semibold text-slate-900">{activeSchedulesCount}</p></div>
-          <div className="rounded-xl border border-sky-200/70 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Templates present</p><p className="text-lg font-semibold text-slate-900">{templatesCount}</p></div>
-        </div>
-      </section>
-    );
-  };
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">Dashboard</p>
-          <button onClick={() => setShowLayoutOptions((current) => !current)} className="h-8 rounded-lg border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600">
-            Layout options
-          </button>
-        </div>
-        {showLayoutOptions && (
-          <div className="mt-2 space-y-2">
-            {sectionOrder.map((section, index) => (
-              <div key={section} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <input type="checkbox" checked={sectionVisibility[section]} onChange={() => toggleSection(section)} />
-                <span className="min-w-0 flex-1 text-sm text-slate-700">{section}</span>
-                <button onClick={() => moveSection(section, "up")} disabled={index === 0} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↑</button>
-                <button onClick={() => moveSection(section, "down")} disabled={index === sectionOrder.length - 1} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs">↓</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-      {visibleSectionOrder.map((section) => renderSection(section))}
-    </div>
-  );
-}
-
-function NonConformanceScreen({
-  currentUser,
-  nonConformances,
-  canViewCompletedReports,
-  onSaveProgress,
-  onComplete,
-  onAddEvidence,
-  onExportReport,
-}: {
-  currentUser: User;
-  nonConformances: NonConformanceRecord[];
-  canViewCompletedReports: boolean;
-  onSaveProgress: (
-    ncrId: string,
-    payload: Pick<NonConformanceRecord, "investigationIsoClause" | "investigationNotes" | "rootCause" | "correctiveAction" | "investigationExtraNotes">,
-  ) => void;
-  onComplete: (
-    ncrId: string,
-    payload: Pick<NonConformanceRecord, "investigationIsoClause" | "investigationNotes" | "rootCause" | "correctiveAction" | "investigationExtraNotes">,
-  ) => boolean;
-  onAddEvidence: (ncrId: string, files: FileList) => void;
-  onExportReport: (record: NonConformanceRecord) => void;
-}) {
-  const visible = useMemo(() => {
-    const byRef = [...nonConformances].sort((a, b) => {
-      const left = parseNcrSequence(a.reference) || 0;
-      const right = parseNcrSequence(b.reference) || 0;
-      return left - right;
-    });
-    if (currentUser.role === "Auditor") {
-      return byRef.filter((item) => item.auditorUserId === currentUser.username);
-    }
-    return byRef;
-  }, [nonConformances, currentUser]);
-  const [selectedId, setSelectedId] = useState<string>("");
-  const [isoClause, setIsoClause] = useState("");
-  const [investigationNotes, setInvestigationNotes] = useState("");
-  const [rootCause, setRootCause] = useState("");
-  const [correctiveAction, setCorrectiveAction] = useState("");
-  const [extraNotes, setExtraNotes] = useState("");
-
-  const selected = visible.find((item) => item.id === selectedId) || null;
-  useEffect(() => {
-    if (!selected && visible.length) {
-      setSelectedId(visible[0].id);
-      return;
-    }
-    if (!selected) return;
-    setIsoClause(selected.investigationIsoClause || "");
-    setInvestigationNotes(selected.investigationNotes || "");
-    setRootCause(selected.rootCause || "");
-    setCorrectiveAction(selected.correctiveAction || "");
-    setExtraNotes(selected.investigationExtraNotes || "");
-  }, [selectedId, selected, visible]);
-
-  const completed = visible.filter((item) => item.status === "Completed");
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Non-conformance register</p>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight">Escalation and investigation</h2>
-      </section>
-      <section className="rounded-[1.6rem] border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-2">
-          {visible.length === 0 ? (
-            <p className="text-sm text-slate-500">No NCR records yet.</p>
-          ) : (
-            visible.map((item) => (
-              <button key={item.id} onClick={() => setSelectedId(item.id)} className={`grid grid-cols-6 gap-2 rounded-xl border px-3 py-2 text-left ${selectedId === item.id ? "border-slate-900 bg-slate-50" : "border-slate-200 bg-white"}`}>
-                <p className="text-xs font-semibold text-slate-900">{item.reference}</p>
-                <p className="text-xs text-slate-600">{item.site}</p>
-                <p className="text-xs text-slate-600">{item.auditorName}</p>
-                <p className="text-xs text-slate-600">{item.raisedAt}</p>
-                <p className="text-xs text-slate-600">{item.status}</p>
-                <p className="text-xs text-slate-600">{item.assignedLineManager}</p>
-              </button>
-            ))
-          )}
-        </div>
-      </section>
-      {selected && (
-        <section className="rounded-[1.6rem] border border-slate-200 bg-white p-4 shadow-sm">
-          <h3 className="text-base font-semibold text-slate-900">Investigation form - {selected.reference}</h3>
-          <p className="mt-1 text-xs text-slate-500">{selected.auditQuestion}</p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            <input value={isoClause} onChange={(event) => setIsoClause(event.target.value)} placeholder="ISO clause" className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm" />
-            <textarea value={investigationNotes} onChange={(event) => setInvestigationNotes(event.target.value)} placeholder="Investigation notes" className="min-h-[6rem] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
-            <textarea value={rootCause} onChange={(event) => setRootCause(event.target.value)} placeholder="Root cause" className="min-h-[6rem] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
-            <textarea value={correctiveAction} onChange={(event) => setCorrectiveAction(event.target.value)} placeholder="Corrective action" className="min-h-[6rem] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
-          </div>
-          <textarea value={extraNotes} onChange={(event) => setExtraNotes(event.target.value)} placeholder="Extra notes" className="mt-2 min-h-[5rem] w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
-          <div className="mt-2">
-            <input
-              type="file"
-              multiple
-              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
-              className="h-11 max-w-[22rem] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700"
-              onChange={(event) => {
-                if (event.target.files?.length) onAddEvidence(selected.id, event.target.files);
-                event.target.value = "";
-              }}
-            />
-            <p className="mt-1 text-xs text-slate-500">{selected.evidence.length} evidence file(s)</p>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() =>
-                onSaveProgress(selected.id, {
-                  investigationIsoClause: isoClause,
-                  investigationNotes,
-                  rootCause,
-                  correctiveAction,
-                  investigationExtraNotes: extraNotes,
-                })
-              }
-              className={`h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 ${slatePrimaryCtaInteract}`}
-            >
-              Save progress
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (!isoClause.trim() || !investigationNotes.trim() || !rootCause.trim() || !correctiveAction.trim()) {
-                  return;
-                }
-                onComplete(selected.id, {
-                  investigationIsoClause: isoClause,
-                  investigationNotes,
-                  rootCause,
-                  correctiveAction,
-                  investigationExtraNotes: extraNotes,
-                });
-              }}
-              className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
-            >
-              NCR complete
-            </button>
-          </div>
-        </section>
-      )}
-      {canViewCompletedReports && (
-        <section className="rounded-[1.6rem] border border-slate-200 bg-white p-4 shadow-sm">
-          <h3 className="text-base font-semibold text-slate-900">Completed NCR reports</h3>
-          <div className="mt-2 space-y-2">
-            {completed.length === 0 ? (
-              <p className="text-sm text-slate-500">No completed NCR reports yet.</p>
-            ) : (
-              completed.map((item) => (
-                <div key={item.id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                  <p className="text-sm text-slate-700">{item.reference} - {item.site} - {item.completedByName || "-"}</p>
-                  <button type="button" onClick={() => onExportReport(item)} className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white">Print / export PDF</button>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-      )}
-    </div>
-  );
-}
-
-function AuditsScreen({
-  currentUser,
-  audits,
-  groupedAudits,
-  drafts,
-  unsyncedAuditIds,
-  userProfilePhotos,
-  onOpenAudit,
-  auditAccessMatrix,
-  auditScheduleMatrix,
-  onToggleAuditAccess,
-}: {
-  currentUser: User;
-  audits: Audit[];
-  groupedAudits: Record<AuditStatus, Audit[]>;
-  drafts: Record<string, AuditDraft>;
-  unsyncedAuditIds: Set<string>;
-  userProfilePhotos: Record<string, string>;
-  onOpenAudit: (auditId: string) => void;
-  auditAccessMatrix: AuditAccessMatrixRow[];
-  auditScheduleMatrix: Record<string, AuditScheduleMatrixInfo>;
-  onToggleAuditAccess: (email: string, auditId: string, currentAccess: AuditAccessLevel) => void;
-}) {
-  return (
-    <div className="space-y-4">
-      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
-            <AppIcon name="clipboard" className="h-5 w-5" />
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Audit centre</p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-              {currentUser.role === "Auditor" ? "Assigned field audits" : "Complete and manage inspections"}
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-slate-300">
-              Save progress mid-inspection, complete audits in the field, and let the system create corrective actions when issues are found.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="grid grid-cols-1 gap-3">
-        <MiniMetric label="In progress" value={String(Object.keys(drafts).length)} />
-      </section>
-
-      {audits.length === 0 && (
-        <EmptyPanel
-          title="No audit templates live"
-          text="This blank version is ready for setup. Connect Google in Admin, select the company folder you want, verify the onboarding form, audit forms, and response sheet, then sync."
-        />
-      )}
-
-      <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red} status="red" onOpenAudit={onOpenAudit} expanded drafts={drafts} unsyncedAuditIds={unsyncedAuditIds} />
-      <TrafficLane
-        title="Amber"
-        subtitle={`Less than ${amberThresholdHours} hours remaining`}
-        audits={groupedAudits.amber}
-        status="amber"
-        onOpenAudit={onOpenAudit}
-        expanded
-        drafts={drafts}
-        unsyncedAuditIds={unsyncedAuditIds}
-      />
-      <TrafficLane
-        title="Green"
-        subtitle={`More than ${amberThresholdHours} hours remaining`}
-        audits={groupedAudits.green}
-        status="green"
-        onOpenAudit={onOpenAudit}
-        expanded
-        drafts={drafts}
-        unsyncedAuditIds={unsyncedAuditIds}
-      />
-
-      {currentUser.role !== "Auditor" && (
-        <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-          <SectionHeader
-            icon="user"
-            eyebrow="Access control"
-            title="Audit access matrix"
-            subtitle="Manage exactly which users can access each audit."
-          />
-          <div className="mt-4">
-            <AccessMatrixTable
-              auditAccessMatrix={auditAccessMatrix}
-              auditScheduleMatrix={auditScheduleMatrix}
-              userProfilePhotos={userProfilePhotos}
-              onToggleAuditAccess={onToggleAuditAccess}
-            />
-          </div>
-        </section>
-      )}
-    </div>
-  );
-}
-
-function ActionsScreen({
-  currentUser,
-  actions,
-  actionFilter,
-  actionSeverityFilter,
-  actionNcFilter,
-  availableNonConformanceIds,
-  availableAuditors,
-  onFilterChange,
-  onSeverityFilterChange,
-  onNcFilterChange,
-  onAdvanceAction,
-  onAssignAction,
-  onAddEvidence,
-}: {
-  currentUser: User;
-  actions: ActionItem[];
-  actionFilter: "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity";
-  actionSeverityFilter: RiskLevel | "All";
-  actionNcFilter: string;
-  availableNonConformanceIds: string[];
-  availableAuditors: string[];
-  onFilterChange: (value: "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity") => void;
-  onSeverityFilterChange: (value: RiskLevel | "All") => void;
-  onNcFilterChange: (value: string) => void;
-  onAdvanceAction: (actionId: string, nextStatus?: ActionStatus) => void;
-  onAssignAction: (actionId: string, assignee: string) => void;
-  onAddEvidence: (actionId: string, files: FileList) => void;
-}) {
-  const permissions = getRolePermissions(currentUser.role);
-  return (
-    <div className="space-y-4">
-      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
-            <AppIcon name="warningTriangle" className="h-5 w-5" />
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">{currentUser.role === "Auditor" ? "My actions" : "Corrective actions"}</p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight">{currentUser.role === "Auditor" ? "Assigned corrective actions" : "CAPA control centre"}</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-300">Track failed findings, assign ownership, upload evidence, and verify closure.</p>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <div className="grid gap-3 sm:grid-cols-3">
-          <select value={actionFilter} onChange={(event) => onFilterChange(event.target.value as "Open" | "Overdue" | "Awaiting Verification" | "Closed" | "Severity")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
-            <option value="Open">Open</option>
-            <option value="Overdue">Overdue</option>
-            <option value="Awaiting Verification">Awaiting Verification</option>
-            <option value="Closed">Closed</option>
-            <option value="Severity">All by severity</option>
-          </select>
-          <select value={actionSeverityFilter} onChange={(event) => onSeverityFilterChange(event.target.value as RiskLevel | "All")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
-            <option value="All">All severities</option>
-            <option value="Critical">Critical</option>
-            <option value="High">High</option>
-            <option value="Medium">Medium</option>
-            <option value="Low">Low</option>
-          </select>
-          <select value={actionNcFilter} onChange={(event) => onNcFilterChange(event.target.value)} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
-            <option value="All">All non-conformance refs</option>
-            {availableNonConformanceIds.map((reference) => (
-              <option key={reference} value={reference}>
-                {reference}
-              </option>
-            ))}
-          </select>
-        </div>
-      </section>
-
-      {actions.length === 0 ? (
-        <EmptyPanel title="No corrective actions in this view" text="Failed answers and flagged issues will create actions here automatically." />
-      ) : (
-        <div className="space-y-3">
-          {actions.map((action) => (
-            <section key={action.id} className="rounded-[1.6rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
-              {(() => {
-                const urgency = getActionUrgency(action);
-                const urgencyTone =
-                  urgency === "Escalated"
-                    ? "bg-rose-200 text-rose-900"
-                    : urgency === "Overdue"
-                      ? "bg-rose-100 text-rose-700"
-                      : urgency === "Stuck"
-                        ? "bg-amber-100 text-amber-800"
-                        : urgency === "Due soon"
-                          ? "bg-amber-50 text-amber-700"
-                          : "bg-slate-100 text-slate-700";
-                return (
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{action.status}</div>
-                    <div className={`rounded-full px-3 py-1 text-xs font-semibold ${urgencyTone}`}>{urgency}</div>
-                  </div>
-                );
-              })()}
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-900">{action.auditName}</p>
-                  <p className="mt-2 text-sm text-slate-600">{action.questionText}</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {action.nonConformanceId && <MetaPill icon="spark" label={action.nonConformanceId} />}
-                    <MetaPill icon="spark" label={action.severity} />
-                    <MetaPill icon="clipboard" label={action.riskCategory} />
-                    <MetaPill icon="user" label={action.assignedToName} />
-                    <MetaPill icon="clock" label={action.dueDate || action.dueLabel} />
-                    <MetaPill
-                      icon="camera"
-                      label={
-                        action.evidenceRequired
-                          ? action.evidenceCount === 0
-                            ? "Evidence required"
-                            : `${action.evidenceCount} evidence`
-                          : action.evidenceCount > 0
-                            ? `${action.evidenceCount} evidence`
-                            : "Evidence optional"
-                      }
-                    />
-                  </div>
-                  {action.status !== "Closed" && action.evidenceRequired && action.evidenceCount === 0 && (
-                    <p className="mt-2 text-xs font-semibold text-amber-700">Reason not closed: evidence missing.</p>
-                  )}
-                </div>
-              </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {permissions.canAssignActions && (
-                  <select value={action.assignedToName} onChange={(event) => onAssignAction(action.id, event.target.value)} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
-                    {[action.assignedToName, ...availableAuditors].filter((value, index, list) => value && list.indexOf(value) === index).map((name) => (
-                      <option key={name} value={name}>{name}</option>
-                    ))}
-                  </select>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  {action.status !== "Closed" && (
-                    <div className="w-full">
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Upload evidence</p>
-                      <label className={`inline-flex h-11 w-full cursor-pointer items-center justify-center rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                        Attach photo evidence
-                        <input
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          className="hidden"
-                          onChange={(event) => {
-                            if (event.target.files?.length) {
-                              onAddEvidence(action.id, event.target.files);
-                              event.target.value = "";
-                            }
-                          }}
-                        />
-                      </label>
-                      <p className="mt-1 text-[11px] text-slate-500">Add photo evidence before submitting for verification.</p>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        title="Fallback file chooser"
-                        className="mt-2 h-9 w-full rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-500"
-                        onChange={(event) => {
-                          if (event.target.files?.length) {
-                            onAddEvidence(action.id, event.target.files);
-                            event.target.value = "";
-                          }
-                        }}
-                      />
-                    </div>
-                  )}
-                  {action.status === "Open" && (
-                    <button onClick={() => onAdvanceAction(action.id, "In Progress")} className={`h-11 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                      Start action
-                    </button>
-                  )}
-                  {action.status === "Awaiting Verification" && permissions.canVerifyActions && (
-                    <button onClick={() => onAdvanceAction(action.id, "Closed")} className={`h-11 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                      Verify & close
-                    </button>
-                  )}
-                  {action.status === "In Progress" && (
-                    <button onClick={() => onAdvanceAction(action.id, "Awaiting Verification")} className={`h-11 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                      Submit for verification
-                    </button>
-                  )}
-                  {permissions.canVerifyActions && action.status === "Awaiting Verification" && <button onClick={() => onAdvanceAction(action.id, "Rejected")} className="h-11 rounded-2xl bg-rose-50 px-4 text-sm font-semibold text-rose-700">Reject</button>}
-                </div>
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SyncCentreScreen({
-  currentUser,
-  syncQueue,
-  offlineQueueCount,
-  onRetryItem,
-  onForceSyncItem,
-}: {
-  currentUser: User;
-  syncQueue: SyncQueueItem[];
-  offlineQueueCount: number;
-  onRetryItem: (localId: string) => void;
-  onForceSyncItem: (localId: string) => void;
-}) {
-  const permissions = getRolePermissions(currentUser.role);
-  return (
-    <div className="space-y-4">
-      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
-            <AppIcon name="sync" className="h-5 w-5" />
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Offline trust</p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight">Sync Centre</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-300">Every audit, action, evidence update, and schedule change is tracked until it safely syncs.</p>
-          </div>
-        </div>
-      </section>
-      <section className="grid grid-cols-2 gap-3">
-        <MiniMetric label="Queued offline submissions" value={String(offlineQueueCount)} />
-        <MiniMetric label="Tracked sync items" value={String(syncQueue.length)} />
-      </section>
-      {syncQueue.length === 0 ? (
-        <EmptyPanel title="No sync items yet" text="Offline work and admin changes will appear here with status, retries, and errors." />
-      ) : (
-        <div className="space-y-3">
-          {syncQueue.map((item) => (
-            <section key={item.id} className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">{item.itemType}</p>
-                  <p className="mt-1 text-xs text-slate-500">Local ID: {item.localId}</p>
-                  <p className="mt-1 text-xs text-slate-500">Created {item.createdAt} • Updated {item.updatedAt}</p>
-                  {item.lastError ? <p className="mt-2 text-xs font-semibold text-rose-600">{item.lastError}</p> : null}
-                </div>
-                <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{item.status}</div>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <div className="rounded-full bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">Retries {item.retryCount}</div>
-                {(item.status === "Failed" || item.status === "Conflict") && (
-                  <button onClick={() => onRetryItem(item.localId)} className={`rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                    Retry
-                  </button>
-                )}
-                {permissions.canRepairWorkspace && <button onClick={() => onForceSyncItem(item.localId)} className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">Force sync</button>}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AccessMatrixTable({
-  auditAccessMatrix,
-  auditScheduleMatrix,
-  userProfilePhotos,
-  onToggleAuditAccess,
-}: {
-  auditAccessMatrix: AuditAccessMatrixRow[];
-  auditScheduleMatrix: Record<string, AuditScheduleMatrixInfo>;
-  userProfilePhotos: Record<string, string>;
-  onToggleAuditAccess: (email: string, auditId: string, currentAccess: AuditAccessLevel) => void;
-}) {
-  const matrixAuditColumns = auditAccessMatrix[0]?.cells ?? [];
-  const visibleMatrixAuditColumns = matrixAuditColumns;
-  const filteredMatrixRows = auditAccessMatrix;
-  const findProfilePhoto = (matrixUser: AuditAccessMatrixRow) => {
-    const emailKey = matrixUser.email.split("@")[0]?.toLowerCase() || "";
-    const nameKey = matrixUser.name.toLowerCase();
-    const knownUser = users.find((item) => item.name.toLowerCase() === nameKey || item.username === emailKey);
-    return (
-      (knownUser ? userProfilePhotos[knownUser.username] : "") ||
-      userProfilePhotos[emailKey] ||
-      userProfilePhotos[nameKey] ||
-      ""
-    );
-  };
-
-  return (
-    <>
-      {filteredMatrixRows.length === 0 || visibleMatrixAuditColumns.length === 0 ? (
-        <div className="mt-4">
-          <EmptyPanel
-            title="No access matrix available yet"
-            text="Add live audits and users to this company workspace to generate the access matrix."
-          />
-        </div>
-      ) : (
-        <div className="mt-4 rounded-[1.25rem] border border-slate-200 bg-white">
-            <table className="w-full table-fixed border-collapse text-left">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="w-[11rem] bg-slate-50 px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    User
-                  </th>
-                  {visibleMatrixAuditColumns.map((audit) => (
-                    <th
-                      key={audit.auditId}
-                      className="px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500"
-                    >
-                      <span className="block truncate leading-4">{audit.auditName}</span>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredMatrixRows.map((user) => (
-                  <tr key={user.email} className="border-b border-slate-100 align-top last:border-b-0">
-                    <td className="bg-white px-2 py-2">
-                      <div className="flex items-center gap-2">
-                        {findProfilePhoto(user) ? (
-                          <img
-                            src={findProfilePhoto(user)}
-                            alt={user.name}
-                            className="h-7 w-7 shrink-0 rounded-full border border-slate-200 object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[10px] font-semibold uppercase tracking-[0.08em] text-white">
-                            {getWorkspaceInitials(user.name)}
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold leading-4 text-slate-900">{user.name}</p>
-                          <p className="mt-1 text-[10px] font-semibold text-slate-400">
-                            {user.accessibleCount} audit{user.accessibleCount === 1 ? "" : "s"} accessible
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    {user.cells.map((cell) => (
-                      <td key={`${user.email}-${cell.auditId}`} className="px-1.5 py-2">
-                        <button
-                          type="button"
-                          onClick={() => onToggleAuditAccess(user.email, cell.auditId, cell.access)}
-                          className={[
-                            "w-full rounded-lg border px-2 py-1.5 text-left",
-                            "cursor-pointer",
-                            cell.access === "Full access"
-                              ? "border-slate-200 bg-slate-950 text-white"
-                              : cell.access === "Oversight"
-                                ? "border-sky-200 bg-sky-50"
-                                : cell.access === "Complete"
-                                  ? "border-emerald-200 bg-emerald-50"
-                                  : "border-slate-200 bg-slate-50",
-                          ].join(" ")}
-                        >
-                          <p
-                            className={[
-                              "text-[10px] font-semibold uppercase tracking-[0.12em]",
-                              cell.access === "Full access"
-                                ? "text-slate-200"
-                                : cell.access === "Oversight"
-                                  ? "text-sky-700"
-                                  : cell.access === "Complete"
-                                    ? "text-emerald-700"
-                                    : "text-slate-500",
-                            ].join(" ")}
-                          >
-                            {cell.access}
-                          </p>
-                          <p className="mt-0.5 text-[9px] font-semibold text-slate-400">
-                            Tap to change
-                          </p>
-                        </button>
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="border-t border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Schedule mapping</p>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {visibleMatrixAuditColumns.map((audit) => {
-                  const schedule = auditScheduleMatrix[audit.auditId];
-                  return (
-                    <div key={`schedule-map-${audit.auditId}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                      <p className="text-sm font-semibold text-slate-900">{audit.auditName}</p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {schedule
-                          ? `${schedule.frequency} • ${schedule.days.join(", ")} • ${schedule.liveTime} • ${schedule.completionHours}h`
-                          : "Not scheduled"}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-        </div>
-      )}
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <QuickActionTile title="Users" value={String(filteredMatrixRows.length)} caption="Included in matrix" />
-        <QuickActionTile title="Audits" value={String(visibleMatrixAuditColumns.length)} caption="Available on this workspace" />
-        <QuickActionTile
-          title="Assigned access"
-          value={String(filteredMatrixRows.reduce((sum, row) => sum + row.accessibleCount, 0))}
-          caption="User-to-audit links"
-        />
-      </div>
-    </>
-  );
-}
-
-function ReportsScreen({
-  workspaceName,
-  compliance,
-  openActions,
-  overdueActions,
-  overdueAudits,
-  actions,
-  managedSchedules,
-  syncQueue,
-  riskSummary,
-  recurringFailedQuestions,
-  auditCompletionRate,
-  evidenceCount,
-  completedToday,
-  offlineQueueCount,
-  reportUsers,
-  reportRecipients,
-  reportInbox,
-  history,
-  templates,
-  selectedReportTemplate,
-  reportTitleInput,
-  selectedReportSections,
-  onToggleReportRecipient,
-  onSelectReportTemplate,
-  onReportTitleChange,
-  onToggleReportSection,
-  onExportAuditPack,
-  onExportAuditPackPdf,
-}: {
-  workspaceName: string;
-  compliance: number;
-  openActions: ActionItem[];
-  overdueActions: ActionItem[];
-  overdueAudits: Audit[];
-  actions: ActionItem[];
-  managedSchedules: ManagedSchedule[];
-  syncQueue: SyncQueueItem[];
-  riskSummary: {
-    totalRiskScore: number;
-    highestRiskLevel: RiskLevel;
-    criticalFindings: number;
-    highFindings: number;
-  };
-  recurringFailedQuestions: [string, number][];
-  auditCompletionRate: number;
-  evidenceCount: number;
-  completedToday: number;
-  offlineQueueCount: number;
-  reportUsers: CompanyReportUser[];
-  reportRecipients: string[];
-  reportInbox: ReportItem[];
-  history: HistoryEntry[];
-  templates: AuditTemplate[];
-  selectedReportTemplate: ReportTemplateType;
-  reportTitleInput: string;
-  selectedReportSections: ReportSectionKey[];
-  onToggleReportRecipient: (email: string) => void;
-  onSelectReportTemplate: (value: ReportTemplateType) => void;
-  onReportTitleChange: (value: string) => void;
-  onToggleReportSection: (section: ReportSectionKey) => void;
-  onExportAuditPack: () => void;
-  onExportAuditPackPdf: () => void;
-}) {
-  const [showReportCreator, setShowReportCreator] = useState(false);
-  const [showAuditPackOptions, setShowAuditPackOptions] = useState(false);
-  const [selectedReportGraphType, setSelectedReportGraphType] = useState<"column" | "line" | "area" | "bar">("column");
-  const reportPreviewSeries = [
-    { label: "Completion", value: compliance, tone: "green" as const },
-    { label: "Open actions", value: openActions.length, tone: "amber" as const },
-    { label: "Overdue audits", value: overdueAudits.length, tone: "red" as const },
-  ];
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
-            <AppIcon name="chart" className="h-5 w-5" />
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Report creator</p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight">Create audit packs and evidence reports</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-300">
-              Export handover packs, PDF-style reports, and evidence summaries for {workspaceName}.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="grid grid-cols-2 gap-3">
-        <MiniMetric label="Compliance" value={`${compliance}%`} />
-        <MiniMetric label="Open actions" value={String(openActions.length)} icon="warningTriangle" />
-        <MiniMetric label="Overdue audits" value={String(overdueAudits.length)} />
-        <MiniMetric label="Evidence items" value={String(evidenceCount)} />
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="chart"
-          eyebrow="Visual summary"
-          title="Report preview"
-          subtitle={`A quick visual read of ${workspaceName} before you export.`}
-        />
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-[1.4rem] border border-slate-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-semibold text-slate-900">Audit status split</p>
-              <div className="relative w-[8.5rem]">
-                <select
-                  value={selectedReportGraphType}
-                  onChange={(event) => setSelectedReportGraphType(event.target.value as "column" | "line" | "area" | "bar")}
-                  className="h-8 w-full appearance-none rounded-lg border border-slate-200 bg-slate-50 px-2.5 pr-7 text-xs font-medium text-slate-700 outline-none transition focus:border-slate-400 focus:bg-white"
-                >
-                  <option value="column">Column</option>
-                  <option value="line">Line</option>
-                  <option value="area">Area</option>
-                  <option value="bar">Bar</option>
-                </select>
-                <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-slate-400">▾</span>
-              </div>
-            </div>
-            <LiveGraphChart data={reportPreviewSeries} chartType={selectedReportGraphType} />
-            <div className="space-y-3">
-              <TrendBar label="Completion rate" value={compliance} total={100} tone="green" />
-              <TrendBar label="Open actions" value={openActions.length} total={Math.max(1, openActions.length + overdueActions.length + 2)} tone="amber" />
-              <TrendBar label="Overdue audits" value={overdueAudits.length} total={Math.max(1, overdueAudits.length + 3)} tone="red" />
-            </div>
-          </div>
-          <div className="rounded-[1.4rem] border border-slate-200/80 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-semibold text-slate-900">Pack emphasis</p>
-              <p className="text-xs text-slate-500">{selectedReportTemplate}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <QuickActionTile title="History" value={String(history.length)} caption="Records available" />
-              <QuickActionTile title="Templates" value={String(templates.filter((template) => template.active).length)} caption="Included" />
-              <QuickActionTile title="Proof" value={String(evidenceCount)} caption="Evidence items" />
-              <QuickActionTile title="Today" value={String(completedToday)} caption="Completed audits" />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <SectionHeader
-            icon="chart"
-            eyebrow="Export centre"
-            title="Report / Audit Pack Creator"
-            subtitle="Generate the output you need without cluttering the live dashboard."
-          />
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-            Queue {offlineQueueCount}
-          </div>
-        </div>
-        {!showReportCreator ? (
-          <button
-            onClick={() => setShowReportCreator(true)}
-            className={`h-12 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
-          >
-            Create a report
-          </button>
-        ) : (
+        {!godCompanySetupOnlyShell && (
           <>
-            <div className="mb-4 grid gap-2 sm:grid-cols-2">
-              <button
-                onClick={() => setShowAuditPackOptions((current) => !current)}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 transition-colors duration-200 ease-in-out hover:bg-slate-900/25 hover:text-white"
+            {mobileMoreOpen ? (
+              <div
+                className="absolute inset-0 z-40 flex items-end justify-center bg-slate-950/50 p-3 md:hidden"
+                onClick={() => setMobileMoreOpen(false)}
+                role="presentation"
               >
-                {showAuditPackOptions ? "Hide audit pack options" : "Create audit pack"}
-              </button>
-              <button
-                onClick={() => onSelectReportTemplate("Evidence pack")}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 transition-colors duration-200 ease-in-out hover:bg-slate-900/25 hover:text-white"
-              >
-                Evidence pack
-              </button>
-            </div>
-            <div className="mb-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-semibold text-slate-900">Report type</p>
-              <p className="mt-1 text-sm text-slate-500">Pick the report outcome you want to create for this workspace.</p>
-              <div className="mt-3 grid gap-2">
-                {reportTemplates.map((template) => {
-                  const selected = template.type === selectedReportTemplate;
-                  return (
-                    <button
-                      key={template.type}
-                      onClick={() => onSelectReportTemplate(template.type)}
-                      className={[
-                        "rounded-2xl border px-4 py-3 text-left transition-colors duration-200 ease-in-out",
-                        selected ? `border-slate-900 bg-slate-900 text-white shadow-[0_14px_28px_rgba(15,23,42,0.14)] ${slatePrimaryCtaInteract}` : "border-slate-200 bg-white hover:bg-slate-900/25 hover:text-white",
-                      ].join(" ")}
-                    >
-                      <p className="text-sm font-semibold">{template.title}</p>
-                      <p className={["mt-1 text-xs leading-5", selected ? "text-slate-300" : "text-slate-500"].join(" ")}>{template.subtitle}</p>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="mt-4">
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Report title</label>
-                <input
-                  value={reportTitleInput}
-                  onChange={(event) => onReportTitleChange(event.target.value)}
-                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-                  placeholder="Enter report title"
-                />
-              </div>
-            </div>
-            <div className="mb-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-semibold text-slate-900">Who can see this report?</p>
-              <p className="mt-1 text-sm text-slate-500">Select the company users who should see the report in their app.</p>
-              <div className="mt-3 space-y-2">
-                {reportUsers.map((user) => {
-                  const selected = reportRecipients.includes(user.email);
-                  return (
-                    <button
-                      key={user.email}
-                      onClick={() => onToggleReportRecipient(user.email)}
-                      className={[
-                        "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
-                        selected ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white",
-                      ].join(" ")}
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-900">{user.name}</p>
-                        <p className="truncate text-xs text-slate-500">
-                          {user.role} • {user.email}
-                        </p>
-                      </div>
-                      <div
-                        className={[
-                          "rounded-full px-3 py-1 text-xs font-semibold",
-                          selected ? "bg-emerald-500/12 text-emerald-700" : "bg-slate-100 text-slate-500",
-                        ].join(" ")}
+                <div
+                  className="mb-14 w-full max-w-md rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl"
+                  onClick={(event) => event.stopPropagation()}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="More navigation"
+                >
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">More</p>
+                  <div className="grid max-h-[46vh] gap-2 overflow-y-auto">
+                    {mobileMoreDestinations.map((item) => (
+                      <button
+                        key={`mobile-more-${item.id}`}
+                        type="button"
+                        onClick={() => {
+                          setScreen(item.id);
+                          setMobileMoreOpen(false);
+                        }}
+                        className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5 text-left text-sm font-semibold text-slate-800"
                       >
-                        {selected ? "Can view" : "Select"}
-                      </div>
+                        <AppIcon name={item.icon} className="h-4 w-4 shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleLogout();
+                        setMobileMoreOpen(false);
+                      }}
+                      className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2.5 text-left text-sm font-semibold text-rose-900"
+                    >
+                      Log out
                     </button>
-                  );
-                })}
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="mb-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-semibold text-slate-900">Choose what goes into the report</p>
-              <p className="mt-1 text-sm text-slate-500">Select the sections to include in this export.</p>
-              <div className="mt-3 space-y-2">
-                {reportSectionOptions.map((section) => {
-                  const selected = selectedReportSections.includes(section.key);
+            ) : null}
+            <nav
+              className="absolute bottom-0 left-0 right-0 z-30 flex border-t border-slate-200/90 bg-white/95 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur md:hidden"
+              aria-label="Primary navigation"
+            >
+              {mobileBottomNavEntries.map((entry) => {
+                if (entry.id === "__more__") {
+                  const moreActive =
+                    mobileMoreOpen || mobileMoreDestinations.some((item) => item.id === screen);
                   return (
                     <button
-                      key={section.key}
-                      onClick={() => onToggleReportSection(section.key)}
+                      key="mobile-nav-more"
+                      type="button"
+                      onClick={() => setMobileMoreOpen((current) => !current)}
                       className={[
-                        "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
-                        selected ? "border-slate-900 bg-white" : "border-slate-200 bg-white",
+                        "flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-semibold",
+                        moreActive ? "text-[var(--bert-signal-orange)]" : "text-slate-500",
                       ].join(" ")}
                     >
-                      <div className="flex min-w-0 flex-1 items-start gap-3">
-                        {section.icon ? (
-                          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
-                            <AppIcon name={section.icon} className="h-[18px] w-[18px]" />
-                          </div>
-                        ) : null}
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-slate-900">{section.title}</p>
-                          <p className="mt-1 text-xs text-slate-500">{section.description}</p>
-                        </div>
-                      </div>
-                      <div
-                        className={[
-                          "rounded-full px-3 py-1 text-xs font-semibold",
-                          selected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500",
-                        ].join(" ")}
-                      >
-                        {selected ? "Included" : "Exclude"}
-                      </div>
+                      <AppIcon name="grid" className="h-5 w-5" />
+                      More
                     </button>
                   );
-                })}
-              </div>
-            </div>
-            <div className="grid gap-3">
-              <button
-                onClick={onExportAuditPackPdf}
-                className={`h-14 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
-              >
-                Export PDF report
-              </button>
-              {showAuditPackOptions && (
-                <>
+                }
+                const selected = screen === entry.id || (screen === "complete" && entry.id === "audits");
+                return (
                   <button
-                    onClick={onExportAuditPack}
-                    className="h-14 rounded-2xl bg-slate-100 px-4 text-sm font-semibold text-slate-800 transition-colors duration-200 ease-in-out hover:bg-slate-900/25 hover:text-white"
+                    key={`mobile-nav-${entry.id}`}
+                    type="button"
+                    onClick={() => {
+                      setMobileMoreOpen(false);
+                      setScreen(entry.id as Screen);
+                    }}
+                    className={[
+                      "flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-semibold",
+                      selected ? "text-[var(--bert-signal-orange)]" : "text-slate-500",
+                    ].join(" ")}
                   >
-                    Export text audit pack
+                    <AppIcon name={entry.icon} className="h-5 w-5" />
+                    {entry.label}
                   </button>
-                </>
-              )}
-              <button
-                onClick={() => {
-                  setShowReportCreator(false);
-                  setShowAuditPackOptions(false);
-                }}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors duration-200 ease-in-out hover:bg-slate-900/25 hover:text-white"
-              >
-                Close report options
-              </button>
-            </div>
+                );
+              })}
+            </nav>
           </>
         )}
-      </section>
 
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <SectionHeader
-          icon="dashboard"
-          eyebrow="Shared visibility"
-          title="Report inbox"
-          subtitle="Generated reports appear here for selected company users."
-        />
-        <div className="mt-4 space-y-3">
-          {reportInbox.length === 0 ? (
-            <EmptyPanel title="No reports generated yet" text="Select recipients and export a report to create the first report inbox item." />
-          ) : (
-            reportInbox.map((report) => (
-              <div key={report.id} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-900">{report.title}</p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {report.type} • {report.template} • created by {report.createdBy} • {report.createdAt}
-                    </p>
-                    <p className="mt-2 text-xs text-slate-400">Visible to {report.visibleTo.join(", ")}</p>
-                  </div>
-                  <div className="rounded-full bg-sky-500/12 px-3 py-1 text-xs font-semibold text-sky-700">
-                    In app
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
         </div>
-      </section>
-
-      {showReportCreator && (
-        <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-          <SectionHeader
-            icon="clipboard"
-            eyebrow="Included sections"
-            title="Report contents"
-            subtitle="Only the sections marked below will be included in the export."
-          />
-          <div className="mt-4 space-y-3">
-            {reportSectionOptions
-              .filter((section) => selectedReportSections.includes(section.key))
-              .map((section, index) => (
-                <FlowItem
-                  key={section.key}
-                  number={String(index + 1).padStart(2, "0")}
-                  title={section.title}
-                  text={section.description}
-                  icon={section.icon}
-                />
-              ))}
-          </div>
-        </section>
-      )}
-    </div>
-  );
-}
-
-function SchedulesScreen({
-  selectedFolder,
-  schedules,
-  filter,
-  availableAudits,
-  availableAuditors,
-  editorOpen,
-  editingSchedule,
-  scheduleName,
-  selectedAuditIds,
-  scheduleAudits,
-  startDate,
-  endDate,
-  continuous,
-  selectedAuditors,
-  validationAttempted,
-  onFilterChange,
-  onOpenNew,
-  onOpenSchedule,
-  onToggleAudit,
-  onToggleAuditDay,
-  onAuditFieldChange,
-  onScheduleNameChange,
-  onStartDateChange,
-  onEndDateChange,
-  onContinuousChange,
-  onToggleAuditor,
-  onSave,
-  onCancel,
-  onReactivate,
-}: {
-  selectedFolder: CompanyFolder | null;
-  schedules: ManagedSchedule[];
-  filter: ScheduleListFilter;
-  availableAudits: { id: string; name: string }[];
-  availableAuditors: string[];
-  editorOpen: boolean;
-  editingSchedule: ManagedSchedule | null;
-  scheduleName: string;
-  selectedAuditIds: string[];
-  scheduleAudits: ManagedScheduleAudit[];
-  startDate: string;
-  endDate: string;
-  continuous: boolean;
-  selectedAuditors: string[];
-  validationAttempted: boolean;
-  onFilterChange: (value: ScheduleListFilter) => void;
-  onOpenNew: () => void;
-  onOpenSchedule: (scheduleId: string) => void;
-  onToggleAudit: (auditId: string, auditName: string) => void;
-  onToggleAuditDay: (auditId: string, day: ScheduleDay) => void;
-  onAuditFieldChange: (auditId: string, field: "frequency" | "liveTime" | "completionHours", value: string) => void;
-  onScheduleNameChange: (value: string) => void;
-  onStartDateChange: (value: string) => void;
-  onEndDateChange: (value: string) => void;
-  onContinuousChange: (value: boolean) => void;
-  onToggleAuditor: (name: string) => void;
-  onSave: () => void;
-  onCancel: () => void;
-  onReactivate: (scheduleId: string) => void;
-}) {
-  const nameError = validationAttempted && !scheduleName.trim();
-  const auditsError = validationAttempted && scheduleAudits.length === 0;
-  const startDateError = validationAttempted && !startDate;
-  const auditorsError = validationAttempted && selectedAuditors.length === 0;
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
-              <AppIcon name="clock" className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Schedule control</p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight">Live schedules</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-300">
-                Create, edit, archive, and reactivate company audit schedules for {selectedFolder?.name || "the live workspace"}.
-              </p>
-            </div>
-          </div>
-          <button onClick={onOpenNew} className={`h-12 rounded-2xl bg-white px-5 text-sm font-semibold text-slate-900 ${slatePrimaryCtaInteract}`}>
-            Add new schedule
-          </button>
-        </div>
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <div className="flex items-end justify-between gap-3">
-          <SectionHeader
-            icon="clock"
-            eyebrow="Schedule list"
-            title={filter}
-            subtitle="Open a schedule to edit its timings, audits, auditors, and revision history."
-          />
-          <div className="w-full max-w-[18rem]">
-            <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Schedule view</label>
-            <select
-              value={filter}
-              onChange={(event) => onFilterChange(event.target.value as ScheduleListFilter)}
-              className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-            >
-              <option value="Live">Live</option>
-              <option value="Archived">Archived</option>
-              <option value="All schedules">All schedules</option>
-            </select>
-          </div>
-        </div>
-        <div className="mt-4 space-y-3">
-          {schedules.length === 0 ? (
-            <EmptyPanel title="No schedules in this view" text="Add a new schedule or switch the filter to see archived revisions." />
-          ) : (
-            schedules.map((schedule) => (
-              <div key={schedule.id} className="rounded-[1.4rem] border border-slate-200/70 bg-white px-4 py-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-900">{schedule.scheduleName}</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <MetaPill icon="spark" label={`${schedule.lifecycle} rev ${schedule.versionLabel}`} />
-                      <MetaPill icon="clipboard" label={`${schedule.audits.length} audits`} />
-                      <MetaPill icon="user" label={`${schedule.auditors.length} auditors`} />
-                    </div>
-                    <p className="mt-2 text-xs text-slate-500">
-                      Start {schedule.startDate} {schedule.endDate ? `• End ${schedule.endDate}` : "• No end date"}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => onOpenSchedule(schedule.id)} className={`rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                      Edit
-                    </button>
-                    {schedule.lifecycle === "Archived" && (
-                      <button onClick={() => onReactivate(schedule.id)} className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
-                        Reactivate
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </section>
-
-      {editorOpen && (
-        <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-          <SectionHeader
-            icon="check"
-            eyebrow="Schedule builder"
-            title={editingSchedule ? "Edit schedule" : "Create schedule"}
-            subtitle="Choose audits, set timings, add auditors, and save the live or archived revision."
-          />
-          <div className="mt-4 space-y-4">
-            <div>
-              <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Schedule name or ID</label>
-              <input
-                value={scheduleName}
-                onChange={(event) => onScheduleNameChange(event.target.value)}
-                className={[
-                  "h-12 w-full rounded-2xl border bg-white px-4 text-sm text-slate-900 outline-none transition",
-                  nameError ? "border-rose-300" : "border-slate-200 focus:border-slate-400",
-                ].join(" ")}
-                placeholder="Enter the schedule name"
-              />
-            </div>
-
-            <div className={["rounded-[1.5rem] border p-4", auditsError ? "border-rose-300 bg-rose-50/50" : "border-slate-200 bg-slate-50"].join(" ")}>
-              <p className="text-sm font-semibold text-slate-900">Select audits for this schedule</p>
-              <div className="mt-3 space-y-2">
-                {availableAudits.map((audit) => {
-                  const selected = selectedAuditIds.includes(audit.id);
-                  return (
-                    <label
-                      key={audit.id}
-                      className={[
-                        "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
-                        selected ? "border-slate-900 bg-white" : "border-slate-200 bg-white",
-                      ].join(" ")}
-                    >
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          onChange={() => onToggleAudit(audit.id, audit.name)}
-                          className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
-                        />
-                        <span className="text-sm font-semibold text-slate-900">{audit.name}</span>
-                      </div>
-                      <span className={["rounded-full px-3 py-1 text-xs font-semibold", selected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"].join(" ")}>
-                        {selected ? "Added" : "Add"}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-
-            {scheduleAudits.map((audit) => {
-              const auditError = validationAttempted && audit.days.length === 0;
-              return (
-                <div key={audit.id} className="rounded-[1.5rem] border border-slate-200 bg-white p-4">
-                  <p className="text-sm font-semibold text-slate-900">{audit.auditName}</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {scheduleDayOptions.map((day) => {
-                      const selected = audit.days.includes(day);
-                      return (
-                        <label
-                          key={day}
-                          className={[
-                            "inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold",
-                            selected ? `bg-slate-900 text-white ${slatePrimaryCtaInteract}` : "bg-slate-100 text-slate-600 transition-colors duration-200 hover:bg-slate-200",
-                          ].join(" ")}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={() => onToggleAuditDay(audit.auditId, day)}
-                            className="h-3.5 w-3.5 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
-                          />
-                          {day}
-                        </label>
-                      );
-                    })}
-                  </div>
-                  {auditError && <p className="mt-2 text-xs font-semibold text-rose-600">Select at least one day.</p>}
-                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                    <select
-                      value={audit.frequency}
-                      onChange={(event) => onAuditFieldChange(audit.auditId, "frequency", event.target.value)}
-                      className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-900 outline-none"
-                    >
-                      {scheduleFrequencyOptions.map((frequency) => (
-                        <option key={frequency} value={frequency}>{frequency}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={audit.liveTime}
-                      onChange={(event) => onAuditFieldChange(audit.auditId, "liveTime", event.target.value)}
-                      className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-900 outline-none"
-                    >
-                      {scheduleTimeOptions.map((time) => (
-                        <option key={time} value={time}>{time}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={String(audit.completionHours)}
-                      onChange={(event) => onAuditFieldChange(audit.auditId, "completionHours", event.target.value)}
-                      className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-900 outline-none"
-                    >
-                      {scheduleDurationOptions.map((hours) => (
-                        <option key={hours} value={hours}>{hours} hours to complete</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              );
-            })}
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Start date</label>
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={(event) => onStartDateChange(event.target.value)}
-                  className={[
-                    "h-12 w-full rounded-2xl border bg-white px-4 text-sm text-slate-900 outline-none transition",
-                    startDateError ? "border-rose-300" : "border-slate-200 focus:border-slate-400",
-                  ].join(" ")}
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">End date</label>
-                <label className="mb-2 flex items-center gap-2 text-sm text-slate-600">
-                  <input
-                    type="checkbox"
-                    checked={continuous}
-                    onChange={(event) => {
-                      onContinuousChange(event.target.checked);
-                      if (event.target.checked) {
-                        onEndDateChange("");
-                      }
-                    }}
-                    className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
-                  />
-                  Continuous until an end date is given
-                </label>
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={(event) => {
-                    onEndDateChange(event.target.value);
-                    if (event.target.value) {
-                      onContinuousChange(false);
-                    }
-                  }}
-                  disabled={continuous}
-                  className={[
-                    "h-12 w-full rounded-2xl border px-4 text-sm outline-none transition",
-                    continuous
-                      ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                      : "border-slate-200 bg-white text-slate-900 focus:border-slate-400",
-                  ].join(" ")}
-                />
-              </div>
-            </div>
-
-            <div className={["rounded-[1.5rem] border p-4", auditorsError ? "border-rose-300 bg-rose-50/50" : "border-slate-200 bg-slate-50"].join(" ")}>
-              <p className="text-sm font-semibold text-slate-900">Select auditors for this schedule</p>
-              <div className="mt-3 space-y-2">
-                {availableAuditors.map((auditor) => {
-                  const selected = selectedAuditors.includes(auditor);
-                  return (
-                    <label
-                      key={auditor}
-                      className={[
-                        "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
-                        selected ? "border-slate-900 bg-white" : "border-slate-200 bg-white",
-                      ].join(" ")}
-                    >
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          onChange={() => onToggleAuditor(auditor)}
-                          className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
-                        />
-                        <span className="text-sm font-semibold text-slate-900">{auditor}</span>
-                      </div>
-                      <span className={["rounded-full px-3 py-1 text-xs font-semibold", selected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"].join(" ")}>
-                        {selected ? "Added" : "Add"}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-3">
-              <button onClick={onSave} className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                Save schedule
-              </button>
-              <button onClick={onCancel} className="h-12 rounded-2xl bg-slate-100 px-5 text-sm font-semibold text-slate-700">
-                Cancel
-              </button>
-            </div>
-          </div>
-        </section>
-      )}
-    </div>
-  );
-}
-
-function AccountSettingsScreen({
-  currentUser,
-  accountNameInput,
-  accountPhotoUrl,
-  themeMode,
-  onAccountNameChange,
-  onAccountPhotoChange,
-  onThemeModeChange,
-  onSave,
-}: {
-  currentUser: User;
-  accountNameInput: string;
-  accountPhotoUrl: string;
-  themeMode: ThemeMode;
-  onAccountNameChange: (value: string) => void;
-  onAccountPhotoChange: (file: File) => void;
-  onThemeModeChange: (value: ThemeMode) => void;
-  onSave: () => void;
-}) {
-  const godMode = currentUser.role === "Master";
-
-  return (
-    <div className="space-y-4">
-      <section className={["rounded-[1.75rem] px-5 py-3 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]", themeMode === "dark" ? "bg-slate-900" : "bg-slate-950"].join(" ")}>
-        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Account settings</p>
-        <h2 className="mt-1 text-xl font-semibold tracking-tight">{godMode ? "Device settings" : "Manage your profile"}</h2>
-        <p className="mt-1 text-sm leading-5 text-slate-300">
-          {godMode
-            ? "Control the appearance and device-level settings used for platform setup."
-            : "Update your display name, profile photo, and appearance for this device."}
-        </p>
-      </section>
-
-      {!godMode && (
-        <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center gap-4">
-            <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-3xl bg-slate-100">
-              {accountPhotoUrl ? (
-                <img src={accountPhotoUrl} alt={accountNameInput || currentUser.name} className="h-full w-full object-cover" />
-              ) : (
-                <span className="text-2xl font-semibold text-slate-500">
-                  {(accountNameInput || currentUser.name).slice(0, 1)}
-                </span>
-              )}
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-slate-900">{accountNameInput || currentUser.name}</p>
-              <p className="text-xs text-slate-500">{getRoleDisplayName(currentUser.role)}</p>
-              <label className={`mt-3 inline-flex h-10 cursor-pointer items-center rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white ${slatePrimaryCtaInteract}`}>
-                Upload photo
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) {
-                      onAccountPhotoChange(file);
-                      event.target.value = "";
-                    }
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-        </section>
       )}
 
-      <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
-        <p className="text-sm font-semibold text-slate-900">Appearance</p>
-        <p className="mt-1 text-sm text-slate-500">Choose how QMS Precast looks on this tablet.</p>
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          {(["light", "dark"] as ThemeMode[]).map((mode) => {
-            const selected = themeMode === mode;
-            return (
-              <button
-                key={mode}
-                onClick={() => onThemeModeChange(mode)}
-                className={[
-                  "rounded-[1.5rem] border px-4 py-4 text-left transition",
-                  selected
-                    ? `border-slate-900 bg-slate-900 text-white shadow-[0_16px_28px_rgba(15,23,42,0.18)] ${slatePrimaryCtaInteract}`
-                    : "border-slate-200 bg-slate-50 text-slate-700",
-                ].join(" ")}
-              >
-                <p className="text-sm font-semibold">{mode === "light" ? "Light mode" : "Dark mode"}</p>
-                <p className={["mt-1 text-xs leading-5", selected ? "text-slate-300" : "text-slate-500"].join(" ")}>
-                  {mode === "light" ? "Bright interface for daylight and clean demos." : "Lower-glare interface for darker settings and a sharper look."}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {!godMode && (
-        <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
-          <label className="mb-2 block text-sm font-medium text-slate-700">Display name</label>
-          <input
-            value={accountNameInput}
-            onChange={(event) => onAccountNameChange(event.target.value)}
-            className="h-14 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-base text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-            placeholder="Enter your name"
-          />
-          <button
-            onClick={onSave}
-            className={`mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
-          >
-            Save account settings
-          </button>
-        </section>
-      )}
-    </div>
-  );
-}
-
-function EvidencePickerButtons({
-  onFiles,
-  compact = false,
-}: {
-  onFiles: (files: FileList) => void;
-  compact?: boolean;
-}) {
-  const inputClass = compact
-    ? "h-10 max-w-[14rem] rounded-xl border border-slate-300 bg-white px-2 text-xs text-slate-700"
-    : "h-11 max-w-[18rem] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700";
-
-  return (
-    <div className="flex flex-wrap gap-2">
-      <input
-        type="file"
-        accept="image/*"
-        className={inputClass}
-        onChange={(event) => {
-          if (event.target.files?.length) onFiles(event.target.files);
-          event.target.value = "";
-        }}
-      />
-    </div>
-  );
-}
-
-function AuditModeScreen({
-  audit,
-  responses,
-  notes,
-  evidence,
-  evidenceDebugLabel,
-  questionIndex,
-  offlineMode,
-  pendingSyncCount,
-  failedSyncCount,
-  onAnswerSelect,
-  onJumpToQuestion,
-  onNoteChange,
-  onAddEvidence,
-  onComplete,
-  onSaveAndExit,
-}: {
-  audit: Audit;
-  responses: Record<string, Answer>;
-  notes: Record<string, string>;
-  evidence: Record<string, EvidenceItem[]>;
-  evidenceDebugLabel: string;
-  questionIndex: number;
-  offlineMode: boolean;
-  pendingSyncCount: number;
-  failedSyncCount: number;
-  onAnswerSelect: (question: AuditQuestion, answer: Answer) => void;
-  onJumpToQuestion: (index: number) => void;
-  onNoteChange: (questionId: string, value: string) => void;
-  onAddEvidence: (questionId: string, files: FileList) => void;
-  onComplete: () => void;
-  onSaveAndExit: () => void;
-}) {
-  const noteInputRef = useRef<HTMLTextAreaElement | null>(null);
-  if (audit.questions.length === 0) {
-    return (
-      <div className="space-y-4">
-        <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Audit mode</p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight">{audit.name}</h2>
-          <p className="mt-1 text-sm text-slate-300">{getDueWarning(audit.dueHours)}</p>
-        </section>
-        <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-base font-semibold text-slate-900">No questions are available for this audit.</p>
-          <p className="mt-1 text-sm text-slate-500">Save and exit to return to your dashboard.</p>
-          <button type="button" onClick={onSaveAndExit} className="mt-4 h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700">
-            Save &amp; exit
-          </button>
-        </section>
-      </div>
-    );
-  }
-  const safeIndex = Math.max(0, Math.min(questionIndex, audit.questions.length - 1));
-  const currentQuestion = audit.questions[safeIndex];
-  const answeredCount = audit.questions.filter((question) => Boolean(responses[question.id])).length;
-  const syncBadgeClass =
-    failedSyncCount > 0 ? "bg-rose-100 text-rose-700" : pendingSyncCount > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
-  const syncLabel = failedSyncCount > 0 ? "Sync failed" : pendingSyncCount > 0 ? `${pendingSyncCount} pending sync` : "Synced";
-  const options: Answer[] = currentQuestion.fieldType === "Traffic light" ? ["pass", "nc", "fail"] : ["pass", "fail", "nc"];
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Audit mode</p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight">{audit.name}</h2>
-            <p className="mt-1 text-sm text-slate-300">{getDueWarning(audit.dueHours)}</p>
-          </div>
-          <StatusBadge status={getAuditTrafficStatus(audit.dueHours)} dark />
-        </div>
-        <div className="mt-4 rounded-2xl bg-white/10 px-4 py-3">
-          <p className="text-sm font-semibold">Question {safeIndex + 1} of {audit.questions.length}</p>
-          <div className="mt-2 h-2 rounded-full bg-white/15">
-            <div className="h-2 rounded-full bg-white transition-all" style={{ width: `${(answeredCount / audit.questions.length) * 100}%` }} />
-          </div>
-          <p className="mt-2 text-xs text-slate-300">{answeredCount} answered</p>
-        </div>
-      </section>
-
-      <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{currentQuestion.riskLevel || "Medium"} risk</p>
-        <p className="mt-2 text-xl font-semibold text-slate-900">{currentQuestion.text}</p>
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {options.map((option) => (
-            <button
-              key={option}
-              type="button"
-              onClick={() => onAnswerSelect(currentQuestion, option)}
-              className={[
-                "h-16 rounded-2xl border text-lg font-semibold",
-                responses[currentQuestion.id] === option ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-slate-50 text-slate-900",
-              ].join(" ")}
-            >
-              {option === "pass" ? "Pass" : option === "nc" ? "No Conformance" : "Fail"}
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => noteInputRef.current?.focus()}
-            className="h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700"
-          >
-            Add note
-          </button>
-          <label className={`inline-flex h-11 cursor-pointer items-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-            Upload photo
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(event) => {
-                if (event.target.files?.length) {
-                  onAddEvidence(currentQuestion.id, event.target.files);
-                  event.target.value = "";
-                }
-              }}
-            />
-          </label>
-          <input
-            type="file"
-            accept="image/*"
-            className="h-11 max-w-[16rem] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700"
-            onChange={(event) => {
-              if (event.target.files?.length) {
-                onAddEvidence(currentQuestion.id, event.target.files);
-                event.target.value = "";
-              }
-            }}
-          />
-        </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <textarea
-            ref={noteInputRef}
-            value={notes[currentQuestion.id] || ""}
-            onChange={(event) => onNoteChange(currentQuestion.id, event.target.value)}
-            placeholder="Add note"
-            className="min-h-[7rem] rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none"
-          />
-          <div className="flex min-h-[7rem] items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4">
-            <label className={`inline-flex h-11 cursor-pointer items-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-              Upload photo
-              <input
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(event) => {
-                  if (event.target.files?.length) {
-                    onAddEvidence(currentQuestion.id, event.target.files);
-                    event.target.value = "";
-                  }
-                }}
-              />
-            </label>
-          </div>
-        </div>
-        <p className="mt-2 text-xs text-slate-500">{evidence[currentQuestion.id]?.length || 0} photo(s) attached</p>
-        {evidenceDebugLabel && <p className="mt-1 text-xs text-sky-700">{evidenceDebugLabel}</p>}
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button type="button" onClick={onSaveAndExit} className="h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700">
-            Save &amp; exit
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (safeIndex === audit.questions.length - 1) onComplete();
-              else onJumpToQuestion(safeIndex + 1);
-            }}
-            className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
-          >
-            {safeIndex === audit.questions.length - 1 ? "Complete audit" : "Next question"}
-          </button>
-          <div className={`ml-auto rounded-full px-3 py-1 text-xs font-semibold ${syncBadgeClass}`}>{syncLabel}</div>
-        </div>
-        {offlineMode && <p className="mt-3 text-sm font-medium text-amber-700">Saved on this tablet. It will sync when online.</p>}
-      </section>
+      <ToastStack toasts={toasts} />
     </div>
   );
 }
@@ -9614,16 +8919,32 @@ function AuditModeScreen({
 function IssueFoundPrompt({
   issue,
   existingNote,
+  evidenceCount,
+  assignedToName,
+  offlineMode,
+  onAddPhoto,
   onSave,
   onCancel,
 }: {
   issue: IssuePromptState;
   existingNote: string;
+  evidenceCount: number;
+  assignedToName: string;
+  offlineMode: boolean;
+  onAddPhoto: (files: FileList) => void;
   onSave: ({ noteValue, escalate }: { noteValue: string; escalate?: boolean }) => void;
   onCancel: () => void;
 }) {
   const [noteValue, setNoteValue] = useState(existingNote);
   const severity = issue.question.riskLevel || (issue.answer === "fail" ? "Critical" : "High");
+  const requiresPhoto = Boolean(issue.question.requiresPhotoEvidence);
+  const willCreateAction =
+    issue.question.autoActionRequired ||
+    severity === "Critical" ||
+    severity === "High" ||
+    issue.answer === "fail";
+  const actionTitle = `Resolve failed check: ${issue.question.text}`;
+  const actionDueDate = addDaysIso(ACTION_DUE_DAYS_BY_SEVERITY[severity]);
 
   useEffect(() => {
     setNoteValue(existingNote);
@@ -9635,12 +8956,42 @@ function IssueFoundPrompt({
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-600">Issue found</p>
         <p className="mt-2 text-sm font-semibold text-slate-900">{issue.question.text}</p>
         <p className="mt-1 text-xs text-slate-500">Answer: {issue.answer.toUpperCase()} • Risk: {severity}</p>
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          <p>Photo evidence: {requiresPhoto ? "Required" : "Optional but encouraged"}</p>
+          <p>Corrective action: {willCreateAction ? "Will be created" : "Not required"}</p>
+        </div>
+        {willCreateAction && (
+          <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+            <p className="font-semibold">Corrective action preview</p>
+            <p className="mt-1">Title: {actionTitle}</p>
+            <p>Severity: {severity}</p>
+            <p>Due date: {actionDueDate}</p>
+            <p>Assigned to: {assignedToName || "Unassigned"}</p>
+          </div>
+        )}
         <textarea
           value={noteValue}
           onChange={(event) => setNoteValue(event.target.value)}
           placeholder="Describe what was found"
           className="mt-3 min-h-[7rem] w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none"
         />
+        <div className="mt-3 flex items-center gap-2">
+          <label className={`inline-flex h-11 cursor-pointer items-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+            Add photo
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => {
+                if (event.target.files?.length) {
+                  onAddPhoto(event.target.files);
+                  event.target.value = "";
+                }
+              }}
+            />
+          </label>
+          <p className="text-xs text-slate-500">{evidenceCount} photo(s) attached</p>
+        </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <button type="button" onClick={() => onSave({ noteValue, escalate: false })} className={`h-11 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
             Save issue and continue
@@ -9649,6 +9000,7 @@ function IssueFoundPrompt({
             Change answer
           </button>
         </div>
+        {offlineMode && <p className="mt-3 text-xs font-medium text-amber-700">Saved on this tablet. It will sync when online.</p>}
       </div>
     </div>
   );
@@ -9675,7 +9027,7 @@ function AuditCompletionSummary({
           <MiniMetric label="Issues" value={String(summary.issuesFound)} />
           <MiniMetric label="Actions" value={String(summary.actionsCreated)} />
           <MiniMetric label="Photos" value={String(summary.photosCaptured)} />
-          <MiniMetric label="Sync" value={summary.syncLabel} />
+          <MiniMetric label="Sync status" value={summary.syncLabel} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <button type="button" onClick={onStartNext} className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
@@ -9686,1321 +9038,6 @@ function AuditCompletionSummary({
           </button>
         </div>
       </section>
-    </div>
-  );
-}
-
-function CompleteAuditScreen({
-  audit,
-  responses,
-  notes,
-  evidence,
-  signatureDataUrl,
-  signatureSignedAt,
-  offlineMode,
-  savedAt,
-  canSubmit,
-  onSelect,
-  onNoteChange,
-  onAddEvidence,
-  onRemoveEvidence,
-  onSignatureChange,
-  onSaveDraft,
-  onSubmit,
-  onCancel,
-}: {
-  audit: Audit;
-  responses: Record<string, Answer>;
-  notes: Record<string, string>;
-  evidence: Record<string, EvidenceItem[]>;
-  signatureDataUrl: string;
-  signatureSignedAt: string;
-  offlineMode: boolean;
-  savedAt: string | null;
-  canSubmit: boolean;
-  onSelect: (questionId: string, answer: Answer) => void;
-  onNoteChange: (questionId: string, value: string) => void;
-  onAddEvidence: (questionId: string, files: FileList) => void;
-  onRemoveEvidence: (questionId: string, evidenceId: string) => void;
-  onSignatureChange: (dataUrl: string) => void;
-  onSaveDraft: () => void;
-  onSubmit: () => void;
-  onCancel: () => void;
-}) {
-  const answered = audit.questions.filter((question) => responses[question.id]).length;
-  const evidenceTotal = audit.questions.reduce((total, question) => total + (evidence[question.id]?.length ?? 0), 0);
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">{audit.category}</p>
-            <h2 className="mt-2 text-[1.85rem] font-semibold tracking-tight">{audit.name}</h2>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold text-slate-200">
-                <AppIcon name="clipboard" className="h-3.5 w-3.5" />
-                {audit.siteArea}
-              </div>
-              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold text-slate-200">
-                <AppIcon name="user" className="h-3.5 w-3.5" />
-                {audit.owner}
-              </div>
-              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold text-slate-200">
-                <AppIcon name="spark" className="h-3.5 w-3.5" />
-                {audit.templateVersion}
-              </div>
-            </div>
-            <p className="mt-3 text-sm font-medium text-slate-200">{getDueWarning(audit.dueHours)}</p>
-          </div>
-          <StatusBadge status={getAuditTrafficStatus(audit.dueHours)} dark />
-        </div>
-        <div className="mt-4 rounded-2xl bg-white/10 px-4 py-3">
-          <p className="text-xs text-slate-300">Progress</p>
-          <div className="mt-2 flex items-center justify-between">
-            <div className="h-2 flex-1 rounded-full bg-white/10">
-              <div className="h-2 rounded-full bg-white transition-all" style={{ width: `${(answered / audit.questions.length) * 100}%` }} />
-            </div>
-            <p className="ml-3 text-sm font-semibold">
-              {answered}/{audit.questions.length}
-            </p>
-          </div>
-          <p className="mt-2 text-xs text-slate-300">
-            {evidenceTotal} evidence item{evidenceTotal === 1 ? "" : "s"} attached
-          </p>
-          {offlineMode && <p className="mt-2 text-xs font-semibold text-amber-300">Offline mode active. Submission will queue until the device reconnects.</p>}
-          {savedAt && <p className="mt-2 text-xs text-slate-300">Last saved {savedAt}</p>}
-        </div>
-      </section>
-
-      <section className="space-y-3">
-        {audit.questions.map((question, index) => {
-          const current = responses[question.id];
-          const questionEvidence = evidence[question.id] ?? [];
-          return (
-            <div key={question.id} className="rounded-[1.6rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Question {index + 1}</p>
-                <div className="flex flex-wrap gap-2">
-                  <MetaPill icon="note" label={notes[question.id] ? "Notes added" : "No notes"} />
-                  <MetaPill icon="camera" label={`${questionEvidence.length} photos`} />
-                </div>
-              </div>
-              <p className="mt-3 text-[15px] font-semibold leading-6 text-slate-900">{question.text}</p>
-              <div className="mt-4 grid grid-cols-3 gap-2">
-                <AnswerButton label="Pass" selected={current === "pass"} tone="green" onClick={() => onSelect(question.id, "pass")} />
-                <AnswerButton
-                  label="No Conformance"
-                  selected={current === "nc"}
-                  tone="amber"
-                  onClick={() => onSelect(question.id, "nc")}
-                />
-                <AnswerButton label="Fail" selected={current === "fail"} tone="red" onClick={() => onSelect(question.id, "fail")} />
-              </div>
-              <textarea
-                value={notes[question.id] ?? ""}
-                onChange={(event) => onNoteChange(question.id, event.target.value)}
-                placeholder="Add notes or evidence summary"
-                className="mt-3 min-h-[4.75rem] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-              />
-              <div className="mt-3 rounded-[1.35rem] border border-dashed border-slate-200 bg-slate-50 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">Photo evidence</p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Capture live photos or choose files from the device.
-                    </p>
-                  </div>
-                  <EvidencePickerButtons compact onFiles={(files) => onAddEvidence(question.id, files)} />
-                </div>
-                {questionEvidence.length > 0 && (
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    {questionEvidence.map((item) => (
-                      <div key={item.id} className="overflow-hidden rounded-[1.2rem] border border-slate-200 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-                        <img src={item.previewUrl} alt={item.name} className="h-24 w-full object-cover" />
-                        <div className="p-2">
-                          <p className="truncate text-xs font-semibold text-slate-900">{item.name}</p>
-                          <p className="mt-1 text-[11px] text-slate-500">{item.addedAt}</p>
-                          <button
-                            onClick={() => onRemoveEvidence(question.id, item.id)}
-                            className="mt-2 text-[11px] font-semibold text-rose-600"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </section>
-
-      <section className="rounded-[1.6rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_30px_rgba(15,23,42,0.06)]">
-        <SectionHeader
-          icon="check"
-          eyebrow="Final approval"
-          title="Inspector sign-off"
-          subtitle="Add a signature before submitting this audit."
-        />
-        <div className="mt-4">
-          <SignaturePad value={signatureDataUrl} onChange={onSignatureChange} />
-        </div>
-        <p className="mt-2 text-xs text-slate-500">
-          {signatureDataUrl ? `Signed ${signatureSignedAt}` : "No signature captured yet"}
-        </p>
-      </section>
-
-      <section className="grid grid-cols-3 gap-3">
-        <button onClick={onCancel} className="h-14 rounded-2xl bg-slate-100 text-sm font-semibold text-slate-700">
-          Cancel
-        </button>
-        <button onClick={onSaveDraft} className="h-14 rounded-2xl bg-slate-200 text-sm font-semibold text-slate-800">
-          Save draft
-        </button>
-        <button
-          onClick={onSubmit}
-          disabled={!canSubmit}
-          className={[
-            "h-14 rounded-2xl text-sm font-semibold text-white shadow-[0_14px_28px_rgba(15,23,42,0.18)] transition",
-            canSubmit ? `bg-slate-900 active:scale-[0.99] ${slatePrimaryCtaInteract}` : "bg-slate-300",
-          ].join(" ")}
-        >
-          Submit
-        </button>
-      </section>
-    </div>
-  );
-}
-
-function AdminScreen({
-  currentUser,
-  googleConnected,
-  backendConfigured,
-  sharedDriveId,
-  googleStatusLoading,
-  folderInspection,
-  folderInspectionLoading,
-  onboardingSource,
-  onboardingRecords,
-  onboardingRecordsLoading,
-  selectedOnboardingRecordId,
-  folders,
-  selectedFolder,
-  schedules,
-  inviteEmailInput,
-  inviteRoleInput,
-  invitedUsers,
-  creatableRoles,
-  notificationsEnabled,
-  companySheetSync,
-  workspaceValidation,
-  workspaceValidationLoading,
-  templates,
-  folderNameInput,
-  folderIdInput,
-  auditFormsFolderInput,
-  masterSheetInput,
-  evidenceFolderInput,
-  exportsFolderInput,
-  adminNotesFolderInput,
-  templateNameInput,
-  templateQuestionInput,
-  templateQuestionTypeInput,
-  templateDraftQuestions,
-  syncState,
-  scheduleNameInput,
-  scheduleAreaInput,
-  scheduleOwnerInput,
-  scheduleScopeInput,
-  schedulePersonalAssigneeInput,
-  scheduleFrequencyInput,
-  scheduleSendTimeInput,
-  scheduleRecipientsInput,
-  scheduleOverdueAlertRecipientsInput,
-  scheduleEscalationContactInput,
-  scheduleOverdueAlertTimingInput,
-  scheduleCompletionCheckTimingInput,
-  scheduleNextDueHoursInput,
-  schedulePriorityInput,
-  onGoogleConnect,
-  onGoogleDisconnect,
-  onRequestNotifications,
-  onValidateWorkspace,
-  onRepairWorkspace,
-  onRefreshGoogleStatus,
-  onRefreshOnboardingRecords,
-  onSelectOnboardingRecord,
-  onApplyOnboardingRecord,
-  onFolderNameChange,
-  onFolderIdChange,
-  onAuditFormsFolderChange,
-  onMasterSheetChange,
-  onEvidenceFolderChange,
-  onExportsFolderChange,
-  onAdminNotesFolderChange,
-  onScheduleNameChange,
-  onScheduleAreaChange,
-  onScheduleOwnerChange,
-  onScheduleScopeChange,
-  onSchedulePersonalAssigneeChange,
-  onScheduleFrequencyChange,
-  onScheduleSendTimeChange,
-  onScheduleRecipientsChange,
-  onScheduleOverdueAlertRecipientsChange,
-  onScheduleEscalationContactChange,
-  onScheduleOverdueAlertTimingChange,
-  onScheduleCompletionCheckTimingChange,
-  onScheduleNextDueHoursChange,
-  onSchedulePriorityChange,
-  onOpenOnboardingForm,
-  onStartCompanyOnboarding,
-  onAddFolder,
-  onOneClickGoogleOnboarding,
-  onTemplateNameChange,
-  onTemplateQuestionChange,
-  onTemplateQuestionTypeChange,
-  onAddTemplateQuestion,
-  onRemoveTemplateQuestion,
-  onAddAnswerPromptToDraftQuestion,
-  onRemoveAnswerPromptFromDraftQuestion,
-  onAddTemplate,
-  onToggleTemplate,
-  onAddSchedule,
-  onSelectFolder,
-  onVerifyOnboarding,
-  onVerifyAudits,
-  onVerifyResponseSheet,
-  onSyncForms,
-  onLoadDemoData,
-  onClearDemoData,
-  onInviteEmailChange,
-  onInviteRoleChange,
-  onInviteUser,
-  standaloneOnboarding = false,
-}: {
-  currentUser: User;
-  googleConnected: boolean;
-  backendConfigured: boolean;
-  sharedDriveId: string;
-  googleStatusLoading: boolean;
-  folderInspection: FolderInspection | null;
-  folderInspectionLoading: boolean;
-  onboardingSource: OnboardingSource | null;
-  onboardingRecords: OnboardingRecord[];
-  onboardingRecordsLoading: boolean;
-  selectedOnboardingRecordId: string;
-  folders: CompanyFolder[];
-  selectedFolder: CompanyFolder | null;
-  schedules: ScheduleItem[];
-  inviteEmailInput: string;
-  inviteRoleInput: Role;
-  invitedUsers: UserInvite[];
-  creatableRoles: Role[];
-  notificationsEnabled: boolean;
-  companySheetSync: CompanySheetSyncStatus | null;
-  workspaceValidation: WorkspaceValidation | null;
-  workspaceValidationLoading: boolean;
-  templates: AuditTemplate[];
-  folderNameInput: string;
-  folderIdInput: string;
-  auditFormsFolderInput: string;
-  masterSheetInput: string;
-  evidenceFolderInput: string;
-  exportsFolderInput: string;
-  adminNotesFolderInput: string;
-  templateNameInput: string;
-  templateQuestionInput: string;
-  templateQuestionTypeInput: AuditQuestion["fieldType"];
-  templateDraftQuestions: DraftTemplateQuestion[];
-  syncState: string;
-  scheduleNameInput: string;
-  scheduleAreaInput: string;
-  scheduleOwnerInput: string;
-  scheduleScopeInput: ScheduleScope;
-  schedulePersonalAssigneeInput: string;
-  scheduleFrequencyInput: ScheduleFrequency;
-  scheduleSendTimeInput: string;
-  scheduleRecipientsInput: string;
-  scheduleOverdueAlertRecipientsInput: string;
-  scheduleEscalationContactInput: string;
-  scheduleOverdueAlertTimingInput: OverdueAlertTiming;
-  scheduleCompletionCheckTimingInput: CompletionCheckTiming;
-  scheduleNextDueHoursInput: string;
-  schedulePriorityInput: Priority;
-  onGoogleConnect: () => void;
-  onGoogleDisconnect: () => void;
-  onRequestNotifications: () => void;
-  onValidateWorkspace: () => void;
-  onRepairWorkspace: () => void;
-  onRefreshGoogleStatus: () => void;
-  onRefreshOnboardingRecords: () => void;
-  onSelectOnboardingRecord: (recordId: string) => void;
-  onApplyOnboardingRecord: () => void;
-  onFolderNameChange: (value: string) => void;
-  onFolderIdChange: (value: string) => void;
-  onAuditFormsFolderChange: (value: string) => void;
-  onMasterSheetChange: (value: string) => void;
-  onEvidenceFolderChange: (value: string) => void;
-  onExportsFolderChange: (value: string) => void;
-  onAdminNotesFolderChange: (value: string) => void;
-  onScheduleNameChange: (value: string) => void;
-  onScheduleAreaChange: (value: string) => void;
-  onScheduleOwnerChange: (value: string) => void;
-  onScheduleScopeChange: (value: ScheduleScope) => void;
-  onSchedulePersonalAssigneeChange: (value: string) => void;
-  onScheduleFrequencyChange: (value: ScheduleFrequency) => void;
-  onScheduleSendTimeChange: (value: string) => void;
-  onScheduleRecipientsChange: (value: string) => void;
-  onScheduleOverdueAlertRecipientsChange: (value: string) => void;
-  onScheduleEscalationContactChange: (value: string) => void;
-  onScheduleOverdueAlertTimingChange: (value: OverdueAlertTiming) => void;
-  onScheduleCompletionCheckTimingChange: (value: CompletionCheckTiming) => void;
-  onScheduleNextDueHoursChange: (value: string) => void;
-  onSchedulePriorityChange: (value: Priority) => void;
-  onOpenOnboardingForm: () => void;
-  onStartCompanyOnboarding: () => void;
-  onAddFolder: () => void;
-  onOneClickGoogleOnboarding: () => void;
-  onTemplateNameChange: (value: string) => void;
-  onTemplateQuestionChange: (value: string) => void;
-  onTemplateQuestionTypeChange: (value: AuditQuestion["fieldType"]) => void;
-  onAddTemplateQuestion: () => void;
-  onRemoveTemplateQuestion: (questionId: string) => void;
-  onAddAnswerPromptToDraftQuestion: (questionId: string, answer: Answer) => void;
-  onRemoveAnswerPromptFromDraftQuestion: (questionId: string, answer: Answer, promptIndex: number) => void;
-  onAddTemplate: () => void;
-  onToggleTemplate: (templateId: string) => void;
-  onAddSchedule: () => void;
-  onSelectFolder: (folderId: string) => void;
-  onVerifyOnboarding: () => void;
-  onVerifyAudits: () => void;
-  onVerifyResponseSheet: () => void;
-  onSyncForms: () => void;
-  onLoadDemoData: () => void;
-  onClearDemoData: () => void;
-  onInviteEmailChange: (value: string) => void;
-  onInviteRoleChange: (value: Role) => void;
-  onInviteUser: () => void;
-  standaloneOnboarding?: boolean;
-}) {
-  const adminOnly = !canAccessAdmin(currentUser.role);
-  const masterOnly = currentUser.role !== "Master";
-  const godModeFirstUserInvite =
-    currentUser.role === "Master" &&
-    (companySheetSync?.usersCount ?? 0) === 0 &&
-    invitedUsers.length === 0;
-  const [adminView, setAdminView] = useState<"overview" | "onboarding">(standaloneOnboarding ? "onboarding" : "overview");
-  const onboardingMode = standaloneOnboarding || (canAccessOnboarding(currentUser.role) && adminView === "onboarding");
-
-  return (
-    <div className="space-y-4">
-      {!onboardingMode && (
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-        <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
-          <div>
-            <h2 className="text-lg font-semibold tracking-tight text-slate-900">Workspace control</h2>
-            <p className="mt-1 text-sm text-slate-500">Tools and configuration based on your access level.</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              Online
-            </div>
-            <div className="rounded-full bg-fuchsia-100 px-2.5 py-1 text-xs font-semibold text-fuchsia-700">{getRoleDisplayName(currentUser.role)}</div>
-          </div>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-3">
-          {[
-            { key: "overview", icon: "user", title: "User Management", subtitle: "Invite users and manage roles" },
-            { key: "overview", icon: "checklist", title: "Audit Templates", subtitle: "Build and manage audit form templates" },
-            { key: "overview", icon: "sync", title: "Maintenance", subtitle: "Sync queue tools, data export, and reset" },
-          ].map((card) => (
-            <button
-              key={card.title}
-              onClick={() => {
-                if (card.key === "onboarding") {
-                  setAdminView("onboarding");
-                }
-              }}
-              className="flex min-h-[76px] items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-slate-300 hover:bg-white"
-            >
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-500">
-                  <AppIcon name={card.icon} className="h-4 w-4" />
-                </span>
-                <span className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-900">{card.title}</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">{card.subtitle}</p>
-                </span>
-              </div>
-              <span className="ml-3 text-sm text-slate-400">{">"}</span>
-            </button>
-          ))}
-        </div>
-        {(currentUser.role === "Master" || currentUser.role === "Admin") && (
-          <div className="mt-3 rounded-xl border border-sky-100 bg-sky-50/80 p-3">
-            <button
-              type="button"
-              onClick={onLoadDemoData}
-              className="h-11 rounded-xl border border-sky-200 bg-white px-4 text-sm font-semibold text-sky-900 shadow-sm"
-            >
-              Load Demo Data
-            </button>
-            <button
-              type="button"
-              onClick={onClearDemoData}
-              className="ml-2 h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm"
-            >
-              Clear Demo Data
-            </button>
-            <p className="mt-2 text-xs text-slate-600">
-              Inserts realistic precast H&amp;S sample audits, CAPAs, and sync items in this tablet only — it does not write to linked Google Sheets.
-            </p>
-          </div>
-        )}
-        </section>
-      )}
-
-      {masterOnly && (
-        <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-          <SectionHeader
-            icon="shield"
-            eyebrow="Platform control"
-            title="God Mode only"
-            subtitle="Company provisioning, Google connection, and live app population are restricted to platform control."
-          />
-          <div className="rounded-[1.5rem] bg-slate-50 p-4">
-            <p className="text-sm font-semibold text-slate-900">Platform setup is managed in God Mode</p>
-            <p className="mt-2 text-sm leading-6 text-slate-500">
-              Google connection, company folder linking, and app population are only available from the God Mode account.
-            </p>
-          </div>
-        </section>
-      )}
-
-      {canAccessOnboarding(currentUser.role) && onboardingMode && (
-        <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
-          {!standaloneOnboarding && (
-            <div className="mb-3">
-              <button
-                onClick={() => setAdminView("overview")}
-                className="rounded-lg border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/10"
-              >
-                Back to admin overview
-              </button>
-            </div>
-          )}
-          <div className="flex items-start gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
-              <AppIcon name="shield" className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Company setup onboarding</p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight">Onboard new company workspace</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-300">
-                Complete the platform setup steps below to connect Google Drive, link the company folder, and make the app live.
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <MiniPill label={backendConfigured ? "Platform ready" : "Platform setup needed"} active={backendConfigured} />
-            <MiniPill label={googleConnected ? "Google Drive connected" : "Google Drive not connected"} active={googleConnected} />
-            <MiniPill
-              label={selectedFolder ? `${selectedFolder.name} linked` : "Company folder not linked"}
-              active={Boolean(selectedFolder)}
-            />
-            <MiniPill label={syncState === "Synced" ? "App live" : "App not live"} active={syncState === "Synced"} />
-          </div>
-          <div className="mt-5 rounded-[1.5rem] bg-white/6 p-4">
-            <p className="text-sm font-semibold text-white">Onboarding status</p>
-            <p className="mt-1 text-sm leading-6 text-slate-300">
-              {!backendConfigured
-                ? "The platform backend needs to be configured before Google Drive can be connected."
-                : !googleConnected
-                  ? "Step 1: connect the God Mode account to Google Drive."
-                  : !selectedFolder
-                    ? "Step 2: paste the company Google Drive links below."
-                    : syncState !== "Synced"
-                      ? `Step 3: populate the app using ${selectedFolder.name}.`
-                      : `${selectedFolder.name} is linked and the app is live.`}
-            </p>
-            {selectedFolder && <p className="mt-2 break-all text-xs text-slate-400">{selectedFolder.id}</p>}
-            {googleConnected && (
-              <div className="mt-4 grid gap-3">
-                <div>
-                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                    Company folder link or ID
-                  </label>
-                  <input
-                    value={folderIdInput}
-                    onChange={(event) => onFolderIdChange(event.target.value)}
-                    placeholder="Paste the company folder link or ID"
-                    className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
-                  />
-                </div>
-                <div>
-                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                    Company master sheet link or ID
-                  </label>
-                  <input
-                    value={masterSheetInput}
-                    onChange={(event) => onMasterSheetChange(event.target.value)}
-                    placeholder="Paste the company master sheet link or ID"
-                    className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
-                  />
-                </div>
-                <div>
-                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                    Audit forms folder link or ID
-                  </label>
-                  <input
-                    value={auditFormsFolderInput}
-                    onChange={(event) => onAuditFormsFolderChange(event.target.value)}
-                    placeholder="Paste the audit forms folder link or ID"
-                    className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
-                  />
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                      Evidence folder
-                    </label>
-                    <input
-                      value={evidenceFolderInput}
-                      onChange={(event) => onEvidenceFolderChange(event.target.value)}
-                      placeholder="Optional"
-                      className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                      Exports folder
-                    </label>
-                    <input
-                      value={exportsFolderInput}
-                      onChange={(event) => onExportsFolderChange(event.target.value)}
-                      placeholder="Optional"
-                      className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                    Admin notes folder
-                  </label>
-                  <input
-                    value={adminNotesFolderInput}
-                    onChange={(event) => onAdminNotesFolderChange(event.target.value)}
-                    placeholder="Optional"
-                    className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
-                  />
-                </div>
-              </div>
-            )}
-            <div className="mt-4 flex flex-wrap gap-3">
-              <button
-                onClick={!googleConnected ? onGoogleConnect : onAddFolder}
-                disabled={adminOnly || !backendConfigured || googleStatusLoading}
-                className={[
-                  "h-12 rounded-2xl px-5 text-sm font-semibold transition",
-                  adminOnly || !backendConfigured || googleStatusLoading
-                    ? "bg-white/10 text-slate-400"
-                    : "bg-white text-slate-900 shadow-[0_14px_28px_rgba(15,23,42,0.18)] active:scale-[0.99]",
-                ].join(" ")}
-              >
-                {googleStatusLoading
-                  ? "Checking Google Drive..."
-                  : !googleConnected
-                    ? "Connect Google Drive"
-                    : "Start onboarding setup"}
-              </button>
-              {selectedFolder && (
-                <a
-                  href={`https://drive.google.com/drive/folders/${selectedFolder.id}`}
-                  className="inline-flex h-12 items-center rounded-2xl border border-white/20 px-5 text-sm font-semibold text-white transition hover:bg-white/10"
-                >
-                  Open folder in Google Drive
-                </a>
-              )}
-              {googleConnected && (
-                <button
-                  onClick={onGoogleDisconnect}
-                  disabled={adminOnly}
-                  className={[
-                    "h-12 rounded-2xl px-5 text-sm font-semibold transition",
-                    adminOnly
-                      ? "bg-white/10 text-slate-400"
-                      : "border border-white/20 bg-transparent text-white hover:bg-white/10",
-                  ].join(" ")}
-                >
-                  Disconnect Google
-                </button>
-              )}
-              <button
-                onClick={onSyncForms}
-                disabled={adminOnly || !backendConfigured || !selectedFolder || folderInspectionLoading}
-                className={[
-                  "h-12 rounded-2xl px-5 text-sm font-semibold transition",
-                  adminOnly || !backendConfigured || !selectedFolder || folderInspectionLoading
-                    ? "bg-white/10 text-slate-400"
-                    : "bg-emerald-400 text-slate-950 shadow-[0_14px_28px_rgba(16,185,129,0.22)] active:scale-[0.99]",
-                ].join(" ")}
-              >
-                {folderInspectionLoading
-                  ? "Checking links..."
-                  : syncState === "Synced"
-                    ? "Populate app again"
-                    : "Populate app"}
-              </button>
-              <button
-                onClick={onOneClickGoogleOnboarding}
-                disabled={adminOnly || !backendConfigured || folderInspectionLoading}
-                className={[
-                  "h-12 rounded-2xl px-5 text-sm font-semibold transition",
-                  adminOnly || !backendConfigured || folderInspectionLoading
-                    ? "bg-white/10 text-slate-400"
-                    : "bg-sky-300 text-slate-900 shadow-[0_14px_28px_rgba(14,165,233,0.25)] active:scale-[0.99]",
-                ].join(" ")}
-              >
-                Run onboarding (one click)
-              </button>
-            </div>
-            {(folderInspection || selectedFolder) && (
-              <div className="mt-4 rounded-[1.25rem] border border-white/10 bg-slate-950/20 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-white">Company folder check</p>
-                    <p className="mt-1 text-xs text-slate-400">
-                      {folderInspection
-                        ? `Checked ${folderInspection.folder.name}`
-                        : selectedFolder
-                          ? `Waiting to check ${selectedFolder.name}`
-                          : "No company folder checked yet"}
-                    </p>
-                  </div>
-                  {folderInspection && (
-                    <div
-                      className={[
-                        "rounded-full px-3 py-1 text-xs font-semibold",
-                        folderInspection.blockingItems.length === 0
-                          ? "bg-emerald-500/12 text-emerald-300"
-                          : "bg-amber-500/12 text-amber-300",
-                      ].join(" ")}
-                    >
-                      {folderInspection.blockingItems.length === 0 ? "Ready to populate" : "Blocked"}
-                    </div>
-                  )}
-                </div>
-
-                {folderInspection && (
-                  <>
-                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                      <FolderCheckRow label="Company Master Sheet" ok={folderInspection.checks.masterSheet} />
-                      <FolderCheckRow
-                        label={folderInspection.checks.auditFormsFolder ? "Audit forms folder" : "Audit forms folder (recommended)"}
-                        ok={folderInspection.checks.auditFormsFolder}
-                      />
-                      <FolderCheckRow
-                        label={
-                          folderInspection.checks.masterDataFolder || !folderInspection.checks.masterSheet
-                            ? "Master sheet link"
-                            : "Master sheet link (recommended)"
-                        }
-                        ok={folderInspection.checks.masterDataFolder || folderInspection.checks.masterSheet}
-                      />
-                      <FolderCheckRow label="Evidence folder (recommended)" ok={folderInspection.checks.evidenceFolder} />
-                      <FolderCheckRow label="Exports folder (recommended)" ok={folderInspection.checks.exportsFolder} />
-                      <FolderCheckRow label="Admin notes folder (recommended)" ok={folderInspection.checks.adminNotesFolder} />
-                    </div>
-
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-2xl bg-white/6 p-3">
-                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Master sheet</p>
-                        <p className="mt-2 text-sm font-semibold text-white">
-                          {folderInspection.masterSheet?.name || "Not found"}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-400">
-                          {folderInspection.masterSheet?.tabs.length
-                            ? folderInspection.masterSheet.tabs.join(", ")
-                            : "No tabs available"}
-                        </p>
-                      </div>
-                      <div className="rounded-2xl bg-white/6 p-3">
-                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Audit forms</p>
-                        <p className="mt-2 text-sm font-semibold text-white">
-                          {folderInspection.auditForms.length} form{folderInspection.auditForms.length === 1 ? "" : "s"} found
-                        </p>
-                        <p className="mt-1 text-xs text-slate-400">
-                          {folderInspection.auditForms.length > 0
-                            ? folderInspection.auditForms.slice(0, 3).map((item) => item.name).join(", ")
-                            : "No audit forms added yet"}
-                        </p>
-                      </div>
-                    </div>
-
-                    {folderInspection.blockingItems.length > 0 && (
-                      <div className="mt-4 rounded-2xl bg-amber-500/10 p-3">
-                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300">Blocking items</p>
-                        <p className="mt-2 text-sm text-amber-100">{folderInspection.blockingItems.join(" • ")}</p>
-                      </div>
-                    )}
-
-                    {folderInspection.recommendedItems.length > 0 && (
-                      <div className="mt-4 rounded-2xl bg-slate-900/30 p-3">
-                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">Recommended structure</p>
-                        <p className="mt-2 text-sm text-slate-200">{folderInspection.recommendedItems.join(" • ")}</p>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      {!standaloneOnboarding && (
-        <>
-          {onboardingMode && (
-            <>
-              <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <SectionHeader
-            icon="spark"
-            eyebrow="Live delivery"
-            title="Live delivery controls"
-            subtitle="Enable browser alerts and keep the company workspace ready for live notifications."
-          />
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-            {notificationsEnabled ? "Browser alerts on" : "Browser alerts off"}
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          <button
-            onClick={onRequestNotifications}
-            className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
-          >
-            Enable browser notifications
-          </button>
-          <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            Invite emails open as mail drafts from the device, while live alerts use browser notifications.
-          </div>
-        </div>
-              </section>
-
-              <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <SectionHeader
-            icon="chart"
-            eyebrow="Data sync"
-            title="Company sheet sync"
-            subtitle="Shows what has been pulled from the company master sheet and whether the live company sync is healthy."
-          />
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-            {companySheetSync ? "Synced" : "Waiting"}
-          </div>
-        </div>
-        {companySheetSync ? (
-          <div className="space-y-3">
-            <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-semibold text-slate-900">{companySheetSync.sheetName}</p>
-              <p className="mt-1 text-xs text-slate-500">Last synced {companySheetSync.lastSyncedAt}</p>
-              <p className="mt-2 text-xs text-slate-500">{companySheetSync.tabs.join(", ")}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <MiniMetric label="Users tab rows" value={String(companySheetSync.usersCount)} />
-              <MiniMetric label="Schedule rows" value={String(companySheetSync.schedulesCount)} />
-              <MiniMetric label="Onboarding rows" value={String(companySheetSync.onboardingCount)} />
-              <MiniMetric label="Action rows" value={String(companySheetSync.actionsCount)} />
-            </div>
-          </div>
-        ) : (
-          <EmptyPanel
-            title="No company sheet data synced yet"
-            text="Populate the app from a company folder that contains a Company Master Sheet with Users and Schedule tabs."
-          />
-        )}
-              </section>
-
-              <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <SectionHeader
-            icon="shield"
-            eyebrow="Workspace health"
-            title="Google workspace validator"
-            subtitle="Checks tabs, schema version, and connected folders before the live company workspace is relied on in the field."
-          />
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-            {workspaceValidation?.ok ? "Healthy" : "Check needed"}
-          </div>
-        </div>
-        {workspaceValidation ? (
-          <div className="space-y-3">
-            <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-semibold text-slate-900">Schema version</p>
-              <p className="mt-1 text-sm text-slate-500">
-                Found {workspaceValidation.schemaVersion || "none"} • app expects {workspaceValidation.currentSchemaVersion}
-              </p>
-              {workspaceValidation.warnings.length > 0 ? (
-                <div className="mt-3 space-y-2">
-                  {workspaceValidation.warnings.map((warning) => (
-                    <div key={warning} className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
-                      {warning}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <FolderCheckRow label="Company folder" ok={workspaceValidation.folders.companyFolder} />
-              <FolderCheckRow label="Audit forms folder" ok={workspaceValidation.folders.auditFormsFolder} />
-              <FolderCheckRow label="Evidence folder" ok={workspaceValidation.folders.evidenceFolder} />
-              <FolderCheckRow label="Exports folder" ok={workspaceValidation.folders.exportsFolder} />
-              <FolderCheckRow label="Admin notes folder" ok={workspaceValidation.folders.adminNotesFolder} />
-              <FolderCheckRow label="Actions tab" ok={workspaceValidation.tabs.Actions} />
-            </div>
-            {workspaceValidation.missingTabs.length > 0 && (
-              <div className="rounded-[1.5rem] border border-rose-200 bg-rose-50 p-4">
-                <p className="text-sm font-semibold text-rose-900">Missing tabs</p>
-                <p className="mt-2 text-sm text-rose-700">{workspaceValidation.missingTabs.join(", ")}</p>
-              </div>
-            )}
-            {Object.entries(workspaceValidation.missingColumns).some(([, columns]) => columns.length > 0) && (
-              <div className="rounded-[1.5rem] border border-amber-200 bg-amber-50 p-4">
-                <p className="text-sm font-semibold text-amber-900">Missing columns</p>
-                <div className="mt-2 space-y-2">
-                  {Object.entries(workspaceValidation.missingColumns)
-                    .filter(([, columns]) => columns.length > 0)
-                    .map(([tab, columns]) => (
-                      <p key={tab} className="text-sm text-amber-700">
-                        {tab}: {columns.join(", ")}
-                      </p>
-                    ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <EmptyPanel
-            title="No validation run yet"
-            text="Run a workspace check after linking the company resources to confirm tabs, schema version, and folders are all ready."
-          />
-        )}
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button onClick={onValidateWorkspace} className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
-            {workspaceValidationLoading ? "Validating..." : "Validate workspace"}
-          </button>
-          <button onClick={onRepairWorkspace} className="h-12 rounded-2xl bg-emerald-50 px-5 text-sm font-semibold text-emerald-700">
-            Repair / upgrade workspace
-          </button>
-        </div>
-              </section>
-
-              {syncState === "Synced" && selectedFolder && (
-                <section className="rounded-[1.75rem] border border-emerald-200 bg-gradient-to-b from-emerald-50 to-white p-4 shadow-[0_16px_36px_rgba(16,185,129,0.10)]">
-          <SectionHeader
-            icon="check"
-            eyebrow="Go live complete"
-            title={`${selectedFolder.name} is now live`}
-            subtitle="This company workspace has been linked, checked, and populated from Google Drive."
-          />
-          <div className="grid gap-3 sm:grid-cols-3">
-            <QuickActionTile title="Audit forms" value={String(folderInspection?.auditForms.length ?? 0)} caption="Loaded from Drive" />
-            <QuickActionTile title="Users" value={String(companySheetSync?.usersCount ?? 0)} caption="Synced from master sheet" />
-            <QuickActionTile title="Schedules" value={String(companySheetSync?.schedulesCount ?? 0)} caption="Ready in app" />
-          </div>
-                </section>
-              )}
-            </>
-          )}
-
-      <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <SectionHeader
-            icon="clipboard"
-            eyebrow="Build and activate"
-            title="Audit template builder"
-            subtitle="Create local templates, activate or pause them, and combine them with Google Drive audit forms."
-          />
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-            {templates.filter((template) => template.active).length} active
-          </div>
-        </div>
-        <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-          <div className="grid gap-3">
-            <input
-              value={templateNameInput}
-              onChange={(event) => onTemplateNameChange(event.target.value)}
-              placeholder="Template name"
-              className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-            />
-            <textarea
-              value={templateQuestionInput}
-              onChange={(event) => onTemplateQuestionChange(event.target.value)}
-              placeholder="Write a question, then add it to the builder"
-              className="min-h-[7rem] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-            />
-            <select
-              value={templateQuestionTypeInput}
-              onChange={(event) => onTemplateQuestionTypeChange(event.target.value as AuditQuestion["fieldType"])}
-              className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-            >
-              <option value="Traffic light">Traffic light</option>
-              <option value="Pass / Fail">Pass / Fail</option>
-              <option value="Text note">Text note</option>
-              <option value="Photo evidence">Photo evidence</option>
-            </select>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button
-              onClick={onAddTemplateQuestion}
-              className="h-12 rounded-2xl bg-slate-200 px-5 text-sm font-semibold text-slate-900"
-            >
-              Add question
-            </button>
-            <button
-              onClick={onAddTemplate}
-              className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
-            >
-              Create template
-            </button>
-          </div>
-          {templateDraftQuestions.length > 0 && (
-            <div className="mt-4 space-y-2">
-              {templateDraftQuestions.map((question, index) => (
-                <div key={question.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">
-                        {index + 1}. {question.text}
-                      </p>
-                      <p className="truncate text-xs text-slate-500">{question.fieldType}</p>
-                    </div>
-                    <button
-                      onClick={() => onRemoveTemplateQuestion(question.id)}
-                      className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                    {(["pass", "nc", "fail"] as Answer[]).map((answer) => (
-                      <div key={`${question.id}-${answer}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2">
-                        <button
-                          type="button"
-                          onClick={() => onAddAnswerPromptToDraftQuestion(question.id, answer)}
-                          className="w-full rounded-lg bg-white px-2 py-1.5 text-xs font-semibold text-slate-700"
-                        >
-                          Do you need a prompt for this answer?
-                        </button>
-                        <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{answer.toUpperCase()}</p>
-                        <div className="mt-1 space-y-1">
-                          {(question.answerPrompts?.[answer] || []).map((prompt, promptIndex) => (
-                            <div key={`${question.id}-${answer}-${promptIndex}`} className="flex items-start justify-between gap-2 rounded-lg bg-white px-2 py-1.5">
-                              <p className="text-xs text-slate-700">{prompt}</p>
-                              <button
-                                type="button"
-                                onClick={() => onRemoveAnswerPromptFromDraftQuestion(question.id, answer, promptIndex)}
-                                className="text-[10px] font-semibold text-rose-600"
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="mt-4 space-y-3">
-          {templates.length === 0 ? (
-            <EmptyPanel title="No templates yet" text="Google Drive forms and local templates will appear here once they are available." />
-          ) : (
-            templates.slice(0, 8).map((template) => (
-              <div key={template.id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-900">{template.name}</p>
-                  <p className="truncate text-xs text-slate-500">
-                    {template.source} • {template.questions.length} questions
-                  </p>
-                </div>
-                <button
-                  onClick={() => onToggleTemplate(template.id)}
-                  className={[
-                    "rounded-xl px-3 py-2 text-xs font-semibold",
-                    template.active ? "bg-emerald-500/12 text-emerald-700" : "bg-slate-200 text-slate-700",
-                  ].join(" ")}
-                >
-                  {template.active ? "Active" : "Inactive"}
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-      </section>
-
-          <section className="rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h3 className="text-base font-semibold text-slate-900">User management</h3>
-            <p className="text-sm text-slate-500">
-              {currentUser.role === "Master"
-                ? "God Mode can create Admin, Manager, and Auditor users."
-                : currentUser.role === "Admin"
-                  ? "Admins can create Admin, Manager, and Auditor users."
-                  : "User creation is not available on this account."}
-            </p>
-          </div>
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-            {getRoleDisplayName(currentUser.role)}
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-            <div className="grid gap-3">
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">User email</label>
-                <input
-                  value={inviteEmailInput}
-                  onChange={(event) => onInviteEmailChange(event.target.value)}
-                  placeholder="name@company.com"
-                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Role to create</label>
-                {godModeFirstUserInvite ? (
-                  <div className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 text-sm font-semibold leading-[3rem] text-slate-700">
-                    Admin (first company user)
-                  </div>
-                ) : (
-                  <select
-                    value={inviteRoleInput}
-                    onChange={(event) => onInviteRoleChange(event.target.value as Role)}
-                    className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-                  >
-                    {creatableRoles.map((role) => (
-                      <option key={role} value={role}>
-                        {role}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {creatableRoles.map((role) => (
-                <MiniPill key={role} label={`Can create ${role}`} active />
-              ))}
-            </div>
-            <button
-              onClick={onInviteUser}
-              className={`mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white active:scale-[0.99] ${slatePrimaryCtaInteract}`}
-            >
-              Send onboarding link
-            </button>
-          </div>
-
-          {invitedUsers.length === 0 ? (
-            <EmptyPanel
-              title="No user invites sent yet"
-              text="Use this area to send onboarding links for the roles you are allowed to create."
-            />
-          ) : (
-            <div className="space-y-3">
-              {invitedUsers.slice(0, 5).map((invite) => (
-                <div key={invite.id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{invite.email}</p>
-                    <p className="truncate text-xs text-slate-500">
-                      {invite.role} • sent by {invite.invitedBy} • {invite.sentAt}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {invite.mailtoUrl && (
-                      <a href={invite.mailtoUrl} className={`inline-flex items-center justify-center rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white no-underline ${slatePrimaryCtaInteract}`}>
-                        Open email
-                      </a>
-                    )}
-                    <div className="rounded-full bg-emerald-500/12 px-3 py-1 text-xs font-semibold text-emerald-700">
-                      {invite.status}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-          </section>
-        </>
-      )}
-    </div>
-  );
-}
-
-function KpiCard({
-  title,
-  value,
-  subtitle,
-  tone,
-  dark = false,
-}: {
-  title: string;
-  value: string;
-  subtitle: string;
-  tone: "green" | "amber" | "red";
-  dark?: boolean;
-}) {
-  const toneClasses =
-    tone === "green"
-      ? dark
-        ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/30"
-        : "bg-emerald-500/12 text-emerald-700 ring-emerald-500/20"
-      : tone === "red"
-        ? dark
-          ? "bg-rose-500/20 text-rose-200 ring-rose-400/30"
-          : "bg-rose-500/12 text-rose-700 ring-rose-500/20"
-        : dark
-          ? "bg-amber-500/20 text-amber-200 ring-amber-400/30"
-          : "bg-amber-500/12 text-amber-700 ring-amber-500/20";
-
-  return (
-    <div className={["rounded-[1.6rem] border p-4 shadow-[0_18px_35px_rgba(15,23,42,0.08)]", dark ? "border-sky-700/70 bg-slate-900" : "border-sky-200/80 bg-white"].join(" ")}>
-      <div className="flex items-center justify-between gap-3">
-        <div className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${toneClasses}`}>{title}</div>
-        <div
-          className={[
-            "h-10 w-10 rounded-2xl",
-            tone === "green" ? (dark ? "bg-emerald-500/22" : "bg-emerald-500/12") : tone === "red" ? (dark ? "bg-rose-500/22" : "bg-rose-500/12") : (dark ? "bg-amber-500/22" : "bg-amber-500/12"),
-          ].join(" ")}
-        />
-      </div>
-      <p className={["mt-4 text-3xl font-semibold tracking-tight", dark ? "text-slate-100" : "text-slate-900"].join(" ")}>{value}</p>
-      <p className={["mt-1 text-sm leading-6", dark ? "text-slate-300" : "text-slate-500"].join(" ")}>{subtitle}</p>
-    </div>
-  );
-}
-
-function MiniMetric({
-  label,
-  value,
-  icon,
-  tone = "slate",
-}: {
-  label: string;
-  value: string;
-  icon?: string;
-  tone?: "slate" | "red" | "amber" | "green" | "sky";
-}) {
-  const toneClasses: Record<NonNullable<typeof tone>, { shell: string; icon: string; label: string; value: string }> = {
-    slate: {
-      shell: "border-slate-200/80 bg-gradient-to-b from-white to-slate-50",
-      icon: "text-slate-600",
-      label: "text-slate-400",
-      value: "text-slate-900",
-    },
-    red: {
-      shell: "border-rose-200 bg-gradient-to-b from-rose-50 to-white",
-      icon: "text-rose-600",
-      label: "text-rose-500",
-      value: "text-rose-900",
-    },
-    amber: {
-      shell: "border-amber-200 bg-gradient-to-b from-amber-50 to-white",
-      icon: "text-amber-600",
-      label: "text-amber-600",
-      value: "text-amber-900",
-    },
-    green: {
-      shell: "border-emerald-200 bg-gradient-to-b from-emerald-50 to-white",
-      icon: "text-emerald-600",
-      label: "text-emerald-600",
-      value: "text-emerald-900",
-    },
-    sky: {
-      shell: "border-sky-200 bg-gradient-to-b from-sky-50 to-white",
-      icon: "text-sky-600",
-      label: "text-sky-600",
-      value: "text-sky-900",
-    },
-  };
-  const classes = toneClasses[tone];
-  return (
-    <div className={`rounded-[1.5rem] border p-4 shadow-[0_14px_30px_rgba(15,23,42,0.07)] ${classes.shell}`}>
-      <div className="flex items-center gap-2">
-        {icon ? (
-          <span className={classes.icon}>
-            <AppIcon name={icon} className="h-4 w-4" />
-          </span>
-        ) : null}
-        <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${classes.label}`}>{label}</p>
-      </div>
-      <p className={`mt-3 text-2xl font-semibold tracking-tight ${classes.value}`}>{value}</p>
-    </div>
-  );
-}
-
-function QuickActionTile({
-  title,
-  value,
-  caption,
-}: {
-  title: string;
-  value: string;
-  caption: string;
-}) {
-  return (
-    <div className="rounded-[1.45rem] border border-slate-200/80 bg-white px-4 py-4 shadow-[0_12px_28px_rgba(15,23,42,0.06)]">
-      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">{title}</p>
-      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">{value}</p>
-      <p className="mt-1 text-sm text-slate-500">{caption}</p>
-    </div>
-  );
-}
-
-function EmptyPanel({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="rounded-[1.5rem] border border-dashed border-slate-300 bg-gradient-to-b from-slate-50 to-white px-4 py-5">
-      <p className="text-sm font-semibold text-slate-900">{title}</p>
-      <p className="mt-2 text-sm leading-6 text-slate-500">{text}</p>
-    </div>
-  );
-}
-
-function MiniPill({ label, active }: { label: string; active: boolean }) {
-  return (
-    <div
-      className={[
-        "rounded-full px-3 py-1 text-xs font-semibold",
-        active ? "bg-emerald-500/12 text-emerald-700" : "bg-slate-100 text-slate-600",
-      ].join(" ")}
-    >
-      {label}
-    </div>
-  );
-}
-
-function FolderCheckRow({ label, ok }: { label: string; ok: boolean }) {
-  return (
-    <div className="flex items-center justify-between rounded-2xl bg-white/6 px-3 py-2">
-      <p className="text-sm text-slate-200">{label}</p>
-      <div
-        className={[
-          "rounded-full px-2.5 py-1 text-[11px] font-semibold",
-          ok ? "bg-emerald-500/12 text-emerald-300" : "bg-amber-500/12 text-amber-300",
-        ].join(" ")}
-      >
-        {ok ? "Found" : "Missing"}
-      </div>
     </div>
   );
 }
@@ -11092,237 +9129,6 @@ function LiveGraphChart({
   );
 }
 
-function TrendBar({
-  label,
-  value,
-  total,
-  tone,
-}: {
-  label: string;
-  value: number;
-  total: number;
-  tone: "green" | "amber" | "red";
-}) {
-  const width = Math.max(8, Math.round((value / total) * 100));
-  const toneClass =
-    tone === "green" ? "bg-emerald-500" : tone === "amber" ? "bg-amber-500" : "bg-rose-500";
-  return (
-    <div className="rounded-[1.2rem] bg-slate-50 px-3 py-3">
-      <div className="mb-1 flex items-center justify-between text-sm">
-        <p className="font-semibold text-slate-900">{label}</p>
-        <p className="text-slate-500">{value}</p>
-      </div>
-      <div className="h-3 rounded-full bg-white shadow-[inset_0_1px_2px_rgba(15,23,42,0.06)]">
-        <div className={`h-3 rounded-full ${toneClass}`} style={{ width: `${width}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function SignaturePad({ value, onChange }: { value: string; onChange: (dataUrl: string) => void }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const drawingRef = useRef(false);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return;
-    }
-
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    if (value) {
-      const image = new Image();
-      image.onload = () => context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      image.src = value;
-    }
-  }, [value]);
-
-  const getPosition = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return {
-      x: ((event.clientX - rect.left) / rect.width) * event.currentTarget.width,
-      y: ((event.clientY - rect.top) / rect.height) * event.currentTarget.height,
-    };
-  };
-
-  const startDrawing = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) {
-      return;
-    }
-
-    drawingRef.current = true;
-    const { x, y } = getPosition(event);
-    context.beginPath();
-    context.moveTo(x, y);
-    context.lineWidth = 2;
-    context.strokeStyle = "#0f172a";
-    context.lineCap = "round";
-  };
-
-  const draw = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!drawingRef.current) {
-      return;
-    }
-
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) {
-      return;
-    }
-
-    const { x, y } = getPosition(event);
-    context.lineTo(x, y);
-    context.stroke();
-    onChange(canvas.toDataURL("image/png"));
-  };
-
-  const stopDrawing = () => {
-    drawingRef.current = false;
-  };
-
-  const clear = () => {
-    onChange("");
-  };
-
-  return (
-    <div className="rounded-[1.4rem] border border-slate-200/80 bg-gradient-to-b from-slate-50 to-white p-3 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-      <canvas
-        ref={canvasRef}
-        width={600}
-        height={180}
-        className="h-36 w-full rounded-2xl bg-white shadow-[inset_0_0_0_1px_rgba(15,23,42,0.06)]"
-        onPointerDown={startDrawing}
-        onPointerMove={draw}
-        onPointerUp={stopDrawing}
-        onPointerLeave={stopDrawing}
-      />
-      <div className="mt-3 flex justify-end">
-        <button onClick={clear} className="rounded-xl bg-slate-200 px-3 py-2 text-xs font-semibold text-slate-700">
-          Clear signature
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function TrafficLane({
-  title,
-  subtitle,
-  audits,
-  status,
-  onOpenAudit,
-  expanded = false,
-  drafts = {},
-  unsyncedAuditIds = new Set<string>(),
-}: {
-  title: string;
-  subtitle: string;
-  audits: Audit[];
-  status: AuditStatus;
-  onOpenAudit: (auditId: string) => void;
-  expanded?: boolean;
-  drafts?: Record<string, AuditDraft>;
-  unsyncedAuditIds?: Set<string>;
-}) {
-  const compact = !expanded;
-  const visibleAudits = compact ? audits.slice(0, 1) : audits;
-  const hiddenCount = Math.max(0, audits.length - visibleAudits.length);
-
-  return (
-    <div className={["rounded-[1.2rem] p-2 ring-1 shadow-[0_8px_18px_rgba(15,23,42,0.05)]", statusStyles[status].soft, statusStyles[status].ring].join(" ")}>
-      <div className="mb-1.5 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className={`h-2 w-2 rounded-full ${statusStyles[status].dot}`} />
-          <div>
-            <p className={`text-xs font-semibold ${statusStyles[status].text}`}>{title}</p>
-            <p className="text-[10px] text-slate-500">{subtitle}</p>
-          </div>
-        </div>
-        <div className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-slate-700 shadow-[0_3px_10px_rgba(15,23,42,0.05)]">{audits.length}</div>
-      </div>
-
-      <div className="space-y-1.5">
-        {visibleAudits.map((audit) => (
-          <button
-            key={audit.id}
-            onClick={() => onOpenAudit(audit.id)}
-            className={["w-full rounded-xl bg-white/95 px-3 py-2 text-left shadow-[0_6px_14px_rgba(15,23,42,0.06)] transition active:scale-[0.99]", expanded ? "min-h-[4.25rem]" : ""].join(" ")}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-slate-900">{audit.name}</p>
-                <p className="mt-0.5 text-[10px] text-slate-500">
-                  {audit.siteArea} • {audit.priority} • Owner {audit.owner}
-                </p>
-                <p className="mt-1 text-[10px] font-medium text-slate-600">{getDueWarning(audit.dueHours)}</p>
-                <p className="mt-0.5 text-[10px] text-slate-400">
-                  {drafts[audit.id] ? `In progress ${drafts[audit.id].updatedAt}` : `Last completed ${audit.lastCompletedAt}`}
-                </p>
-                {unsyncedAuditIds.has(audit.id) && (
-                  <p className="mt-0.5 text-[10px] font-semibold text-amber-700">Audit complete / not synced</p>
-                )}
-              </div>
-              <div className="shrink-0 space-y-1 text-right">
-                <StatusBadge status={getAuditTrafficStatus(audit.dueHours)} />
-                <div className="text-[10px] text-slate-400">{audit.dueLabel}</div>
-              </div>
-            </div>
-          </button>
-        ))}
-        {hiddenCount > 0 && <div className="px-1 text-[10px] font-semibold text-slate-500">+{hiddenCount} more</div>}
-        {audits.length === 0 && <div className="rounded-xl bg-white/85 px-3 py-2 text-xs text-slate-500 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">No audits in this group.</div>}
-      </div>
-    </div>
-  );
-}
-
-function StatusBadge({ status, dark = false }: { status: AuditStatus; dark?: boolean }) {
-  const base = statusStyles[status];
-  return (
-    <div className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold", dark ? "bg-white/10 text-white" : `${base.soft} ${base.text}`].join(" ")}>
-      <span className={`h-2.5 w-2.5 rounded-full ${dark ? "bg-white" : base.dot}`} />
-      {base.label}
-    </div>
-  );
-}
-
-function AnswerButton({
-  label,
-  selected,
-  tone,
-  onClick,
-}: {
-  label: string;
-  selected: boolean;
-  tone: AuditStatus;
-  onClick: () => void;
-}) {
-  const selectedClasses =
-    tone === "green"
-      ? "bg-emerald-600 text-white"
-      : tone === "amber"
-        ? "bg-amber-500 text-white"
-        : "bg-rose-600 text-white";
-
-  return (
-    <button
-      onClick={onClick}
-      className={["min-h-[3.5rem] rounded-2xl px-2 text-center text-xs font-semibold leading-tight transition", selected ? selectedClasses : "bg-slate-100 text-slate-700"].join(" ")}
-    >
-      {label}
-    </button>
-  );
-}
-
 function AdminAction({
   title,
   subtitle,
@@ -11352,26 +9158,12 @@ function AdminAction({
           disabled
             ? "bg-slate-200 text-slate-400"
             : active
-              ? "bg-emerald-500/12 text-emerald-700"
+              ? "bg-blue-500/12 text-blue-800"
               : `bg-slate-900 text-white ${slatePrimaryCtaInteract}`,
         ].join(" ")}
       >
         {active ? "Ready" : actionLabel}
       </button>
-    </div>
-  );
-}
-
-function FlowItem({ number, title, text, icon }: { number: string; title: string; text: string; icon?: string }) {
-  return (
-    <div className="flex gap-4 rounded-2xl bg-slate-50 p-4">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-sm font-semibold text-white">
-        {icon ? <AppIcon name={icon} className="h-5 w-5 text-white" /> : number}
-      </div>
-      <div>
-        <p className="text-sm font-semibold text-slate-900">{title}</p>
-        <p className="mt-1 text-sm leading-6 text-slate-600">{text}</p>
-      </div>
     </div>
   );
 }
@@ -11409,7 +9201,7 @@ function ProcessCard({
             <p className="mt-1 text-sm leading-6 text-slate-600">{text}</p>
           </div>
         </div>
-        <div className={["shrink-0 rounded-full px-3 py-1 text-xs font-semibold", active ? "bg-emerald-500/12 text-emerald-700" : "bg-white text-slate-600"].join(" ")}>
+        <div className={["shrink-0 rounded-full px-3 py-1 text-xs font-semibold", active ? "bg-blue-500/12 text-blue-800" : "bg-white text-slate-600"].join(" ")}>
           {active ? "Ready" : "Pending"}
         </div>
       </div>
@@ -11437,7 +9229,7 @@ function ToastStack({ toasts }: { toasts: Toast[] }) {
       {toasts.slice(0, 3).map((toast) => {
         const toneClass =
           toast.tone === "success"
-            ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+            ? "border-blue-200 bg-blue-50 text-blue-950"
             : toast.tone === "warning"
               ? "border-amber-200 bg-amber-50 text-amber-900"
               : "border-slate-200 bg-white text-slate-900";

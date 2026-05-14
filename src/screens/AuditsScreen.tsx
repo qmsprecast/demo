@@ -1,0 +1,373 @@
+import { canCompleteAuditAsAuditor, canSubmitAuditForReview } from "../permissions";
+import { EmptyPanel, MiniMetric, SectionHeader, StatusBadge } from "../components/dashboard/DashboardPrimitives";
+import { amberThresholdHours, getAuditTrafficStatus, getDueWarning, statusStyles } from "../utils/dashboardHealth";
+import type {
+  AuditAccessLevel,
+  AuditAccessMatrixRow,
+  AuditScheduleMatrixInfo,
+  AuditsScreenProps,
+} from "../types/auditsScreenProps";
+import type { Audit, AuditStatus } from "../types/reportsScreenProps";
+import type { AuditDraft } from "../types/dashboardScreenProps";
+
+function AuditsScreenIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <rect x="6" y="4" width="12" height="16" rx="2" />
+      <path d="M9 4.5h6a1.5 1.5 0 0 0-1.5-1.5h-3A1.5 1.5 0 0 0 9 4.5Z" />
+      <path d="M9 10h6" />
+      <path d="M9 14h6" />
+    </svg>
+  );
+}
+
+function getWorkspaceInitials(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+function QuickActionTile({
+  title,
+  value,
+  caption,
+}: {
+  title: string;
+  value: string;
+  caption: string;
+}) {
+  return (
+    <div className="rounded-[1.45rem] border border-slate-200/80 bg-white px-4 py-4 shadow-[0_12px_28px_rgba(15,23,42,0.06)]">
+      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">{title}</p>
+      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">{value}</p>
+      <p className="mt-1 text-sm text-slate-500">{caption}</p>
+    </div>
+  );
+}
+
+function AccessMatrixTable({
+  auditAccessMatrix,
+  auditScheduleMatrix,
+  userProfilePhotos,
+  users,
+  onToggleAuditAccess,
+}: {
+  auditAccessMatrix: AuditAccessMatrixRow[];
+  auditScheduleMatrix: Record<string, AuditScheduleMatrixInfo>;
+  userProfilePhotos: Record<string, string>;
+  users: AuditsScreenProps["users"];
+  onToggleAuditAccess: (email: string, auditId: string, currentAccess: AuditAccessLevel) => void;
+}) {
+  const matrixAuditColumns = auditAccessMatrix[0]?.cells ?? [];
+  const visibleMatrixAuditColumns = matrixAuditColumns;
+  const filteredMatrixRows = auditAccessMatrix;
+  const findProfilePhoto = (matrixUser: AuditAccessMatrixRow) => {
+    const emailKey = matrixUser.email.split("@")[0]?.toLowerCase() || "";
+    const nameKey = matrixUser.name.toLowerCase();
+    const knownUser = users.find((item) => item.name.toLowerCase() === nameKey || item.username === emailKey);
+    return (
+      (knownUser ? userProfilePhotos[knownUser.username] : "") ||
+      userProfilePhotos[emailKey] ||
+      userProfilePhotos[nameKey] ||
+      ""
+    );
+  };
+
+  return (
+    <>
+      {filteredMatrixRows.length === 0 || visibleMatrixAuditColumns.length === 0 ? (
+        <div className="mt-4">
+          <EmptyPanel
+            title="Nothing to show here yet"
+            text="When users and live audits exist in this workspace, you can manage who can open each audit from this matrix."
+          />
+        </div>
+      ) : (
+        <div className="mt-4 rounded-[1.25rem] border border-slate-200 bg-white">
+          <table className="w-full table-fixed border-collapse text-left">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50">
+                <th className="w-[11rem] bg-slate-50 px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  User
+                </th>
+                {visibleMatrixAuditColumns.map((audit) => (
+                  <th
+                    key={audit.auditId}
+                    className="px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500"
+                  >
+                    <span className="block truncate leading-4">{audit.auditName}</span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredMatrixRows.map((user) => (
+                <tr key={user.email} className="border-b border-slate-100 align-top last:border-b-0">
+                  <td className="bg-white px-2 py-2">
+                    <div className="flex items-center gap-2">
+                      {findProfilePhoto(user) ? (
+                        <img
+                          src={findProfilePhoto(user)}
+                          alt={user.name}
+                          className="h-7 w-7 shrink-0 rounded-full border border-slate-200 object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[10px] font-semibold uppercase tracking-[0.08em] text-white">
+                          {getWorkspaceInitials(user.name)}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold leading-4 text-slate-900">{user.name}</p>
+                        <p className="mt-1 text-[10px] font-semibold text-slate-400">
+                          {user.accessibleCount} audit{user.accessibleCount === 1 ? "" : "s"} accessible
+                        </p>
+                      </div>
+                    </div>
+                  </td>
+                  {user.cells.map((cell) => (
+                    <td key={`${user.email}-${cell.auditId}`} className="px-1.5 py-2">
+                      <button
+                        type="button"
+                        onClick={() => onToggleAuditAccess(user.email, cell.auditId, cell.access)}
+                        className={[
+                          "w-full rounded-lg border px-2 py-1.5 text-left",
+                          "cursor-pointer",
+                          cell.access === "Full access"
+                            ? "border-slate-200 bg-slate-950 text-white"
+                            : cell.access === "Oversight"
+                              ? "border-sky-200 bg-sky-50"
+                              : cell.access === "Complete"
+                                ? "border-blue-200 bg-blue-50"
+                                : "border-slate-200 bg-slate-50",
+                        ].join(" ")}
+                      >
+                        <p
+                          className={[
+                            "text-[10px] font-semibold uppercase tracking-[0.12em]",
+                            cell.access === "Full access"
+                              ? "text-slate-200"
+                              : cell.access === "Oversight"
+                                ? "text-sky-700"
+                                : cell.access === "Complete"
+                                  ? "text-blue-800"
+                                  : "text-slate-500",
+                          ].join(" ")}
+                        >
+                          {cell.access}
+                        </p>
+                        <p className="mt-0.5 text-[9px] font-semibold text-slate-400">Tap to change</p>
+                      </button>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="border-t border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Schedule mapping</p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {visibleMatrixAuditColumns.map((audit) => {
+                const schedule = auditScheduleMatrix[audit.auditId];
+                return (
+                  <div key={`schedule-map-${audit.auditId}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-sm font-semibold text-slate-900">{audit.auditName}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {schedule
+                        ? `${schedule.frequency} • ${schedule.days.join(", ")} • ${schedule.liveTime} • ${schedule.completionHours}h`
+                        : "Not scheduled"}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <QuickActionTile title="Users" value={String(filteredMatrixRows.length)} caption="Included in matrix" />
+        <QuickActionTile title="Audits" value={String(visibleMatrixAuditColumns.length)} caption="Available on this workspace" />
+        <QuickActionTile
+          title="Assigned access"
+          value={String(filteredMatrixRows.reduce((sum, row) => sum + row.accessibleCount, 0))}
+          caption="User-to-audit links"
+        />
+      </div>
+    </>
+  );
+}
+
+function TrafficLane({
+  title,
+  subtitle,
+  audits,
+  status,
+  onOpenAudit,
+  expanded = false,
+  drafts = {},
+  unsyncedAuditIds = new Set<string>(),
+}: {
+  title: string;
+  subtitle: string;
+  audits: Audit[];
+  status: AuditStatus;
+  onOpenAudit: (auditId: string) => void;
+  expanded?: boolean;
+  drafts?: Record<string, AuditDraft>;
+  unsyncedAuditIds?: Set<string>;
+}) {
+  const compact = !expanded;
+  const visibleAudits = compact ? audits.slice(0, 1) : audits;
+  const hiddenCount = Math.max(0, audits.length - visibleAudits.length);
+
+  return (
+    <div className={["rounded-[1.2rem] p-2 ring-1 shadow-[0_8px_18px_rgba(15,23,42,0.05)]", statusStyles[status].soft, statusStyles[status].ring].join(" ")}>
+      <div className="mb-1.5 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className={`h-2 w-2 rounded-full ${statusStyles[status].dot}`} />
+          <div>
+            <p className={`text-xs font-semibold ${statusStyles[status].text}`}>{title}</p>
+            <p className="text-[10px] text-slate-500">{subtitle}</p>
+          </div>
+        </div>
+        <div className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-slate-700 shadow-[0_3px_10px_rgba(15,23,42,0.05)]">{audits.length}</div>
+      </div>
+
+      <div className="space-y-1.5">
+        {visibleAudits.map((audit) => (
+          <button
+            key={audit.id}
+            onClick={() => onOpenAudit(audit.id)}
+            className={["w-full rounded-xl bg-white/95 px-3 py-2 text-left shadow-[0_6px_14px_rgba(15,23,42,0.06)] transition active:scale-[0.99]", expanded ? "min-h-[4.25rem]" : ""].join(" ")}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-900">{audit.name}</p>
+                <p className="mt-0.5 text-[10px] text-slate-500">
+                  {audit.siteArea} • {audit.priority} • Owner {audit.owner}
+                </p>
+                <p className="mt-1 text-[10px] font-medium text-slate-600">{getDueWarning(audit.dueHours)}</p>
+                <p className="mt-0.5 text-[10px] text-slate-400">
+                  {drafts[audit.id] ? `In progress ${drafts[audit.id].updatedAt}` : `Last completed ${audit.lastCompletedAt}`}
+                </p>
+                {unsyncedAuditIds.has(audit.id) && (
+                  <p className="mt-0.5 text-[10px] font-semibold text-amber-700">Audit complete / not synced</p>
+                )}
+              </div>
+              <div className="shrink-0 space-y-1 text-right">
+                <StatusBadge status={getAuditTrafficStatus(audit.dueHours)} />
+                <div className="text-[10px] text-slate-400">{audit.dueLabel}</div>
+              </div>
+            </div>
+          </button>
+        ))}
+        {hiddenCount > 0 && <div className="px-1 text-[10px] font-semibold text-slate-500">+{hiddenCount} more</div>}
+        {audits.length === 0 && (
+          <div className="rounded-xl bg-white/85 px-3 py-2 text-xs text-slate-500 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">
+            <p className="font-semibold text-slate-700">Nothing in this due window</p>
+            <p className="mt-0.5">Audits appear here when assigned and they match this lane.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function AuditsScreen({
+  currentUser,
+  audits,
+  groupedAudits,
+  drafts,
+  unsyncedAuditIds,
+  userProfilePhotos,
+  users,
+  onOpenAudit,
+  auditAccessMatrix,
+  auditScheduleMatrix,
+  onToggleAuditAccess,
+}: AuditsScreenProps) {
+  return (
+    <div className="space-y-4">
+      <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
+            <AuditsScreenIcon className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Audit centre</p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+              {canCompleteAuditAsAuditor(currentUser.role) ? "Assigned field audits" : "Complete and manage inspections"}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              Save progress mid-inspection, complete audits in the field, and let the system create corrective actions when issues are found.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid grid-cols-1 gap-3">
+        <MiniMetric label="In progress" value={String(Object.keys(drafts).length)} />
+      </section>
+
+      {canSubmitAuditForReview(currentUser.role) && (
+        <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+          <SectionHeader
+            icon="user"
+            eyebrow="Access control"
+            title="Audit access matrix"
+            subtitle="Manage exactly which users can access each audit."
+          />
+          <div className="mt-4">
+            <AccessMatrixTable
+              auditAccessMatrix={auditAccessMatrix}
+              auditScheduleMatrix={auditScheduleMatrix}
+              userProfilePhotos={userProfilePhotos}
+              users={users}
+              onToggleAuditAccess={onToggleAuditAccess}
+            />
+          </div>
+        </section>
+      )}
+
+      <TrafficLane title="Red" subtitle="Overdue" audits={groupedAudits.red} status="red" onOpenAudit={onOpenAudit} expanded drafts={drafts} unsyncedAuditIds={unsyncedAuditIds} />
+      <TrafficLane
+        title="Amber"
+        subtitle={`Less than ${amberThresholdHours} hours remaining`}
+        audits={groupedAudits.amber}
+        status="amber"
+        onOpenAudit={onOpenAudit}
+        expanded
+        drafts={drafts}
+        unsyncedAuditIds={unsyncedAuditIds}
+      />
+      <TrafficLane
+        title="Green"
+        subtitle={`More than ${amberThresholdHours} hours remaining`}
+        audits={groupedAudits.green}
+        status="green"
+        onOpenAudit={onOpenAudit}
+        expanded
+        drafts={drafts}
+        unsyncedAuditIds={unsyncedAuditIds}
+      />
+
+      {audits.length === 0 && (
+        <EmptyPanel
+          title="No audits loaded yet"
+          text="Nothing to open until this workspace is connected. In Admin, link Google and your company folder, then sync so audit templates appear here."
+        />
+      )}
+    </div>
+  );
+}

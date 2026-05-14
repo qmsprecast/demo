@@ -1,0 +1,1211 @@
+import { useEffect, useState } from "react";
+import { canAccessAdmin, canAccessAdminOnboardingWorkspace, getRoleDisplayName } from "../permissions";
+import { EmptyPanel, MiniMetric, SectionHeader } from "../components/dashboard/DashboardPrimitives";
+import type { AdminScreenProps } from "../types/adminScreenProps";
+import type { Role } from "../permissions";
+import type { Answer, AuditQuestion } from "../types/reportsScreenProps";
+
+function normalizeIdentity(value: string | null | undefined) {
+  return (value || "").trim().toLowerCase();
+}
+
+export function AdminScreen({
+  currentUser,
+  googleConnected,
+  backendConfigured,
+  sharedDriveId,
+  googleStatusLoading,
+  folderInspection,
+  folderInspectionLoading,
+  onboardingSource,
+  onboardingRecords,
+  onboardingRecordsLoading,
+  selectedOnboardingRecordId,
+  folders,
+  selectedFolder,
+  schedules,
+  inviteEmailInput,
+  inviteRoleInput,
+  invitedUsers,
+  sites,
+  selectedSiteId,
+  reportUsers,
+  userSiteAssignments,
+  onToggleUserSiteAssignment,
+  creatableRoles,
+  notificationsEnabled,
+  companySheetSync,
+  workspaceValidation,
+  workspaceValidationLoading,
+  templates,
+  folderNameInput,
+  folderIdInput,
+  auditFormsFolderInput,
+  masterSheetInput,
+  evidenceFolderInput,
+  healthSafetyFolderInput,
+  exportsFolderInput,
+  adminNotesFolderInput,
+  templateNameInput,
+  templateQuestionInput,
+  templateQuestionTypeInput,
+  templateDraftQuestions,
+  syncState,
+  scheduleNameInput,
+  scheduleAreaInput,
+  scheduleOwnerInput,
+  scheduleScopeInput,
+  schedulePersonalAssigneeInput,
+  scheduleFrequencyInput,
+  scheduleSendTimeInput,
+  scheduleRecipientsInput,
+  scheduleOverdueAlertRecipientsInput,
+  scheduleEscalationContactInput,
+  scheduleOverdueAlertTimingInput,
+  scheduleCompletionCheckTimingInput,
+  scheduleNextDueHoursInput,
+  schedulePriorityInput,
+  onGoogleConnect,
+  onGoogleDisconnect,
+  onRequestNotifications,
+  onValidateWorkspace,
+  onRepairWorkspace,
+  onRefreshGoogleStatus,
+  onRefreshOnboardingRecords,
+  onSelectOnboardingRecord,
+  onApplyOnboardingRecord,
+  onFolderNameChange,
+  onFolderIdChange,
+  onAuditFormsFolderChange,
+  onMasterSheetChange,
+  onEvidenceFolderChange,
+  onHealthSafetyFolderChange,
+  onExportsFolderChange,
+  onAdminNotesFolderChange,
+  onScheduleNameChange,
+  onScheduleAreaChange,
+  onScheduleOwnerChange,
+  onScheduleScopeChange,
+  onSchedulePersonalAssigneeChange,
+  onScheduleFrequencyChange,
+  onScheduleSendTimeChange,
+  onScheduleRecipientsChange,
+  onScheduleOverdueAlertRecipientsChange,
+  onScheduleEscalationContactChange,
+  onScheduleOverdueAlertTimingChange,
+  onScheduleCompletionCheckTimingChange,
+  onScheduleNextDueHoursChange,
+  onSchedulePriorityChange,
+  onOpenOnboardingForm,
+  onStartCompanyOnboarding,
+  onAddFolder,
+  onOneClickGoogleOnboarding,
+  onTemplateNameChange,
+  onTemplateQuestionChange,
+  onTemplateQuestionTypeChange,
+  onAddTemplateQuestion,
+  onRemoveTemplateQuestion,
+  onAddAnswerPromptToDraftQuestion,
+  onRemoveAnswerPromptFromDraftQuestion,
+  onAddTemplate,
+  onToggleTemplate,
+  onAddSchedule,
+  onSelectFolder,
+  onVerifyOnboarding,
+  onVerifyAudits,
+  onVerifyResponseSheet,
+  onSyncForms,
+  onLoadDemoData,
+  onClearDemoData,
+  onInviteEmailChange,
+  onInviteRoleChange,
+  onInviteUser,
+  onResendInvite,
+  onDeleteInvite,
+  onResyncUsers,
+  onSelectSite,
+  onAddSite,
+  onArchiveSite,
+  standaloneOnboarding = false,
+  hideMasterLocalDemoTools = false,
+  godModeAppInviteEmail,
+  onGodModeAppInviteEmailChange,
+  onSendGodModeAppCompanyInvite,
+  AppIcon,
+  slatePrimaryCtaInteract,
+}: AdminScreenProps) {
+  const adminOnly = !canAccessAdmin(currentUser.role);
+  const masterOnly = currentUser.role !== "Master";
+  const godModeFirstUserInvite =
+    currentUser.role === "Master" &&
+    (companySheetSync?.usersCount ?? 0) === 0 &&
+    invitedUsers.length === 0;
+  const [adminView, setAdminView] = useState<"overview" | "onboarding">(standaloneOnboarding ? "onboarding" : "overview");
+  const [showAdvancedOnboardingActions, setShowAdvancedOnboardingActions] = useState(false);
+  const [pendingAdminScrollTarget, setPendingAdminScrollTarget] = useState<string | null>(null);
+  const onboardingMode =
+    standaloneOnboarding || (canAccessAdminOnboardingWorkspace(currentUser.role) && adminView === "onboarding");
+  const godModeFullVisibility = currentUser.role === "Master";
+  useEffect(() => {
+    if (!pendingAdminScrollTarget) {
+      return;
+    }
+    const targetElement = document.getElementById(pendingAdminScrollTarget);
+    if (targetElement) {
+      targetElement.scrollIntoView({ behavior: "smooth", block: "start" });
+      setPendingAdminScrollTarget(null);
+    }
+  }, [pendingAdminScrollTarget, onboardingMode, adminView, godModeFullVisibility]);
+
+  return (
+    <div className="space-y-4">
+      {(!onboardingMode || godModeFullVisibility) && currentUser.role !== "Master" && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
+        <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-slate-900">Admin &amp; setup</h2>
+            <p className="mt-1 text-sm text-slate-500">Shortcuts to the tools you are allowed to use.</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700">
+              <span className="h-2 w-2 rounded-full bg-blue-500" />
+              Online
+            </div>
+            <div className="rounded-full bg-fuchsia-100 px-2.5 py-1 text-xs font-semibold text-fuchsia-700">{getRoleDisplayName(currentUser.role)}</div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          {[
+            { key: "onboarding", targetId: "admin-user-management", icon: "user", title: "User Management", subtitle: "Invite users and manage roles" },
+            { key: "overview", targetId: "admin-audit-templates", icon: "checklist", title: "Audit Templates", subtitle: "Build and manage audit form templates" },
+            { key: "onboarding", targetId: "admin-maintenance", icon: "sync", title: "Maintenance", subtitle: "Work waiting to sync, export, and reset tools" },
+          ].map((card) => (
+            <button
+              key={card.title}
+              onClick={() => {
+                setAdminView(card.key === "onboarding" ? "onboarding" : "overview");
+                setPendingAdminScrollTarget(card.targetId);
+              }}
+              className="flex min-h-[76px] items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-slate-300 hover:bg-white"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-500">
+                  <AppIcon name={card.icon} className="h-4 w-4" />
+                </span>
+                <span className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-900">{card.title}</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">{card.subtitle}</p>
+                </span>
+              </div>
+              <span className="ml-3 text-sm text-slate-400">{">"}</span>
+            </button>
+          ))}
+        </div>
+        {currentUser.role === "Admin" && (
+          <div className="mt-3 rounded-xl border border-sky-100 bg-sky-50/80 p-3">
+            <button
+              type="button"
+              onClick={onLoadDemoData}
+              className="h-11 rounded-xl border border-sky-200 bg-white px-4 text-sm font-semibold text-sky-900 shadow-sm"
+            >
+              Load Demo Data
+            </button>
+            <button
+              type="button"
+              onClick={onClearDemoData}
+              className="ml-2 h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm"
+            >
+              Clear Demo Data
+            </button>
+            <p className="mt-2 text-xs text-slate-600">
+              Inserts realistic precast H&amp;S sample audits, CAPAs, and sync items in this tablet only — it does not write to linked Google Sheets.
+            </p>
+          </div>
+        )}
+        </section>
+      )}
+
+      {currentUser.role === "Master" && !hideMasterLocalDemoTools && (
+        <section className="rounded-2xl border border-sky-200 bg-sky-50/90 p-4 shadow-sm">
+          <p className="text-sm font-semibold text-sky-950">Local review data</p>
+          <p className="mt-1 text-xs text-sky-900/85">Optional sample payloads for demos — stored on this device only; does not write to linked Google Sheets.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onLoadDemoData}
+              className="h-11 rounded-xl border border-sky-200 bg-white px-4 text-sm font-semibold text-sky-900 shadow-sm"
+            >
+              Load Demo Data
+            </button>
+            <button
+              type="button"
+              onClick={onClearDemoData}
+              className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm"
+            >
+              Clear Demo Data
+            </button>
+          </div>
+        </section>
+      )}
+
+      {masterOnly && currentUser.role !== "Admin" && (
+        <section className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.24)]">
+          <SectionHeader
+            icon="shield"
+            eyebrow="Setup"
+            title="Setup account only"
+            subtitle="Workspace setup, connecting Google, and loading live data are limited to the setup account."
+          />
+          <div className="rounded-[1.5rem] bg-slate-900 p-4">
+            <p className="text-sm font-semibold text-white">This workspace is managed centrally</p>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              Connecting Google, linking the company folder, and loading live data are only available from the setup account.
+            </p>
+          </div>
+        </section>
+      )}
+
+      {!masterOnly && (
+        <section className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.24)]">
+          <SectionHeader
+            icon="spark"
+            eyebrow="New tenant"
+            title="Invite new company (workspace setup)"
+            subtitle="Send a secure in-app link — the recipient creates the Drive workspace and their Admin account."
+          />
+          <div className="rounded-[1.5rem] bg-slate-900 p-4">
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Administrator email</label>
+            <input
+              value={godModeAppInviteEmail}
+              onChange={(event) => onGodModeAppInviteEmailChange(event.target.value)}
+              placeholder="admin@newcompany.com"
+              className="h-12 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 text-sm text-white outline-none focus:border-sky-400"
+            />
+            <button
+              type="button"
+              onClick={onSendGodModeAppCompanyInvite}
+              className={`mt-3 h-11 w-full rounded-2xl bg-slate-100 text-sm font-semibold text-slate-900 ${slatePrimaryCtaInteract}`}
+            >
+              Send company setup link
+            </button>
+          </div>
+        </section>
+      )}
+
+      {currentUser.role === "Master" && (onboardingMode || godModeFullVisibility) && (
+        <section className="rounded-[1.75rem] bg-slate-950 p-5 text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)]">
+          {!standaloneOnboarding && (
+            <div className="mb-3">
+              <button
+                onClick={() => setAdminView("overview")}
+                className="rounded-lg border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/10"
+              >
+                Back to admin overview
+              </button>
+            </div>
+          )}
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white">
+              <AppIcon name="shield" className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Workspace setup</p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight">Set up a new company workspace</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                Complete the steps below to connect Google Drive, link the company folder, and make the app live.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <MiniPill label={backendConfigured ? "Server ready" : "Finish server setup"} active={backendConfigured} />
+            <MiniPill label={googleConnected ? "Google Drive connected" : "Google Drive not connected"} active={googleConnected} />
+            <MiniPill
+              label={selectedFolder ? `${selectedFolder.name} linked` : "Company folder not linked"}
+              active={Boolean(selectedFolder)}
+            />
+            <MiniPill label={syncState === "Synced" ? "App live" : "App not live"} active={syncState === "Synced"} />
+          </div>
+          <div className="mt-5 rounded-[1.5rem] bg-white/6 p-4">
+            <p className="text-sm font-semibold text-white">Setup progress</p>
+            <p className="mt-1 text-sm leading-6 text-slate-300">
+              {!backendConfigured
+                ? "Finish server setup before Google Drive can be connected."
+                : !googleConnected
+                  ? "Step 1: connect Google Drive with the account you use for setup."
+                  : !selectedFolder
+                    ? "Step 2: paste the company Google Drive links below."
+                    : syncState !== "Synced"
+                      ? `Step 3: populate the app using ${selectedFolder.name}.`
+                      : `${selectedFolder.name} is linked and the app is live.`}
+            </p>
+            {selectedFolder && <p className="mt-2 break-all text-xs text-slate-400">{selectedFolder.id}</p>}
+            {googleConnected && (
+              <div className="mt-4 grid gap-3">
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                    Company folder link or ID
+                  </label>
+                  <input
+                    value={folderIdInput}
+                    onChange={(event) => onFolderIdChange(event.target.value)}
+                    placeholder="Paste the company folder link or ID"
+                    className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                    Company master sheet link or ID
+                  </label>
+                  <input
+                    value={masterSheetInput}
+                    onChange={(event) => onMasterSheetChange(event.target.value)}
+                    placeholder="Paste the company master sheet link or ID"
+                    className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                    Audit forms folder link or ID
+                  </label>
+                  <input
+                    value={auditFormsFolderInput}
+                    onChange={(event) => onAuditFormsFolderChange(event.target.value)}
+                    placeholder="Paste the audit forms folder link or ID"
+                    className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                      Evidence folder
+                    </label>
+                    <input
+                      value={evidenceFolderInput}
+                      onChange={(event) => onEvidenceFolderChange(event.target.value)}
+                      placeholder="Optional"
+                      className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                      Health &amp; Safety folder
+                    </label>
+                    <input
+                      value={healthSafetyFolderInput}
+                      onChange={(event) => onHealthSafetyFolderChange(event.target.value)}
+                      placeholder="Recommended for incident reporting"
+                      className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                      Exports folder
+                    </label>
+                    <input
+                      value={exportsFolderInput}
+                      onChange={(event) => onExportsFolderChange(event.target.value)}
+                      placeholder="Optional"
+                      className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                    Admin notes folder
+                  </label>
+                  <input
+                    value={adminNotesFolderInput}
+                    onChange={(event) => onAdminNotesFolderChange(event.target.value)}
+                    placeholder="Optional"
+                    className="h-12 w-full rounded-2xl border border-white/10 bg-slate-950/20 px-4 text-sm text-white outline-none transition focus:border-white/30"
+                  />
+                </div>
+              </div>
+            )}
+            <div className="mt-4 space-y-3">
+              <button
+                onClick={onOneClickGoogleOnboarding}
+                disabled={adminOnly || !backendConfigured || folderInspectionLoading}
+                className={[
+                  "h-12 rounded-2xl px-5 text-sm font-semibold transition",
+                  adminOnly || !backendConfigured || folderInspectionLoading
+                    ? "bg-white/10 text-slate-400"
+                    : "bg-sky-300 text-slate-900 shadow-[0_14px_28px_rgba(14,165,233,0.25)] active:scale-[0.99]",
+                ].join(" ")}
+              >
+                Run workspace setup (one click)
+              </button>
+              <div className="flex flex-wrap items-center gap-3">
+                {googleConnected && (
+                  <button
+                    onClick={onGoogleDisconnect}
+                    disabled={adminOnly}
+                    className={[
+                      "h-11 rounded-2xl px-4 text-sm font-semibold transition",
+                      adminOnly
+                        ? "bg-white/10 text-slate-400"
+                        : "border border-white/20 bg-transparent text-white hover:bg-white/10",
+                    ].join(" ")}
+                  >
+                    Disconnect Google
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedOnboardingActions((current) => !current)}
+                  className="h-11 rounded-2xl border border-white/20 px-4 text-sm font-semibold text-white transition hover:bg-white/10"
+                >
+                  {showAdvancedOnboardingActions ? "Hide advanced" : "Show advanced"}
+                </button>
+              </div>
+              {showAdvancedOnboardingActions && (
+                <div className="flex flex-wrap gap-3 rounded-2xl border border-white/10 bg-slate-950/20 p-3">
+                  <button
+                    onClick={!googleConnected ? onGoogleConnect : onAddFolder}
+                    disabled={adminOnly || !backendConfigured || googleStatusLoading}
+                    className={[
+                      "h-12 rounded-2xl px-5 text-sm font-semibold transition",
+                      adminOnly || !backendConfigured || googleStatusLoading
+                        ? "bg-white/10 text-slate-400"
+                        : "bg-white text-slate-900 shadow-[0_14px_28px_rgba(15,23,42,0.18)] active:scale-[0.99]",
+                    ].join(" ")}
+                  >
+                    {googleStatusLoading
+                      ? "Checking Google Drive..."
+                      : !googleConnected
+                        ? "Connect Google Drive"
+                        : "Continue workspace setup"}
+                  </button>
+                  {selectedFolder && (
+                    <a
+                      href={`https://drive.google.com/drive/folders/${selectedFolder.id}`}
+                      className="inline-flex h-12 items-center rounded-2xl border border-white/20 px-5 text-sm font-semibold text-white transition hover:bg-white/10"
+                    >
+                      Open folder in Google Drive
+                    </a>
+                  )}
+                  <button
+                    onClick={onSyncForms}
+                    disabled={adminOnly || !backendConfigured || !selectedFolder || folderInspectionLoading}
+                    className={[
+                      "h-12 rounded-2xl px-5 text-sm font-semibold transition",
+                      adminOnly || !backendConfigured || !selectedFolder || folderInspectionLoading
+                        ? "bg-white/10 text-slate-400"
+                        : "bg-orange-500 text-white shadow-[0_14px_28px_rgba(249,115,22,0.35)] active:scale-[0.99]",
+                    ].join(" ")}
+                  >
+                    {folderInspectionLoading
+                      ? "Checking links..."
+                      : syncState === "Synced"
+                        ? "Populate app again"
+                        : "Populate app"}
+                  </button>
+                </div>
+              )}
+            </div>
+            {(folderInspection || selectedFolder) && (
+              <div className="mt-4 rounded-[1.25rem] border border-white/10 bg-slate-950/20 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-white">Company folder check</p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {folderInspection
+                        ? `Checked ${folderInspection.folder.name}`
+                        : selectedFolder
+                          ? `Waiting to check ${selectedFolder.name}`
+                          : "No company folder checked yet"}
+                    </p>
+                  </div>
+                  {folderInspection && (
+                    <div
+                      className={[
+                        "rounded-full px-3 py-1 text-xs font-semibold",
+                        folderInspection.blockingItems.length === 0
+                          ? "bg-blue-500/12 text-blue-300"
+                          : "bg-amber-500/12 text-amber-300",
+                      ].join(" ")}
+                    >
+                      {folderInspection.blockingItems.length === 0 ? "Ready to populate" : "Blocked"}
+                    </div>
+                  )}
+                </div>
+
+                {folderInspection && (
+                  <>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      <FolderCheckRow label="Company Master Sheet" ok={folderInspection.checks.masterSheet} />
+                      <FolderCheckRow
+                        label={folderInspection.checks.auditFormsFolder ? "Audit forms folder" : "Audit forms folder (recommended)"}
+                        ok={folderInspection.checks.auditFormsFolder}
+                      />
+                      <FolderCheckRow
+                        label={
+                          folderInspection.checks.masterDataFolder || !folderInspection.checks.masterSheet
+                            ? "Master sheet link"
+                            : "Master sheet link (recommended)"
+                        }
+                        ok={folderInspection.checks.masterDataFolder || folderInspection.checks.masterSheet}
+                      />
+                      <FolderCheckRow label="Evidence folder (recommended)" ok={folderInspection.checks.evidenceFolder} />
+                      <FolderCheckRow label="Exports folder (recommended)" ok={folderInspection.checks.exportsFolder} />
+                      <FolderCheckRow label="Admin notes folder (recommended)" ok={folderInspection.checks.adminNotesFolder} />
+                    </div>
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-2xl bg-white/6 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Master sheet</p>
+                        <p className="mt-2 text-sm font-semibold text-white">
+                          {folderInspection.masterSheet?.name || "Not found"}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-400">
+                          {folderInspection.masterSheet?.tabs.length
+                            ? folderInspection.masterSheet.tabs.join(", ")
+                            : "No tabs available"}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl bg-white/6 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Audit forms</p>
+                        <p className="mt-2 text-sm font-semibold text-white">
+                          {folderInspection.auditForms.length} form{folderInspection.auditForms.length === 1 ? "" : "s"} found
+                        </p>
+                        <p className="mt-1 text-xs text-slate-400">
+                          {folderInspection.auditForms.length > 0
+                            ? folderInspection.auditForms.slice(0, 3).map((item) => item.name).join(", ")
+                            : "No audit forms added yet"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {folderInspection.blockingItems.length > 0 && (
+                      <div className="mt-4 rounded-2xl bg-amber-500/10 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300">Blocking items</p>
+                        <p className="mt-2 text-sm text-amber-100">{folderInspection.blockingItems.join(" • ")}</p>
+                      </div>
+                    )}
+
+                    {folderInspection.recommendedItems.length > 0 && (
+                      <div className="mt-4 rounded-2xl bg-slate-900/30 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">Recommended structure</p>
+                        <p className="mt-2 text-sm text-slate-200">{folderInspection.recommendedItems.join(" • ")}</p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {onboardingMode && (
+        <>
+          <section id="admin-user-management" className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-sm">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                  {currentUser.role === "Master" ? "Setup" : "Company admin"}
+                </p>
+                <h3 className="mt-1 text-base font-semibold text-white">Company setup</h3>
+                <p className="text-sm text-slate-300">
+                  Use this section for one-time workspace setup before you invite users.
+                </p>
+              </div>
+              <div className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 ring-1 ring-slate-700">
+                {syncState === "Synced" ? "Company live" : "Setup in progress"}
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 1</p>
+                <p className="mt-1 text-sm font-semibold text-white">Connect Google</p>
+                <p className="mt-1 text-xs text-slate-300">
+                  {backendConfigured && googleConnected ? "Connected" : "Finish server setup, then connect Google Drive from the steps above."}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 2</p>
+                <p className="mt-1 text-sm font-semibold text-white">Link company workspace</p>
+                <p className="mt-1 text-xs text-slate-300">
+                  {selectedFolder ? `${selectedFolder.name} linked` : "Link the company folder and master sheet."}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 3</p>
+                <p className="mt-1 text-sm font-semibold text-white">Populate app</p>
+                <p className="mt-1 text-xs text-slate-300">
+                  {syncState === "Synced" ? "App has been populated from company sheet." : "Run workspace setup (one click)."}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Step 4</p>
+                <p className="mt-1 text-sm font-semibold text-white">Check everything is ready</p>
+                <p className="mt-1 text-xs text-slate-300">
+                  {folderInspection?.blockingItems.length ? "Resolve blocking items shown below." : "Ready for user invites."}
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-[1.75rem] border border-slate-800 bg-slate-950 p-4 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-semibold text-white">User management</h3>
+                <p className="text-sm text-slate-300">
+                  {currentUser.role === "Master"
+                    ? "The setup account can create Admin, Manager, and Auditor users."
+                    : currentUser.role === "Admin"
+                      ? "Admins can create Admin, Manager, and Auditor users."
+                      : "User creation is not available on this account."}
+                </p>
+              </div>
+              <div className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 ring-1 ring-slate-700">
+                {getRoleDisplayName(currentUser.role)}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded-[1.5rem] border border-slate-800 bg-slate-900 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Site access</p>
+                    <p className="text-sm text-slate-300">Select a site context or add a new site for this company.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onAddSite}
+                    className="h-10 rounded-xl border border-slate-700 bg-slate-950 px-3 text-xs font-semibold text-slate-200"
+                  >
+                    Add site
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => onSelectSite("")}
+                    className={[
+                      "w-full rounded-xl border px-3 py-2 text-left text-sm",
+                      selectedSiteId === ""
+                        ? "border-[var(--bert-signal-orange)] bg-[rgba(249,115,22,0.14)] text-white"
+                        : "border-slate-800 bg-slate-950 text-slate-300",
+                    ].join(" ")}
+                  >
+                    All sites
+                  </button>
+                  {sites
+                    .filter((site) => site.active)
+                    .map((site) => (
+                      <div key={site.id} className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onSelectSite(site.id)}
+                          className={[
+                            "flex-1 rounded-xl border px-3 py-2 text-left text-sm",
+                            selectedSiteId === site.id
+                              ? "border-[var(--bert-signal-orange)] bg-[rgba(249,115,22,0.14)] text-white"
+                              : "border-slate-800 bg-slate-950 text-slate-300",
+                          ].join(" ")}
+                        >
+                          {site.name}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onArchiveSite(site.id)}
+                          className="rounded-xl border border-rose-300 bg-rose-50 px-2 py-2 text-xs font-semibold text-rose-700"
+                        >
+                          Archive
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              <div className="rounded-[1.5rem] border border-slate-800 bg-slate-900 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Assign users to sites</p>
+                <p className="mt-1 text-sm text-slate-300">
+                  For Managers and Auditors: leave all boxes unchecked to allow every active site. Check one or more sites to restrict their workspace to only those sites.
+                </p>
+                <div className="mt-4 space-y-4">
+                  {reportUsers
+                    .filter((user) => user.role !== "Master")
+                    .map((user) => {
+                      const assignmentKey = normalizeIdentity(user.email);
+                      const assignedIds = userSiteAssignments[assignmentKey] ?? [];
+                      const activeSites = sites.filter((site) => site.active);
+                      return (
+                        <div key={user.email} className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+                          <div className="flex flex-wrap items-baseline justify-between gap-2">
+                            <p className="text-sm font-semibold text-white">{user.email}</p>
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{user.role}</span>
+                          </div>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            {activeSites.map((site) => {
+                              const checked = assignedIds.includes(site.id);
+                              return (
+                                <label
+                                  key={`${user.email}-${site.id}`}
+                                  className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-2 py-2 text-sm text-slate-200"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => onToggleUserSiteAssignment(user.email, site.id)}
+                                    className="h-4 w-4 shrink-0 rounded border-slate-600"
+                                  />
+                                  <span className="min-w-0 truncate">{site.name}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+
+              <div className="rounded-[1.5rem] border border-slate-800 bg-slate-900 p-4">
+                <div className="grid gap-3">
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">User email</label>
+                    <input
+                      value={inviteEmailInput}
+                      onChange={(event) => onInviteEmailChange(event.target.value)}
+                      placeholder="name@company.com"
+                      className="h-12 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 text-sm text-white outline-none transition focus:border-sky-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Role to create</label>
+                    {godModeFirstUserInvite ? (
+                      <div className="h-12 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 text-sm font-semibold leading-[3rem] text-slate-200">
+                        Admin (first company user)
+                      </div>
+                    ) : (
+                      <select
+                        value={inviteRoleInput}
+                        onChange={(event) => onInviteRoleChange(event.target.value as Role)}
+                        className="h-12 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 text-sm text-white outline-none transition focus:border-sky-400"
+                      >
+                        {creatableRoles.map((role) => (
+                          <option key={role} value={role}>
+                            {role}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {creatableRoles.map((role) => (
+                    <MiniPill key={role} label={`Can create ${role}`} active />
+                  ))}
+                </div>
+                <button
+                  onClick={onInviteUser}
+                  className={`mt-4 h-12 w-full rounded-2xl bg-slate-900 text-sm font-semibold text-white active:scale-[0.99] ${slatePrimaryCtaInteract}`}
+                >
+                  Send invite link
+                </button>
+                <button
+                  onClick={onResyncUsers}
+                  className="mt-2 h-11 w-full rounded-2xl border border-slate-700 bg-slate-950 text-sm font-semibold text-slate-200 transition hover:bg-slate-900"
+                >
+                  Re-sync users from company sheet
+                </button>
+              </div>
+
+              {invitedUsers.length === 0 ? (
+                <EmptyPanel
+                  title="No invites sent yet"
+                  text="Nothing listed until you send invite links. Use the form above for roles you are allowed to create."
+                />
+              ) : (
+                <div className="space-y-3">
+                  {invitedUsers.slice(0, 5).map((invite) => (
+                    <div key={invite.id} className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-white">{invite.email}</p>
+                        <p className="truncate text-xs text-slate-300">
+                          {invite.role} • sent by {invite.invitedBy} • {invite.sentAt}
+                        </p>
+                        {invite.senderEmail && <p className="truncate text-xs text-slate-300">From {invite.senderEmail}</p>}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {invite.appOnboardingUrl && (
+                          <a
+                            href={invite.appOnboardingUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center justify-center rounded-xl border border-sky-400/50 bg-sky-500/15 px-3 py-2 text-xs font-semibold text-sky-200 no-underline"
+                          >
+                            Open link
+                          </a>
+                        )}
+                        {invite.mailtoUrl && (
+                          <a href={invite.mailtoUrl} className={`inline-flex items-center justify-center rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white no-underline ${slatePrimaryCtaInteract}`}>
+                            Open email
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => onResendInvite(invite)}
+                          className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                        >
+                          Resend
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteInvite(invite)}
+                          className="inline-flex items-center justify-center rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700"
+                        >
+                          Delete
+                        </button>
+                        <div className="rounded-full bg-blue-500/12 px-3 py-1 text-xs font-semibold text-blue-800">
+                          {invite.status}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          {onboardingMode && (
+            <>
+              <section id="admin-maintenance" className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <SectionHeader
+            icon="spark"
+            eyebrow="Live delivery"
+            title="Live delivery controls"
+            subtitle="Enable browser alerts and keep the company workspace ready for live notifications."
+          />
+          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+            {notificationsEnabled ? "Browser alerts on" : "Browser alerts off"}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={onRequestNotifications}
+            className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
+          >
+            Enable browser notifications
+          </button>
+          <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            Invite emails use the in-app invite page. If email sending is not configured, use the mail draft or copy the link from the toast.
+          </div>
+        </div>
+              </section>
+
+              <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <SectionHeader
+            icon="chart"
+            eyebrow="Data sync"
+            title="Company sheet sync"
+            subtitle="Shows what has been pulled from the company master sheet and whether the live company sync is healthy."
+          />
+          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+            {companySheetSync ? "Synced" : "Waiting"}
+          </div>
+        </div>
+        {companySheetSync ? (
+          <div className="space-y-3">
+            <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-semibold text-slate-900">{companySheetSync.sheetName}</p>
+              <p className="mt-1 text-xs text-slate-500">Last synced {companySheetSync.lastSyncedAt}</p>
+              <p className="mt-2 text-xs text-slate-500">{companySheetSync.tabs.join(", ")}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <MiniMetric label="Users tab rows" value={String(companySheetSync.usersCount)} />
+              <MiniMetric label="Schedule rows" value={String(companySheetSync.schedulesCount)} />
+              <MiniMetric label="Onboarding rows" value={String(companySheetSync.onboardingCount)} />
+              <MiniMetric label="Action rows" value={String(companySheetSync.actionsCount)} />
+            </div>
+          </div>
+        ) : (
+          <EmptyPanel
+            title="Company sheet not synced yet"
+            text="Setup needed — link a company folder with a master sheet in Admin, then populate so row counts and tabs can show here."
+          />
+        )}
+              </section>
+
+              <section className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <SectionHeader
+            icon="shield"
+            eyebrow="Workspace health"
+            title="Check workspace"
+            subtitle="Checks tabs, sheet format, and linked folders before you rely on this workspace in the field."
+          />
+          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+            {workspaceValidation?.ok ? "Healthy" : "Check needed"}
+          </div>
+        </div>
+        {workspaceValidation ? (
+          <div className="space-y-3">
+            <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-semibold text-slate-900">Sheet format</p>
+              <p className="mt-1 text-sm text-slate-500">
+                On sheet: {workspaceValidation.schemaVersion || "none"} • this app expects {workspaceValidation.currentSchemaVersion}
+              </p>
+              {workspaceValidation.warnings.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {workspaceValidation.warnings.map((warning) => (
+                    <div key={warning} className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                      {warning}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <FolderCheckRow label="Company folder" ok={workspaceValidation.folders.companyFolder} />
+              <FolderCheckRow label="Audit forms folder" ok={workspaceValidation.folders.auditFormsFolder} />
+              <FolderCheckRow label="Evidence folder" ok={workspaceValidation.folders.evidenceFolder} />
+              <FolderCheckRow label="Exports folder" ok={workspaceValidation.folders.exportsFolder} />
+              <FolderCheckRow label="Admin notes folder" ok={workspaceValidation.folders.adminNotesFolder} />
+              <FolderCheckRow label="Actions tab" ok={workspaceValidation.tabs.Actions} />
+            </div>
+            {workspaceValidation.missingTabs.length > 0 && (
+              <div className="rounded-[1.5rem] border border-rose-200 bg-rose-50 p-4">
+                <p className="text-sm font-semibold text-rose-900">Missing tabs</p>
+                <p className="mt-2 text-sm text-rose-700">{workspaceValidation.missingTabs.join(", ")}</p>
+              </div>
+            )}
+            {Object.entries(workspaceValidation.missingColumns).some(([, columns]) => columns.length > 0) && (
+              <div className="rounded-[1.5rem] border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm font-semibold text-amber-900">Missing columns</p>
+                <div className="mt-2 space-y-2">
+                  {Object.entries(workspaceValidation.missingColumns)
+                    .filter(([, columns]) => columns.length > 0)
+                    .map(([tab, columns]) => (
+                      <p key={tab} className="text-sm text-amber-700">
+                        {tab}: {columns.join(", ")}
+                      </p>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <EmptyPanel
+            title="No workspace check yet"
+            text="After you link folders, tap Check workspace to confirm tabs, columns, and folder links before go-live."
+          />
+        )}
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button onClick={onValidateWorkspace} className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}>
+            {workspaceValidationLoading ? "Checking..." : "Check workspace"}
+          </button>
+          <button onClick={onRepairWorkspace} className="h-12 rounded-2xl bg-blue-50 px-5 text-sm font-semibold text-blue-800">
+            Fix workspace
+          </button>
+        </div>
+              </section>
+
+              {syncState === "Synced" && selectedFolder && (
+                <section className="rounded-[1.75rem] border border-blue-200 bg-gradient-to-b from-blue-50 to-white p-4 shadow-[0_16px_36px_rgba(29,78,216,0.12)]">
+          <SectionHeader
+            icon="check"
+            eyebrow="Go live complete"
+            title={`${selectedFolder.name} is now live`}
+            subtitle="This company workspace has been linked, checked, and populated from Google Drive."
+          />
+          <div className="grid gap-3 sm:grid-cols-3">
+            <QuickActionTile title="Audit forms" value={String(folderInspection?.auditForms.length ?? 0)} caption="Loaded from Drive" />
+            <QuickActionTile title="Users" value={String(companySheetSync?.usersCount ?? 0)} caption="Synced from master sheet" />
+            <QuickActionTile title="Schedules" value={String(companySheetSync?.schedulesCount ?? 0)} caption="Ready in app" />
+          </div>
+                </section>
+              )}
+            </>
+          )}
+
+      <section id="admin-audit-templates" className="rounded-[1.75rem] border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4 shadow-[0_16px_36px_rgba(15,23,42,0.08)]">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <SectionHeader
+            icon="clipboard"
+            eyebrow="Build and activate"
+            title="Audit template builder"
+            subtitle="Create local templates, activate or pause them, and combine them with Google Drive audit forms."
+          />
+          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+            {templates.filter((template) => template.active).length} active
+          </div>
+        </div>
+        <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+          <div className="grid gap-3">
+            <input
+              value={templateNameInput}
+              onChange={(event) => onTemplateNameChange(event.target.value)}
+              placeholder="Template name"
+              className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+            />
+            <textarea
+              value={templateQuestionInput}
+              onChange={(event) => onTemplateQuestionChange(event.target.value)}
+              placeholder="Write a question, then add it to the builder"
+              className="min-h-[7rem] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+            />
+            <select
+              value={templateQuestionTypeInput}
+              onChange={(event) => onTemplateQuestionTypeChange(event.target.value as AuditQuestion["fieldType"])}
+              className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+            >
+              <option value="Traffic light">Traffic light</option>
+              <option value="Pass / Fail">Pass / Fail</option>
+              <option value="Text note">Text note</option>
+              <option value="Photo evidence">Photo evidence</option>
+            </select>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              onClick={onAddTemplateQuestion}
+              className="h-12 rounded-2xl bg-slate-200 px-5 text-sm font-semibold text-slate-900"
+            >
+              Add question
+            </button>
+            <button
+              onClick={onAddTemplate}
+              className={`h-12 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white ${slatePrimaryCtaInteract}`}
+            >
+              Create template
+            </button>
+          </div>
+          {templateDraftQuestions.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {templateDraftQuestions.map((question, index) => (
+                <div key={question.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {index + 1}. {question.text}
+                      </p>
+                      <p className="truncate text-xs text-slate-500">{question.fieldType}</p>
+                    </div>
+                    <button
+                      onClick={() => onRemoveTemplateQuestion(question.id)}
+                      className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    {(["pass", "nc", "fail"] as Answer[]).map((answer) => (
+                      <div key={`${question.id}-${answer}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2">
+                        <button
+                          type="button"
+                          onClick={() => onAddAnswerPromptToDraftQuestion(question.id, answer)}
+                          className="w-full rounded-lg bg-white px-2 py-1.5 text-xs font-semibold text-slate-700"
+                        >
+                          Do you need a prompt for this answer?
+                        </button>
+                        <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{answer.toUpperCase()}</p>
+                        <div className="mt-1 space-y-1">
+                          {(question.answerPrompts?.[answer] || []).map((prompt, promptIndex) => (
+                            <div key={`${question.id}-${answer}-${promptIndex}`} className="flex items-start justify-between gap-2 rounded-lg bg-white px-2 py-1.5">
+                              <p className="text-xs text-slate-700">{prompt}</p>
+                              <button
+                                type="button"
+                                onClick={() => onRemoveAnswerPromptFromDraftQuestion(question.id, answer, promptIndex)}
+                                className="text-[10px] font-semibold text-rose-600"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="mt-4 space-y-3">
+          {templates.length === 0 ? (
+            <EmptyPanel
+              title="No templates yet"
+              text="Nothing to pick from until Drive forms or local templates load into this workspace after sync."
+            />
+          ) : (
+            templates.slice(0, 8).map((template) => (
+              <div key={template.id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-900">{template.name}</p>
+                  <p className="truncate text-xs text-slate-500">
+                    {template.source} • {template.questions.length} questions
+                  </p>
+                </div>
+                <button
+                  onClick={() => onToggleTemplate(template.id)}
+                  className={[
+                    "rounded-xl px-3 py-2 text-xs font-semibold",
+                    template.active ? "bg-blue-500/12 text-blue-800" : "bg-slate-200 text-slate-700",
+                  ].join(" ")}
+                >
+                  {template.active ? "Active" : "Inactive"}
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+        </>
+      )}
+    </div>
+  );
+}
+
+function QuickActionTile({
+  title,
+  value,
+  caption,
+}: {
+  title: string;
+  value: string;
+  caption: string;
+}) {
+  return (
+    <div className="rounded-[1.45rem] border border-slate-200/80 bg-white px-4 py-4 shadow-[0_12px_28px_rgba(15,23,42,0.06)]">
+      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">{title}</p>
+      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">{value}</p>
+      <p className="mt-1 text-sm text-slate-500">{caption}</p>
+    </div>
+  );
+}
+
+function MiniPill({ label, active }: { label: string; active: boolean }) {
+  return (
+    <div
+      className={[
+        "rounded-full px-3 py-1 text-xs font-semibold",
+        active ? "bg-blue-500/12 text-blue-800" : "bg-slate-100 text-slate-600",
+      ].join(" ")}
+    >
+      {label}
+    </div>
+  );
+}
+
+function FolderCheckRow({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <div className="flex items-center justify-between rounded-2xl bg-white/6 px-3 py-2">
+      <p className="text-sm text-slate-200">{label}</p>
+      <div
+        className={[
+          "rounded-full px-2.5 py-1 text-[11px] font-semibold",
+          ok ? "bg-blue-500/12 text-blue-300" : "bg-amber-500/12 text-amber-300",
+        ].join(" ")}
+      >
+        {ok ? "Found" : "Missing"}
+      </div>
+    </div>
+  );
+}
+

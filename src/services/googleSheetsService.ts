@@ -1,3 +1,5 @@
+import { apiUrl } from "../config/apiBase";
+
 type JsonResponse = Record<string, unknown> & { ok?: boolean; error?: string };
 
 async function parseResponse<T extends JsonResponse>(response: Response): Promise<T> {
@@ -8,10 +10,11 @@ async function parseResponse<T extends JsonResponse>(response: Response): Promis
   return payload;
 }
 
-async function postJson<T extends JsonResponse>(url: string, body: Record<string, unknown>) {
+async function postJson<T extends JsonResponse>(path: string, body: Record<string, unknown>) {
   return parseResponse<T>(
-    await fetch(url, {
+    await fetch(apiUrl(path), {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
