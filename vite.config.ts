@@ -1,5 +1,5 @@
 import type { ServerResponse } from "node:http";
-import { defineConfig, type ProxyOptions } from "vite";
+import { defineConfig, loadEnv, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -46,16 +46,33 @@ const backendProxy: ProxyOptions = {
   },
 };
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  server: {
-    allowedHosts: true,
-    host: viteDevHost(),
-    port: 5173,
-    strictPort: false,
-    proxy: {
-      "/api": backendProxy,
-      "/auth": backendProxy,
+/** Legacy template display name — must not appear in production bundles; normalize to default. */
+function sanitizeViteAppName(mode: string, cwd: string): string {
+  const loaded = loadEnv(mode, cwd, "");
+  const raw = String(loaded.VITE_APP_NAME ?? "").trim();
+  if (raw.toLowerCase() === "audit app") {
+    return "";
+  }
+  return raw;
+}
+
+export default defineConfig(({ mode }) => {
+  const sanitizedViteAppName = sanitizeViteAppName(mode, process.cwd());
+
+  return {
+    plugins: [react(), tailwindcss()],
+    define: {
+      "import.meta.env.VITE_APP_NAME": JSON.stringify(sanitizedViteAppName),
     },
-  },
+    server: {
+      allowedHosts: true,
+      host: viteDevHost(),
+      port: 5173,
+      strictPort: false,
+      proxy: {
+        "/api": backendProxy,
+        "/auth": backendProxy,
+      },
+    },
+  };
 });

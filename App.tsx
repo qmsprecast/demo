@@ -590,7 +590,13 @@ type AuditCompletionSummaryState = {
   syncLabel: string;
 };
 
-const companyName = (import.meta.env.VITE_APP_NAME || "bert.").trim();
+const DEFAULT_APP_DISPLAY_NAME = "bert.";
+/** Short product name in shell chrome, notifications, and `document.title`. Override with `VITE_APP_NAME` (e.g. white-label). */
+function resolveAppDisplayNameFromEnv(): string {
+  const raw = String(import.meta.env.VITE_APP_NAME ?? "").trim();
+  return raw || DEFAULT_APP_DISPLAY_NAME;
+}
+const companyName = resolveAppDisplayNameFromEnv();
 const PRODUCT_TAGLINE = "Business. Evaluate. Report. Tool.";
 function isDemoRoleSwitchEnabled() {
   const rawValue = String(import.meta.env.VITE_ENABLE_DEMO_ROLE_SWITCH || "").trim().toLowerCase();
@@ -615,19 +621,22 @@ const ACTION_DUE_DAYS_BY_SEVERITY: Record<RiskLevel, number> = {
 const isDemoLoginEnabled = import.meta.env.DEV === true || import.meta.env.VITE_ENABLE_DEMO_LOGIN === "true";
 const GOD_MODE_USERNAME = (import.meta.env.VITE_GODMODE_USERNAME || "master").trim().toLowerCase();
 
+/** Demo passwords come only from env — never hard-coded — so production bundles stay clean. Set in `.env.local` for dev. */
+const DEMO_USER_PASSWORD = String(import.meta.env.VITE_DEMO_USER_PASSWORD ?? "").trim();
+const GODMODE_PASSWORD = String(import.meta.env.VITE_GODMODE_PASSWORD ?? "").trim();
+
 const users: User[] = isDemoLoginEnabled
   ? [
-      {
-        username: GOD_MODE_USERNAME,
-        password:
-          String(import.meta.env.VITE_GODMODE_PASSWORD || "").trim() ||
-          (import.meta.env.DEV === true ? "demo" : ""),
-        role: "Master",
-        name: "System Setup",
-      },
-      { username: "admin", password: "demo", role: "Admin", name: "Audit Control" },
-      { username: "manager", password: "demo", role: "Manager", name: "James Preston" },
-      { username: "tom", password: "demo", role: "Auditor", name: "Tom Hughes" },
+      ...(GODMODE_PASSWORD
+        ? [{ username: GOD_MODE_USERNAME, password: GODMODE_PASSWORD, role: "Master" as const, name: "System Setup" }]
+        : []),
+      ...(DEMO_USER_PASSWORD
+        ? [
+            { username: "admin", password: DEMO_USER_PASSWORD, role: "Admin" as const, name: "Audit Control" },
+            { username: "manager", password: DEMO_USER_PASSWORD, role: "Manager" as const, name: "James Preston" },
+            { username: "tom", password: DEMO_USER_PASSWORD, role: "Auditor" as const, name: "Tom Hughes" },
+          ]
+        : []),
     ]
   : [];
 
@@ -1987,22 +1996,6 @@ function parseRole(value: string): Role | null {
   return null;
 }
 
-function parseCompanyConfigPasswords(records: Record<string, string>[]) {
-  const out: Record<string, string> = {};
-  for (const row of records) {
-    const key = String(row.Key || row.key || "").trim();
-    const val = String(row.Value || row.value || "").trim();
-    if (!key.toLowerCase().startsWith("userauth.") || !val) {
-      continue;
-    }
-    const emailKey = key.slice("UserAuth.".length).trim();
-    if (emailKey) {
-      out[normalizeIdentity(emailKey)] = val;
-    }
-  }
-  return out;
-}
-
 function parseCompanySheetUsers(records: Record<string, string>[]) {
   return records
     .map((record, index) => {
@@ -2779,7 +2772,6 @@ function App() {
   const [inviteRoleInput, setInviteRoleInput] = useState<Role>("Manager");
   const [invitedUsers, setInvitedUsers] = useState<UserInvite[]>(storedWorkspaceState?.invitedUsers || []);
   const [godModeAppInviteEmail, setGodModeAppInviteEmail] = useState("");
-  const [companyAuthPasswords, setCompanyAuthPasswords] = useState<Record<string, string>>({});
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [companySheetSync, setCompanySheetSync] = useState<CompanySheetSyncStatus | null>(storedWorkspaceState?.companySheetSync || null);
   const [selectedReportTemplate, setSelectedReportTemplate] = useState<ReportTemplateType>("Executive summary");
@@ -3241,12 +3233,13 @@ function App() {
   }, [onboardingRecords]);
 
   const loginUsers = useMemo(() => {
+    const demoOrDev = import.meta.env.DEV === true || import.meta.env.VITE_ENABLE_DEMO_LOGIN === "true";
     const invitedLoginUsers = invitedUsers.map((invite) => ({
       username: invite.email.toLowerCase(),
-      password:
-        companyAuthPasswords[normalizeIdentity(invite.email)] ||
-        onboardingPasswordByEmail.get(normalizeIdentity(invite.email)) ||
-        (import.meta.env.DEV === true || import.meta.env.VITE_ENABLE_DEMO_LOGIN === "true" ? "demo" : ""),
+      password: demoOrDev
+        ? onboardingPasswordByEmail.get(normalizeIdentity(invite.email)) ||
+          String(import.meta.env.VITE_DEMO_USER_PASSWORD ?? "").trim()
+        : "",
       role: invite.role,
       name: invite.email,
     }));
@@ -3255,7 +3248,7 @@ function App() {
       (user, index, list) =>
         list.findIndex((item) => item.username === user.username && item.role === user.role) === index,
     );
-  }, [invitedUsers, onboardingPasswordByEmail, companyAuthPasswords]);
+  }, [invitedUsers, onboardingPasswordByEmail, users]);
 
   const availableScheduleAudits = useMemo(() => {
     const templateOptions = templates
@@ -3623,42 +3616,117 @@ function App() {
   const shellPreviewClass = previewOrientation === "landscape" ? "qms-force-landscape" : "";
 
   useEffect(() => {
-    const storedUser = window.localStorage.getItem(userStorageKey);
-    if (!storedUser) {
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(storedUser) as User;
-      const matchedUser = loginUsers.find(
-        (user) =>
-          user.username === parsed.username &&
-          user.role === parsed.role &&
-          user.name === parsed.name,
-      );
-
-      if (matchedUser) {
-        setCurrentUser(matchedUser);
-        setAccountNameInput(matchedUser.name);
-        setAccountPhotoUrl(getStoredProfilePhoto(matchedUser));
-        try {
-          if (matchedUser.role === "Master" && window.localStorage.getItem(masterCompanySetupSessionKey) === "1") {
-            setGodCompanySetupSession(true);
-          } else {
-            if (matchedUser.role !== "Master") {
-              window.localStorage.removeItem(masterCompanySetupSessionKey);
+    let cancelled = false;
+    (async () => {
+      try {
+        const mr = await fetch("/api/auth/master/session", { credentials: "include" });
+        const mp = (await parseJsonApiResponse(mr)) as {
+          ok?: boolean;
+          operator?: { email: string; name: string };
+        };
+        if (cancelled) {
+          return;
+        }
+        if (mr.ok && mp.ok && mp.operator) {
+          const masterUser: User = {
+            username: String(mp.operator.email).toLowerCase(),
+            password: "",
+            role: "Master",
+            name: mp.operator.name || mp.operator.email,
+          };
+          setCurrentUser(masterUser);
+          setAccountNameInput(masterUser.name);
+          setAccountPhotoUrl(getStoredProfilePhoto(masterUser));
+          try {
+            if (window.localStorage.getItem(masterCompanySetupSessionKey) === "1") {
+              setGodCompanySetupSession(true);
+            } else {
+              setGodCompanySetupSession(false);
             }
+          } catch {
             setGodCompanySetupSession(false);
           }
-        } catch {
-          setGodCompanySetupSession(false);
+          window.localStorage.setItem(userStorageKey, JSON.stringify(masterUser));
+          return;
         }
-      } else {
+      } catch {
+        /* fall through to company session */
+      }
+
+      try {
+        const cr = await fetch("/api/auth/company/session", { credentials: "include" });
+        const cp = (await parseJsonApiResponse(cr)) as {
+          ok?: boolean;
+          user?: { email: string; role: Role; name: string };
+        };
+        if (cancelled) {
+          return;
+        }
+        if (cr.ok && cp.ok && cp.user?.email && cp.user?.role) {
+          const companyUser: User = {
+            username: String(cp.user.email).toLowerCase(),
+            password: "",
+            role: cp.user.role,
+            name: cp.user.name || cp.user.email,
+          };
+          setCurrentUser(companyUser);
+          setAccountNameInput(companyUser.name);
+          setAccountPhotoUrl(getStoredProfilePhoto(companyUser));
+          try {
+            window.localStorage.removeItem(masterCompanySetupSessionKey);
+            setGodCompanySetupSession(false);
+          } catch {
+            setGodCompanySetupSession(false);
+          }
+          window.localStorage.setItem(userStorageKey, JSON.stringify(companyUser));
+          return;
+        }
+      } catch {
+        /* fall through to localStorage */
+      }
+
+      const storedUser = window.localStorage.getItem(userStorageKey);
+      if (!storedUser) {
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(storedUser) as User;
+        const matchedUser = loginUsers.find(
+          (user) =>
+            user.username === parsed.username &&
+            user.role === parsed.role &&
+            user.name === parsed.name,
+        );
+
+        if (matchedUser) {
+          setCurrentUser(matchedUser);
+          setAccountNameInput(matchedUser.name);
+          setAccountPhotoUrl(getStoredProfilePhoto(matchedUser));
+          try {
+            if (matchedUser.role === "Master" && window.localStorage.getItem(masterCompanySetupSessionKey) === "1") {
+              setGodCompanySetupSession(true);
+            } else {
+              if (matchedUser.role !== "Master") {
+                window.localStorage.removeItem(masterCompanySetupSessionKey);
+              }
+              setGodCompanySetupSession(false);
+            }
+          } catch {
+            setGodCompanySetupSession(false);
+          }
+        } else if (parsed.role === "Master" && parsed.password === "") {
+          window.localStorage.removeItem(userStorageKey);
+        } else {
+          window.localStorage.removeItem(userStorageKey);
+        }
+      } catch {
         window.localStorage.removeItem(userStorageKey);
       }
-    } catch {
-      window.localStorage.removeItem(userStorageKey);
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [loginUsers]);
 
   useEffect(() => {
@@ -4307,11 +4375,6 @@ function App() {
         return [...remaining, ...parseCompanySheetActions(payload.data.Actions ?? [], folderId)];
       });
 
-      setCompanyAuthPasswords((current) => ({
-        ...current,
-        ...parseCompanyConfigPasswords(payload.data.Config ?? []),
-      }));
-
       return payload;
     } catch (error) {
       setCompanySheetSync(null);
@@ -4381,11 +4444,6 @@ function App() {
         const remaining = current.filter((item) => item.companyId !== companyFolderId);
         return [...remaining, ...parseCompanySheetActions(payload.data.Actions ?? [], companyFolderId)];
       });
-
-      setCompanyAuthPasswords((current) => ({
-        ...current,
-        ...parseCompanyConfigPasswords(payload.data.Config ?? []),
-      }));
 
       return payload;
     } catch (error) {
@@ -4559,66 +4617,167 @@ function App() {
       timeZone: scheduleTimeZone,
     }).format(new Date());
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     const loginIdentity = username.trim().toLowerCase();
-    const match = loginUsers.find((user) => {
-      if (user.password !== password) {
-        return false;
+    const pwd = password;
+
+    const applySignedInUser = (match: User) => {
+      if (companySetupLoginPortal && match.role !== "Master") {
+        pushToast("Master only", "Company setup sign-in is only for the workspace setup (Master) account.", "warning");
+        return;
       }
-      if (user.username === loginIdentity) {
-        return true;
-      }
-      if (normalizeIdentity(user.username) === normalizeIdentity(loginIdentity)) {
-        return true;
-      }
-      if (
-        `${user.username}@usebert.co.uk` === loginIdentity ||
-        `${user.username}@qmsprecast.co.uk` === loginIdentity
-      ) {
-        return true;
-      }
-      return false;
-    });
-    if (!match) {
-      pushToast("Sign in failed", "Please check your username and password.", "warning");
-      return;
-    }
-    if (companySetupLoginPortal && match.role !== "Master") {
-      pushToast("Master only", "Company setup sign-in is only for the workspace setup (Master) account.", "warning");
-      return;
-    }
-    try {
-      if (match.role === "Master") {
-        if (companySetupLoginPortal) {
-          window.localStorage.setItem(masterCompanySetupSessionKey, "1");
-          setGodCompanySetupSession(true);
+      try {
+        if (match.role === "Master") {
+          if (companySetupLoginPortal) {
+            window.localStorage.setItem(masterCompanySetupSessionKey, "1");
+            setGodCompanySetupSession(true);
+          } else {
+            window.localStorage.removeItem(masterCompanySetupSessionKey);
+            setGodCompanySetupSession(false);
+          }
         } else {
           window.localStorage.removeItem(masterCompanySetupSessionKey);
           setGodCompanySetupSession(false);
         }
-      } else {
-        window.localStorage.removeItem(masterCompanySetupSessionKey);
+      } catch {
         setGodCompanySetupSession(false);
       }
-    } catch {
-      setGodCompanySetupSession(false);
+      setCurrentUser(match);
+      setAccountNameInput(match.name);
+      setAccountPhotoUrl(getStoredProfilePhoto(match));
+      window.localStorage.setItem(userStorageKey, JSON.stringify(match));
+      setScreen(getHomeScreenForRole(match.role));
+      setUsername("");
+      setPassword("");
+      setCompanySetupLoginPortal(false);
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("setup");
+        window.history.replaceState({}, "", url.pathname + (url.search ? url.search : "") + url.hash);
+      } catch {
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+      pushToast("Welcome back", `Signed in as ${getRoleDisplayName(match.role)}.`, "success");
+    };
+
+    const tryServerMasterLogin = async (): Promise<boolean> => {
+      if (!pwd || !loginIdentity) {
+        return false;
+      }
+      if (!loginIdentity.includes("@")) {
+        return false;
+      }
+      try {
+        const response = await fetch("/api/auth/master/login", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: loginIdentity, password: pwd }),
+        });
+        const data = (await parseJsonApiResponse(response)) as {
+          ok?: boolean;
+          operator?: { email: string; name: string };
+          error?: string;
+        };
+        if (!response.ok || !data.ok || !data.operator) {
+          return false;
+        }
+        const match: User = {
+          username: String(data.operator.email).toLowerCase(),
+          password: "",
+          role: "Master",
+          name: data.operator.name || data.operator.email,
+        };
+        applySignedInUser(match);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const tryServerCompanyLogin = async (): Promise<boolean> => {
+      if (!pwd || !loginIdentity.includes("@")) {
+        return false;
+      }
+      const masterSheetId = companySheetSync?.sheetId || extractGoogleResourceId(masterSheetInput) || "";
+      if (!masterSheetId) {
+        return false;
+      }
+      try {
+        const response = await fetch("/api/auth/company/login", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: loginIdentity, password: pwd, masterSheetId }),
+        });
+        const data = (await parseJsonApiResponse(response)) as {
+          ok?: boolean;
+          user?: { email: string; role: Role; name: string };
+          error?: string;
+        };
+        if (!response.ok || !data.ok || !data.user?.email || !data.user?.role) {
+          return false;
+        }
+        const match: User = {
+          username: String(data.user.email).toLowerCase(),
+          password: "",
+          role: data.user.role,
+          name: data.user.name || data.user.email,
+        };
+        applySignedInUser(match);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const findClientMatch = (): User | undefined =>
+      loginUsers.find((user) => {
+        if (user.password !== pwd) {
+          return false;
+        }
+        if (user.username === loginIdentity) {
+          return true;
+        }
+        if (normalizeIdentity(user.username) === normalizeIdentity(loginIdentity)) {
+          return true;
+        }
+        if (
+          `${user.username}@usebert.co.uk` === loginIdentity ||
+          `${user.username}@qmsprecast.co.uk` === loginIdentity
+        ) {
+          return true;
+        }
+        return false;
+      });
+
+    if (isDemoLoginEnabled) {
+      const clientMatch = findClientMatch();
+      if (clientMatch) {
+        applySignedInUser(clientMatch);
+        return;
+      }
+      if (await tryServerMasterLogin()) {
+        return;
+      }
+      if (await tryServerCompanyLogin()) {
+        return;
+      }
+    } else {
+      if (await tryServerMasterLogin()) {
+        return;
+      }
+      if (await tryServerCompanyLogin()) {
+        return;
+      }
+      const clientMatch = findClientMatch();
+      if (clientMatch) {
+        applySignedInUser(clientMatch);
+        return;
+      }
     }
-    setCurrentUser(match);
-    setAccountNameInput(match.name);
-    setAccountPhotoUrl(getStoredProfilePhoto(match));
-    window.localStorage.setItem(userStorageKey, JSON.stringify(match));
-    setScreen(getHomeScreenForRole(match.role));
-    setUsername("");
-    setPassword("");
-    setCompanySetupLoginPortal(false);
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("setup");
-      window.history.replaceState({}, "", url.pathname + (url.search ? url.search : "") + url.hash);
-    } catch {
-      window.history.replaceState({}, "", window.location.pathname);
-    }
-    pushToast("Welcome back", `Signed in as ${getRoleDisplayName(match.role)}.`, "success");
+
+    pushToast("Sign in failed", "Please check your username and password.", "warning");
   };
 
   const switchUserSession = (user: User) => {
@@ -4640,10 +4799,15 @@ function App() {
 
   const createRoleFallbackUser = (role: Role): User => {
     const suffix = role.toLowerCase();
+    const uuid =
+      typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID
+        ? globalThis.crypto.randomUUID()
+        : String(Date.now());
+    const demoPw = String(import.meta.env.VITE_DEMO_USER_PASSWORD ?? "").trim();
     const previewPassword =
       import.meta.env.DEV === true || import.meta.env.VITE_ENABLE_DEMO_LOGIN === "true"
-        ? "demo"
-        : `preview-${typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : String(Date.now())}`;
+        ? demoPw || `preview-${uuid}`
+        : `preview-${uuid}`;
     return {
       username: `quick-${suffix}`,
       password: previewPassword,
@@ -5048,6 +5212,8 @@ function App() {
 
   const handleLogout = () => {
     fetch("/auth/google/logout", { method: "POST" }).catch(() => undefined);
+    fetch("/api/auth/master/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
+    fetch("/api/auth/company/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
     try {
       window.localStorage.removeItem(masterCompanySetupSessionKey);
     } catch {
@@ -7223,29 +7389,33 @@ function App() {
                       </button>
                       <h2 className="text-center text-base font-semibold text-white sm:text-lg">Workspace setup (Master)</h2>
                       <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs leading-snug text-slate-300 sm:text-sm">
-                        Sign in with the workspace setup (Master) account only. You will stay in{" "}
-                        <span className="font-semibold text-white">Setup</span> until you sign out — no other areas of the app
-                        are available from here.
+                        Use a <span className="font-semibold text-white">Master</span> account to onboard customer workspaces. Sign in with the
+                        workspace setup (Master) account only. You will stay in <span className="font-semibold text-white">Setup</span> until you
+                        sign out — no other areas of the app are available from here.
                       </p>
                       <p className="mt-2 text-center text-[11px] text-slate-400 sm:text-xs">
-                        Username: <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span>
-                        {isDemoLoginEnabled ? (
+                        {!isDemoLoginEnabled ? (
                           <>
-                            {" "}
-                            — use the password configured for Master (default{" "}
-                            <span className="font-semibold text-white">demo</span> unless changed in environment).
+                            Use your <span className="font-semibold text-white">BERT Master email</span> registered via{" "}
+                            <span className="font-semibold text-white">npm run seed:master</span> on the API host (see docs in repo). Password
+                            is checked on the server — it is never stored in the app bundle.
                           </>
                         ) : (
-                          <> — use the password configured for the Master account in your environment.</>
+                          <>
+                            Demo: you may use username <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span> with{" "}
+                            <span className="font-semibold text-white">VITE_GODMODE_PASSWORD</span>, or a seeded Master email with server
+                            login.
+                          </>
                         )}
                       </p>
                       {!isDemoLoginEnabled && !loginUsers.some((user) => user.role === "Master") ? (
                         <p className="mt-2 rounded-xl border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-[11px] leading-snug text-amber-50 sm:text-xs">
-                          The Master demo account is not in this build. Use <span className="font-semibold">npm run dev</span>, or rebuild with{" "}
-                          <span className="font-semibold">VITE_ENABLE_DEMO_LOGIN=true</span> (and set <span className="font-semibold">VITE_GODMODE_PASSWORD</span> if needed).
+                          No client-side Master demo user is bundled. Create a Master operator on the API server with{" "}
+                          <span className="font-semibold">npm run seed:master</span>, then sign in here using that email and password (server
+                          session).
                         </p>
                       ) : null}
-                      <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
+                      <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); void handleLogin(); }}>
                         <div>
                           <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Username or email</label>
                           <div className="relative">
@@ -7256,7 +7426,7 @@ function App() {
                             <input
                               value={username}
                               onChange={(event) => setUsername(event.target.value)}
-                              placeholder="Master username"
+                              placeholder="Master email address"
                               className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/45 pl-10 pr-3 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 sm:h-12 sm:rounded-2xl sm:pl-11 sm:pr-4 sm:text-base"
                             />
                           </div>
@@ -7274,7 +7444,7 @@ function App() {
                               onChange={(event) => setPassword(event.target.value)}
                               onKeyDown={(event) => {
                                 if (event.key === "Enter") {
-                                  handleLogin();
+                                  void handleLogin();
                                 }
                               }}
                               placeholder="Master password"
@@ -7394,12 +7564,14 @@ function App() {
                         Demo accounts: <span className="font-semibold text-white">admin</span>,{" "}
                         <span className="font-semibold text-white">manager</span>,{" "}
                         <span className="font-semibold text-white">tom</span>,{" "}
-                        <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span> (password:{" "}
-                        <span className="font-semibold text-white">demo</span> unless overridden).
+                        <span className="font-semibold text-white">{GOD_MODE_USERNAME}</span> — set passwords in{" "}
+                        <span className="font-semibold text-white">VITE_DEMO_USER_PASSWORD</span> and{" "}
+                        <span className="font-semibold text-white">VITE_GODMODE_PASSWORD</span> (see <span className="font-semibold text-white">.env.example</span>).
                       </p>
                     ) : (
                       <p className="mt-2 rounded-xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs text-slate-300 sm:text-sm">
-                        Sign in with the email and password issued by your administrator.
+                        Demo login is disabled in this build. Use an invited account or ask a BERT administrator to create access. BERT
+                        Master operators sign in with their server-registered email (see <span className="font-semibold text-white">npm run seed:master</span>).
                       </p>
                     )}
                     {!isDemoLoginEnabled && loginUsers.length === 0 ? (
@@ -7410,7 +7582,7 @@ function App() {
                         password your administrator issued once onboarding is connected.
                       </p>
                     ) : null}
-                    <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); handleLogin(); }}>
+                    <form className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3" onSubmit={(event) => { event.preventDefault(); void handleLogin(); }}>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-slate-100 sm:text-sm">Username or email</label>
                         <div className="relative">
@@ -7440,7 +7612,7 @@ function App() {
                             onChange={(event) => setPassword(event.target.value)}
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
-                                handleLogin();
+                                void handleLogin();
                               }
                             }}
                             placeholder="Enter password"

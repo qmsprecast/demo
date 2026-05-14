@@ -6,6 +6,8 @@ import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import { google } from "googleapis";
 import nodemailer from "nodemailer";
+import { hashPassword, installMasterAuthRoutes } from "./master-auth.mjs";
+import { migrateAllPlainUserAuthKeys, verifyUserAuthLoginOrMigrate } from "./userauth-password.mjs";
 
 dotenv.config();
 
@@ -50,6 +52,13 @@ const ONBOARDING_INVITE_TTL_MS = Math.max(
 const INVITE_STORE_PATH = path.join(sessionDir, "app-onboarding-invites.json");
 /** Pilot visibility only: `demo` = current client-side password auth. See docs/security-hardening-plan.md */
 const APP_AUTH_MODE = String(process.env.APP_AUTH_MODE || "demo").trim().toLowerCase();
+
+/** Company sheet user session (httpOnly signed cookie; separate from Master). */
+const COMPANY_SESSION_COOKIE = "bert_company_session";
+const COMPANY_SESSION_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.COMPANY_USER_SESSION_TTL_MS || String(7 * 24 * 60 * 60 * 1000)),
+);
 
 const scopes = [
   "openid",
@@ -551,6 +560,9 @@ function sensitiveAbusePostRateLimit(req, res, next) {
   const p = req.path || req.url || "";
   if (
     p.startsWith("/api/onboarding") ||
+    p === "/api/auth/master/login" ||
+    p === "/api/auth/company/login" ||
+    p === "/api/tools/migrate-userauth-passwords" ||
     p === "/api/manager/non-compliance-alert" ||
     p === "/api/ncr/escalation-alert" ||
     p === "/api/incidents/notify"
@@ -563,6 +575,10 @@ function sensitiveAbusePostRateLimit(req, res, next) {
 app.use(securityHeadersMiddleware);
 app.use(express.json({ limit: "512kb" }));
 app.use(cookieParser(requiredEnv.SESSION_SECRET));
+installMasterAuthRoutes(app, {
+  sessionDir,
+  isProduction: process.env.NODE_ENV === "production",
+});
 app.use(httpRequestLogMiddleware);
 app.use(sensitiveAbusePostRateLimit);
 
@@ -1670,7 +1686,7 @@ async function provisionNewCompanyWorkspace(
   const authKey = `UserAuth.${String(adminEmail || "").toLowerCase()}`;
   await updateConfig(auth, masterSheet.id, {
     ...(await getConfig(auth, masterSheet.id)),
-    [authKey]: password,
+    [authKey]: hashPassword(password),
   });
   console.log("[provision] new_company_workspace done", {
     companyFolderId: root.id,
@@ -2171,6 +2187,70 @@ async function updateConfig(auth, spreadsheetId, patch) {
   );
 
   return merged;
+}
+
+function parseRoleFromUsersSheet(raw) {
+  const r = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (r === "master") {
+    return "Master";
+  }
+  if (r === "admin" || r === "administrator") {
+    return "Admin";
+  }
+  if (r === "manager") {
+    return "Manager";
+  }
+  if (r === "auditor") {
+    return "Auditor";
+  }
+  if (r === "owner") {
+    return "Admin";
+  }
+  return "";
+}
+
+async function readCompanyUsersTabRecord(auth, spreadsheetId, email) {
+  const rows = await getTabValues(auth, spreadsheetId, "Users");
+  if (!rows.length) {
+    return null;
+  }
+  const headers = rows[0].map((cell) => String(cell || "").trim());
+  const emailKeyIndex = headers.findIndex((h) => safeLower(h) === "email");
+  if (emailKeyIndex === -1) {
+    return null;
+  }
+  const target = String(email || "")
+    .trim()
+    .toLowerCase();
+  for (let i = 1; i < rows.length; i += 1) {
+    const row = rows[i];
+    const rowEmail = String(row[emailKeyIndex] || "")
+      .trim()
+      .toLowerCase();
+    if (rowEmail !== target) {
+      continue;
+    }
+    const obj = {};
+    headers.forEach((h, idx) => {
+      obj[h] = String(row[idx] || "").trim();
+    });
+    const roleRaw = obj.Role || obj.role || "";
+    const role = parseRoleFromUsersSheet(roleRaw);
+    if (!role) {
+      return null;
+    }
+    const name =
+      obj["Full Name"] ||
+      obj["Full name"] ||
+      obj.Name ||
+      obj.name ||
+      rowEmail ||
+      target;
+    return { role, name: String(name).trim() || rowEmail };
+  }
+  return null;
 }
 
 function mapRowObjectToHeaders(headers, rowObject) {
@@ -2784,7 +2864,17 @@ async function readCompanySheetById(auth, spreadsheetId) {
     );
     const rawValues = response.data.values || [];
     headerRowByTab[tab] = rawValues[0] || [];
-    tabData[tab] = rowsToRecords(rawValues);
+    let records = rowsToRecords(rawValues);
+    if (safeLower(tab) === "config") {
+      records = records.map((row) => {
+        const key = String(row.Key || row.key || "").trim();
+        if (key.toLowerCase().startsWith("userauth.")) {
+          return { ...row, Value: "", value: "" };
+        }
+        return row;
+      });
+    }
+    tabData[tab] = records;
   }
 
   return {
@@ -3859,7 +3949,7 @@ app.post("/api/onboarding/app-invites/:tokenId/complete", async (req, res) => {
           const authKey = `UserAuth.${String(record.email || "").toLowerCase()}`;
           await updateConfig(authed, record.masterSheetId, {
             ...(await getConfig(authed, record.masterSheetId)),
-            [authKey]: password,
+            [authKey]: hashPassword(password),
           });
           patchInviteRecord(tokenId, {
             provisionStatus: "succeeded",
@@ -4132,6 +4222,127 @@ app.post("/auth/google/logout", async (_req, res) => {
 
   clearStoredSession();
   res.json({ ok: true });
+});
+
+app.post("/api/auth/company/login", requireGoogleSession, async (req, res) => {
+  try {
+    const auth = getAuthedClient();
+    const masterSheetId = String(req.body?.masterSheetId || "").trim();
+    const email = String(req.body?.email || req.body?.username || "")
+      .trim()
+      .toLowerCase();
+    const password = String(req.body?.password || "");
+    if (!masterSheetId || !email || !password) {
+      return res.status(400).json({ ok: false, error: "Master sheet ID, email, and password are required." });
+    }
+    if (!email.includes("@")) {
+      return res.status(400).json({ ok: false, error: "A valid email address is required." });
+    }
+    const login = await verifyUserAuthLoginOrMigrate(auth, masterSheetId, email, password, getConfig, updateConfig);
+    if (!login.ok) {
+      return res.status(401).json({ ok: false, error: "Invalid email or password." });
+    }
+    const rec = await readCompanyUsersTabRecord(auth, masterSheetId, email);
+    if (!rec) {
+      return res.status(403).json({
+        ok: false,
+        error: "This account is not listed on the company Users tab or the role is not supported.",
+      });
+    }
+    const payload = JSON.stringify({
+      v: 1,
+      email,
+      masterSheetId,
+      role: rec.role,
+      name: rec.name,
+    });
+    res.cookie(COMPANY_SESSION_COOKIE, payload, {
+      signed: true,
+      httpOnly: true,
+      secure: isProductionRuntime(),
+      sameSite: "lax",
+      maxAge: COMPANY_SESSION_MS,
+      path: "/",
+    });
+    return res.json({
+      ok: true,
+      user: { email, role: rec.role, name: rec.name },
+    });
+  } catch (error) {
+    console.error("[company-auth] login failed:", error);
+    return res.status(500).json({ ok: false, error: "Unable to complete sign in." });
+  }
+});
+
+app.post("/api/auth/company/logout", (req, res) => {
+  res.clearCookie(COMPANY_SESSION_COOKIE, {
+    signed: true,
+    httpOnly: true,
+    secure: isProductionRuntime(),
+    sameSite: "lax",
+    path: "/",
+  });
+  return res.json({ ok: true });
+});
+
+app.get("/api/auth/company/session", requireGoogleSession, async (req, res) => {
+  try {
+    const raw = req.signedCookies?.[COMPANY_SESSION_COOKIE];
+    if (!raw || typeof raw !== "string") {
+      return res.status(401).json({ ok: false, error: "No company session." });
+    }
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return res.status(401).json({ ok: false, error: "Invalid session." });
+    }
+    if (data.v !== 1 || !data.email || !data.masterSheetId) {
+      return res.status(401).json({ ok: false, error: "Invalid session." });
+    }
+    const auth = getAuthedClient();
+    const rec = await readCompanyUsersTabRecord(auth, data.masterSheetId, data.email);
+    if (!rec) {
+      res.clearCookie(COMPANY_SESSION_COOKIE, {
+        signed: true,
+        httpOnly: true,
+        secure: isProductionRuntime(),
+        sameSite: "lax",
+        path: "/",
+      });
+      return res.status(401).json({ ok: false, error: "Session invalid." });
+    }
+    return res.json({
+      ok: true,
+      user: { email: data.email, role: rec.role, name: rec.name },
+    });
+  } catch (error) {
+    console.error("[company-auth] session read failed:", error);
+    return res.status(401).json({ ok: false, error: "Session invalid." });
+  }
+});
+
+app.post("/api/tools/migrate-userauth-passwords", requireGoogleSession, async (req, res) => {
+  try {
+    const toolSecret = String(process.env.BERT_TOOL_SECRET || "").trim();
+    if (!toolSecret) {
+      return res.status(404).json({ ok: false, error: "Not found." });
+    }
+    const headerSecret = String(req.headers["x-bert-tool-secret"] || "").trim();
+    if (headerSecret !== toolSecret) {
+      return res.status(403).json({ ok: false, error: "Forbidden." });
+    }
+    const masterSheetId = String(req.body?.masterSheetId || "").trim();
+    if (!masterSheetId) {
+      return res.status(400).json({ ok: false, error: "masterSheetId is required." });
+    }
+    const auth = getAuthedClient();
+    const result = await migrateAllPlainUserAuthKeys(auth, masterSheetId, getConfig, updateConfig);
+    return res.json({ ok: true, migrated: result.migrated });
+  } catch (error) {
+    console.error("[tools] migrate-userauth-passwords failed:", error);
+    return res.status(500).json({ ok: false, error: "Migration failed." });
+  }
 });
 
 assertSafeProductionBoot();

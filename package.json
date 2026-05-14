@@ -10,10 +10,14 @@
     "google:connect": "node scripts/print-google-connect-urls.mjs",
     "build": "tsc -b && vite build",
     "check:server": "node --check server/server.mjs",
+    "seed:master": "node scripts/seed-master.mjs",
+    "migrate:userauth": "node scripts/migrate-userauth-passwords.mjs",
+    "verify:auth": "node scripts/verify-auth-hardening.mjs",
     "preview": "vite preview",
     "android:sync": "npm run build && npx cap sync android",
     "android:open": "npx cap open android",
-    "android:apk": "bash scripts/build-android-debug-apk.sh"
+    "android:apk": "bash scripts/build-android-debug-apk.sh",
+    "android:apk:release": "bash scripts/build-android-release-apk.sh"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.1",
